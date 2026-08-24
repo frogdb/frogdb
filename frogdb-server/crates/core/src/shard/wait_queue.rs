@@ -492,6 +492,24 @@ impl ShardWaitQueue {
         drained
     }
 
+    /// Every key at least one waiter is parked on, in sorted order.
+    ///
+    /// `waiters_by_key` iterates in hash order, which is not stable across
+    /// runs; the post-pause resume pass drives satisfaction over this list and
+    /// consumes store data as it goes, so two waiters on different keys
+    /// competing for one wake must not be served in an order that depends on
+    /// hashing. Sorted for the same reason [`Self::dump`] is.
+    pub fn waiting_keys(&self) -> Vec<Bytes> {
+        let mut keys: Vec<Bytes> = self
+            .waiters_by_key
+            .iter()
+            .filter(|(_, waiters)| !waiters.is_empty())
+            .map(|(key, _)| key.clone())
+            .collect();
+        keys.sort_unstable();
+        keys
+    }
+
     /// Check if there are any waiters for a key.
     pub fn has_waiters(&self, key: &Bytes) -> bool {
         self.waiters_by_key

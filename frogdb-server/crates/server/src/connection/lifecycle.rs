@@ -592,22 +592,31 @@ impl ConnectionHandler {
     ///
     /// Blocking-capable commands bypass the node-global `CLIENT PAUSE`
     /// dimension of this gate: `CLIENT PAUSE` gates *execution*, not
-    /// *parking* (spec-gaps issue 17 / distsys-review MAJ-14). A blocking
-    /// command's own `execute()` decides synchronously whether data is
-    /// already available; if not, it registers a real wait-queue entry
-    /// (`handle_blocking_wait`) whose deadline starts immediately and whose
-    /// BLOCKED flag makes it visible in `blocked_clients`/`CLIENT LIST`,
-    /// independent of any pause window (Redis's "Blocking timeout following
-    /// PAUSE should honor the timeout"). The write that would satisfy such a
-    /// waiter (e.g. LPUSH) still goes through this same gate on its own
-    /// connection, so PAUSE WRITE continues to hold back new data during the
-    /// pause — only the *waiter's* deadline is pause-independent.
+    /// *parking* (spec-gaps issue 17 / distsys-review MAJ-14). Such a command
+    /// registers a real wait-queue entry (`handle_blocking_wait`) whose
+    /// deadline starts immediately and whose BLOCKED flag makes it visible in
+    /// `blocked_clients`/`CLIENT LIST`, independent of any pause window
+    /// (Redis's "Blocking timeout following PAUSE should honor the timeout").
+    /// The write that would satisfy such a waiter (e.g. LPUSH) still goes
+    /// through this same gate on its own connection, so PAUSE WRITE continues
+    /// to hold back new data during the pause — only the *waiter's* deadline
+    /// is pause-independent.
+    ///
+    /// What the bypass buys is parking, never popping. A write-flagged
+    /// blocking command that finds its data already available does **not**
+    /// take the immediate pop while a node-global pause covers it: the shard
+    /// refuses the pop at its own decision point and the command parks like
+    /// any other waiter (`specs/blocking.md` TR-BLOCKING-026, spec-gaps issue
+    /// 30 / ruling R9). That check cannot live here — this side of the seam
+    /// does not know whether there is data to pop, and could only find out by
+    /// racing the very writes the pause is draining.
     ///
     /// The bypass does *not* extend to the slot-scoped pause the migration
-    /// finalization barrier arms (`slot_pause_blocks_command`): a blocking
-    /// command that finds data immediately available performs its pop
-    /// synchronously, and letting that write cross an armed handoff barrier
-    /// would reopen the acknowledged-write hazard `ReplicaFeedGate` closes.
+    /// finalization barrier arms (`slot_pause_blocks_command`), which is a
+    /// per-slot dimension the shard-side node-global gate above deliberately
+    /// does not see: holding the command here keeps a blocking command's pop
+    /// from crossing an armed handoff barrier and reopening the
+    /// acknowledged-write hazard `ReplicaFeedGate` closes.
     pub(crate) async fn wait_if_paused(&self, cmd_name: &str, cmd_args: &[bytes::Bytes]) {
         if self.is_blocking_capable_command(cmd_name)
             && !self.slot_pause_blocks_command(cmd_name, cmd_args)

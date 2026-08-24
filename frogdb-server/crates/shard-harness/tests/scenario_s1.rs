@@ -47,10 +47,10 @@ async fn run_case(deadline_elapsed: bool, drop_receiver: bool, push_first: bool)
     if push_first {
         // Conn B pushes the element, then a coarse waiter-timeout tick.
         let _ = d.execute_conn(0, 20, "LPUSH", &["k", "v"]).await;
-        d.tick_waiter_timeout(0);
+        d.tick_waiter_timeout(0).await;
     } else {
         // Waiter-timeout tick first (GC pass), then the push.
-        d.tick_waiter_timeout(0);
+        d.tick_waiter_timeout(0).await;
         let _ = d.execute_conn(0, 20, "LPUSH", &["k", "v"]).await;
     }
 

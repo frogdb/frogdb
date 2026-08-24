@@ -241,8 +241,8 @@ impl ShardDriver {
         self.workers[shard].drive_expiry_tick().await;
     }
 
-    pub fn tick_waiter_timeout(&mut self, shard: usize) {
-        self.workers[shard].drive_waiter_timeout_tick();
+    pub async fn tick_waiter_timeout(&mut self, shard: usize) {
+        self.workers[shard].drive_waiter_timeout_tick().await;
     }
 
     pub async fn pump_continuation_release(&mut self, shard: usize) {

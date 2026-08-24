@@ -209,6 +209,12 @@ pub(super) fn spawn_shard_workers(
         // Share the expiry_paused flag so PAUSE ALL suppresses active expiry
         worker.set_expiry_paused_flag(ctx.client_registry.expiry_paused_flag());
 
+        // Share the node-global write-pause gate so a blocking command that
+        // finds data already present parks instead of popping inside a
+        // `CLIENT PAUSE WRITE` drain window (`specs/blocking.md`
+        // TR-BLOCKING-026).
+        worker.set_node_write_pause_gate(ctx.client_registry.node_write_pause_gate());
+
         // Share replication tracker with shard workers for INFO replication
         if let Some(ref tracker) = ctx.replication_tracker {
             worker.set_replication_tracker(tracker.clone());

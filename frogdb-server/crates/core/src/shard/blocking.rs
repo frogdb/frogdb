@@ -25,6 +25,76 @@ use super::worker::ShardWorker;
 /// be woken on the next write to the chain head.
 const MAX_BLMOVE_FANOUT_DEPTH: usize = 16;
 
+/// The write a post-pause satisfaction pass performed on one key, as a record
+/// the canonical effect pipeline can run (`specs/blocking.md`
+/// TR-BLOCKING-026).
+///
+/// `resume_pops_deferred_by_pause` serves pops that no enclosing write drove,
+/// so there is no real command to hang their effects off — this stands in for
+/// one, the way the synthetic `DEL` does for an engine removal
+/// (`ShardWorker::run_internal_removal_effects`). Unlike that one it cannot be
+/// resolved from the registry: no registered command has this combination of
+/// declarations, and it must never be dispatchable from the wire.
+///
+/// Every field is load-bearing:
+///
+/// - [`CommandFlags::WRITE`] plus [`CommandFlags::NO_PROPAGATE`]: the pop is a
+///   write and owes the full local effect set, but it must not replicate
+///   *itself* — the satisfaction driver already recorded the deterministic pop
+///   commands in `pending_serve_propagations`, and the broadcast effect ships
+///   those.
+/// - [`KeySpec::All`]: the record carries exactly the one served key, which is
+///   what the version bump and the tracking invalidation address.
+/// - [`WalStrategy::PersistOrDeleteFirstKey`]: a pop either leaves the
+///   collection smaller or empties and deletes it — the same strategy `LPOP`
+///   and `ZPOPMIN` declare, and type-agnostic, so one record serves list, zset
+///   and stream keys alike.
+/// - [`WaiterWake::None`]: the satisfaction pass already ran; re-entering it
+///   from inside the pipeline would drive the same queue twice.
+/// - [`EventSpec::Suppressed`]: the driver publishes the pop's keyspace events
+///   itself, at the moment of the pop, exactly as on the write-woken path.
+/// - `reindex: None`: lists, sorted sets and streams are never search-indexed.
+struct PausedPopServe;
+
+impl crate::command::Command for PausedPopServe {
+    fn spec(&self) -> &'static crate::CommandSpec {
+        static SPEC: crate::CommandSpec = crate::CommandSpec {
+            name: "BLOCKING-SERVE",
+            docs: crate::CommandDocs {
+                summary: "Internal: the store mutation a post-pause blocking-waiter wake performed.",
+                since: "0.0.0",
+                group: "generic",
+                complexity: Some("O(1)"),
+            },
+            arity: crate::Arity::Fixed(1),
+            flags: crate::CommandFlags::WRITE
+                .union(crate::CommandFlags::NO_PROPAGATE),
+            keys: crate::KeySpec::All,
+            access: crate::AccessSpec::UniformRW,
+            wal: crate::WalStrategy::PersistOrDeleteFirstKey,
+            wakes: crate::WaiterWake::None,
+            event: crate::EventSpec::Suppressed,
+            requires_same_slot: false,
+            reindex: crate::ReindexSpec::None,
+            lookup: crate::LookupSpec::None,
+            mutation: crate::ConnMutation::None,
+            strategy: crate::ExecutionStrategy::Standard,
+        };
+        &SPEC
+    }
+
+    fn execute(
+        &self,
+        _ctx: &mut crate::command::CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, frogdb_types::CommandError> {
+        // Effect-only: this command is never registered and never dispatched.
+        // The mutation it stands for was performed by the satisfaction driver
+        // before the effect pipeline ran.
+        unreachable!("PausedPopServe is an effect record, never an executable command")
+    }
+}
+
 impl ShardWorker {
     /// Handle a blocking wait request.
     pub(crate) fn handle_block_wait(
@@ -418,6 +488,12 @@ impl ShardWorker {
                     match entry.response_tx.send(reply) {
                         Ok(()) => {
                             self.record_blocked_waiter_satisfied();
+                            // The one place a satisfaction pass commits store
+                            // data to a client; `resume_pops_deferred_by_pause`
+                            // reads the delta to decide whether the pass it
+                            // just drove produced a write whose effects still
+                            // owe the canonical pipeline a run.
+                            self.waiters_served_total += 1;
                             if strat.bumps_version() {
                                 // The wake mutated `key` (e.g. an element popped
                                 // for a BLPOP), so bump only its slot — a watch on
@@ -515,6 +591,91 @@ impl ShardWorker {
 
         let _ = entry.response_tx.send(response);
         self.record_blocked_waiter_satisfied();
+    }
+
+    /// Serve blocking pops that parked only because a node-global `CLIENT
+    /// PAUSE` was armed, now that it has lapsed (`specs/blocking.md`
+    /// TR-BLOCKING-026).
+    ///
+    /// A waiter parked by the pause gate is the one kind with no wake coming.
+    /// Every other blocked client is woken by the write that makes its key
+    /// ready; this one found its key *already* ready and was parked anyway, so
+    /// unless some unrelated write happens to land on the same key it would sit
+    /// there until its deadline and answer nil with the data still in front of
+    /// it. The 100 ms blocking sweep therefore drives the satisfaction pass
+    /// itself once the gate lapses. A waiter whose deadline elapsed *during*
+    /// the pause still times out here — the deadline runs through the pause,
+    /// which is exactly issue 17's ruled deviation.
+    ///
+    /// The pass runs *before* the effect pipeline rather than inside it,
+    /// mirroring active expiry (`run_active_expiry` deletes, then
+    /// `run_internal_removal_effects` runs the canonical effects for what it
+    /// deleted). Driving the pipeline first with a `WaiterWake::All` record
+    /// would run a WATCH version bump, a dirty increment and a WAL persist for
+    /// every parked key on every sweep — including the keys nothing was served
+    /// from, which is an observable write that never happened. So: satisfy
+    /// first, then run the canonical effects for exactly the keys a waiter was
+    /// actually served from. The satisfaction driver publishes its own version
+    /// bump and keyspace notifications at the moment of the pop, exactly as it
+    /// does when a write wakes it; what the pipeline adds is everything the
+    /// *enclosing* write would otherwise have contributed — tracking
+    /// invalidation, the dirty counter, WAL persistence and the flush of
+    /// `pending_serve_propagations` to replicas. Without that last part a pop
+    /// served here would be delivered to the client, never persisted, and
+    /// never replicated: acknowledged-write loss on the next restart.
+    pub(crate) async fn resume_pops_deferred_by_pause(&mut self) {
+        if !self.pops_deferred_by_pause || self.node_write_pause.active() {
+            return;
+        }
+        // One shot per pause window. Whatever is still parked after this pass
+        // is parked for an ordinary reason — its key is not ready — and is back
+        // under the ordinary rule that a write wakes it.
+        self.pops_deferred_by_pause = false;
+
+        // Keys a waiter was actually served store data from, in the order the
+        // passes ran (sorted — see `ShardWaitQueue::waiting_keys`).
+        let mut served: Vec<Vec<Bytes>> = Vec::new();
+        for key in self.wait_queue.waiting_keys() {
+            let before = self.waiters_served_total;
+            // A key's parked waiters are not indexed by kind here, and one key
+            // can carry waiters of several kinds; each driver is a no-op when
+            // the key has none of its own.
+            self.try_satisfy_list_waiters(&key);
+            self.try_satisfy_zset_waiters(&key);
+            self.try_satisfy_stream_waiters(&key);
+            if self.waiters_served_total > before {
+                served.push(vec![key]);
+            }
+        }
+        if served.is_empty() {
+            return;
+        }
+
+        // One synthetic write record per served key: `PersistOrDeleteFirstKey`
+        // addresses exactly one key, and the keys are independent writes rather
+        // than one transaction, so the scatter scope (which replicates each
+        // record on its own, with no MULTI/EXEC wrap) is the right framing.
+        let dirty_delta = served.len() as i64;
+        let handler = &PausedPopServe as &dyn crate::command::Command;
+        let write_refs: Vec<crate::command::WriteRecord<'_>> = served
+            .iter()
+            .map(|args| crate::command::WriteRecord::new(handler, args.as_slice()))
+            .collect();
+        self.run_write_effects(
+            super::post_execution::WriteSummary {
+                writes: &write_refs,
+                dirty_delta,
+                // Not attributable to any one client — several blocked clients
+                // may have been served in one pass — so the engine identity,
+                // which invalidates every tracking client (none of them wrote
+                // this) and leaves the replication broadcast enabled.
+                conn_id: super::post_execution::ENGINE_INTERNAL_CONN_ID,
+                removal_reasons: &[],
+            },
+            super::post_execution::WalPhase::Persist,
+            super::post_execution::EffectScope::ScatterPart,
+        )
+        .await;
     }
 
     /// Record the metrics for one satisfied waiter (satisfied counter + blocked

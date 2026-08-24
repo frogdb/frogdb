@@ -265,8 +265,17 @@ impl ShardWorker {
         // builder that wires cluster + replica identity + registry from `self`.
         // The deposits come back as ONE value: everything the handler produced
         // besides the response.
+        // A blocking write command must not take an immediate pop while a
+        // node-global `CLIENT PAUSE` is armed: the pop is a write, and it
+        // would cross the very drain window the pause opens. It parks instead
+        // — the shard remembers that it did, because such a waiter has no wake
+        // coming from a later write (`specs/blocking.md` TR-BLOCKING-026).
+        let blocking_pop_paused = self.blocking_pop_paused(handler.as_ref(), conn_id);
+        self.pops_deferred_by_pause |= blocking_pop_paused;
+
         let (response, effects) = {
             let mut ctx = self.command_context(conn_id, protocol_version);
+            ctx.blocking_pop_paused = blocking_pop_paused;
 
             let response = match handler.execute(&mut ctx, &command.args) {
                 Ok(response) => response,

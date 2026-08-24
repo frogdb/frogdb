@@ -159,7 +159,7 @@ pub async fn advance(driver: &mut ShardDriver, senders: &mut [Sender], idx: usiz
 pub async fn fire_tick(driver: &mut ShardDriver, shard: usize, tick: Tick) {
     match tick {
         Tick::Expiry => driver.tick_expiry(shard).await,
-        Tick::WaiterTimeout => driver.tick_waiter_timeout(shard),
+        Tick::WaiterTimeout => driver.tick_waiter_timeout(shard).await,
         Tick::ContinuationRelease => driver.pump_continuation_release(shard).await,
     }
 }

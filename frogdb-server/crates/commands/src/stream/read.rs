@@ -8,6 +8,16 @@ use frogdb_protocol::{BlockingOp, Response};
 
 use super::entry_to_response;
 
+/// `BLOCK <ms>` as the wait queue's timeout in seconds; `BLOCK 0` is "forever",
+/// which the queue also spells `0.0`.
+fn block_timeout(block_ms: u64) -> f64 {
+    if block_ms == 0 {
+        0.0
+    } else {
+        block_ms as f64 / 1000.0
+    }
+}
+
 // ============================================================================
 // XREAD - Read entries from streams (non-blocking)
 // ============================================================================
@@ -272,6 +282,9 @@ impl Command for XreadgroupCommand {
         // borrow of `ctx.store` ends before we need `&mut ctx` again for
         // `ctx.notify_event` below (E0499 otherwise: notify_event borrows
         // `ctx` while `stream`/`group` are still live for later branches).
+        // Read before `ctx.store` is borrowed mutably below.
+        let pop_paused = ctx.blocking_pop_paused;
+
         let (consumer_created, outcome) = {
             // Get or check stream
             let stream = ctx.store.get_stream_mut(key.as_ref())?.ok_or_else(|| {
@@ -290,27 +303,44 @@ impl Command for XreadgroupCommand {
             group.get_or_create_consumer(consumer_name.clone()).touch();
 
             let outcome = if id_arg.as_ref() == b">" {
-                // Read new messages (not yet delivered)
-                let last_delivered = group.last_delivered_id();
-                let new_entries = stream.read_after(&last_delivered, count);
-
-                if new_entries.is_empty() {
-                    // No new entries - check if we should block
-                    if let Some(block_ms) = block_ms {
-                        let timeout = if block_ms == 0 {
-                            0.0
-                        } else {
-                            block_ms as f64 / 1000.0
-                        };
-                        XreadgroupOutcome::Blocked { timeout }
-                    } else {
-                        XreadgroupOutcome::NoData
+                // A `>` delivery advances the group cursor and writes the PEL,
+                // so it is a write and may not cross a node-global `CLIENT
+                // PAUSE` covering it (`specs/blocking.md` TR-BLOCKING-026).
+                // A `BLOCK`-ing invocation parks instead, with the ordinary
+                // live deadline, and is served after the pause lifts if the
+                // entries are still there. The lookup above already ran, so the
+                // no-such-key / NOGROUP errors and the `xgroup-createconsumer`
+                // side effect keep their pre-pause behaviour.
+                if let Some(block_ms) = block_ms.filter(|_| pop_paused) {
+                    XreadgroupOutcome::Blocked {
+                        timeout: block_timeout(block_ms),
                     }
                 } else {
-                    // Update group state: last_delivered_id, entries_read, PEL, consumer timestamps
-                    stream.record_group_delivery(&group_name, &consumer_name, &new_entries, noack);
+                    // Read new messages (not yet delivered)
+                    let last_delivered = group.last_delivered_id();
+                    let new_entries = stream.read_after(&last_delivered, count);
 
-                    XreadgroupOutcome::Delivered(new_entries)
+                    if new_entries.is_empty() {
+                        // No new entries - check if we should block
+                        if let Some(block_ms) = block_ms {
+                            XreadgroupOutcome::Blocked {
+                                timeout: block_timeout(block_ms),
+                            }
+                        } else {
+                            XreadgroupOutcome::NoData
+                        }
+                    } else {
+                        // Update group state: last_delivered_id, entries_read,
+                        // PEL, consumer timestamps
+                        stream.record_group_delivery(
+                            &group_name,
+                            &consumer_name,
+                            &new_entries,
+                            noack,
+                        );
+
+                        XreadgroupOutcome::Delivered(new_entries)
+                    }
                 }
             } else {
                 // Re-read from PEL (for retry) - never blocks

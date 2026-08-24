@@ -225,6 +225,51 @@ impl PauseEntry {
     }
 }
 
+/// The shard-visible rendering of the node-global `CLIENT PAUSE`: when it
+/// lapses, or `None` when no node pause is armed.
+///
+/// Vended by the registry exactly like
+/// [`expiry_paused_flag`](ClientRegistry::expiry_paused_flag) and the
+/// [`ReplicaFeedGate`] — the registry stays the one writer, consumers only
+/// read. The shard reads it at the pop decision point for blocking writes, so
+/// a `BLPOP` that finds data already present parks instead of popping inside
+/// the drain window (`specs/blocking.md` TR-BLOCKING-026).
+///
+/// Published as a **deadline, never a latch**, for the same reason
+/// [`ReplicaFeedGate`] is: [`ClientRegistry::sweep_lapsed_pauses`] only runs
+/// when something asks the registry a question, so a `bool` stored at arm time
+/// would stay set for as long as the node sees no traffic — and the shard reads
+/// this from a 100 ms timer with no client traffic to trigger a sweep. A
+/// deadline expires itself, so the gate cannot wedge a parked waiter forever.
+///
+/// Both [`PauseMode`]s block writes, so there is nothing to record besides the
+/// deadline: a node pause is armed ⇒ the pop is gated.
+#[derive(Debug, Default)]
+pub struct NodeWritePauseGate {
+    /// When the armed node-global pause lapses; `None` when none is armed.
+    until: RwLock<Option<Instant>>,
+}
+
+impl NodeWritePauseGate {
+    /// A gate with no pause armed.
+    pub fn open() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// Whether a node-global pause is in force right now.
+    pub fn active(&self) -> bool {
+        self.until
+            .read()
+            .unwrap()
+            .is_some_and(|until| crate::clock::now() < until)
+    }
+
+    /// Republish the armed node pause's deadline (registry-internal).
+    fn publish(&self, until: Option<Instant>) {
+        *self.until.write().unwrap() = until;
+    }
+}
+
 /// Pause state for the client registry.
 ///
 /// Two independent dimensions, deliberately not merged into one entry:
@@ -281,6 +326,18 @@ impl PauseState {
         frogdb_replication::feed_gate::decide_feed_hold_until(
             self.slots.values().map(|e| e.unpause_at),
         )
+    }
+
+    /// When the node-global pause lapses, or `None` when none is armed — the
+    /// value behind [`NodeWritePauseGate`].
+    ///
+    /// Slot-scoped pauses are deliberately excluded: the slot dimension is
+    /// already enforced at the connection
+    /// (`ConnectionHandler::slot_pause_blocks_command` refuses the blocking
+    /// bypass for a barriered slot), so folding it in here would double-gate
+    /// the barrier and, worse, gate blocking pops on *unrelated* slots.
+    fn node_pause_until(&self) -> Option<Instant> {
+        self.node.map(|e| e.unpause_at)
     }
 }
 
@@ -616,6 +673,11 @@ pub struct ClientRegistry {
     /// Republished from [`PauseState`] alongside `expiry_paused`, so the write
     /// barrier and the feed hold are two renderings of one fact.
     replica_feed_gate: Arc<ReplicaFeedGate>,
+    /// The shard half of the node-global pause: read at the blocking-pop
+    /// decision point so a pop cannot escape `CLIENT PAUSE WRITE`
+    /// (`specs/blocking.md` TR-BLOCKING-026). Republished from [`PauseState`]
+    /// alongside `expiry_paused` and the feed gate.
+    node_write_pause: Arc<NodeWritePauseGate>,
     /// Server-wide per-command statistics (lowercase command name → stats).
     ///
     /// Updated inside `update_stats` from each connection's
@@ -640,6 +702,7 @@ impl ClientRegistry {
             pause_state: RwLock::new(PauseState::default()),
             expiry_paused: Arc::new(AtomicBool::new(false)),
             replica_feed_gate: ReplicaFeedGate::open(),
+            node_write_pause: NodeWritePauseGate::open(),
             command_stats: RwLock::new(HashMap::new()),
             error_stats: Arc::new(ErrorStats::new()),
         }
@@ -661,6 +724,15 @@ impl ClientRegistry {
     /// registry stays the one writer, and the consumer only reads.
     pub fn replica_feed_gate(&self) -> Arc<ReplicaFeedGate> {
         self.replica_feed_gate.clone()
+    }
+
+    /// Get a shared handle to the node-global write-pause gate.
+    ///
+    /// Handed to every shard worker at boot; the shard consults it at the
+    /// blocking-pop decision point (`specs/blocking.md` TR-BLOCKING-026).
+    /// Vended like the two above — the registry is the only writer.
+    pub fn node_write_pause_gate(&self) -> Arc<NodeWritePauseGate> {
+        self.node_write_pause.clone()
     }
 
     /// Register a new client connection.
@@ -1042,10 +1114,11 @@ impl ClientRegistry {
     }
 
     /// Republish everything derived from the pause state: the shard-visible
-    /// active-expiry suppression flag, and the replica-feed hold.
+    /// active-expiry suppression flag, the replica-feed hold, and the
+    /// shard-visible node-global write pause.
     ///
-    /// Both are pure functions of [`PauseState`] and are republished from this
-    /// one place on every mutation of it, so no consumer can hold a view the
+    /// All three are pure functions of [`PauseState`] and are republished from
+    /// this one place on every mutation of it, so no consumer can hold a view the
     /// pause state does not justify. The feed hold's rationale is on
     /// [`PauseState::feed_hold_until`]; the expiry flag's follows.
     ///
@@ -1062,6 +1135,8 @@ impl ClientRegistry {
             .store(!pause_state.is_idle(), Ordering::Relaxed);
         self.replica_feed_gate
             .publish(pause_state.feed_hold_until());
+        self.node_write_pause
+            .publish(pause_state.node_pause_until());
     }
 
     /// Get the current number of connected clients.

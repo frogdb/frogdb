@@ -1,6 +1,6 @@
 # A blocking command's immediate pop escapes node-global CLIENT PAUSE WRITE
 
-Status: ready-for-agent
+Status: done
 
 Size: S
 
@@ -13,7 +13,7 @@ Size: S
 
 ## Parent
 
-[issue 17](done/17-blocking-commands-during-client-pause.md) — its ruled deviation
+[issue 17](done/17-client-pause-honors-blocking-deadlines.md) — its ruled deviation
 ("`CLIENT PAUSE` gates *execution*, not *parking*", distsys-review MAJ-14) is implemented as an
 unconditional bypass in `wait_if_paused`
 (`frogdb-server/crates/server/src/connection/lifecycle.rs`): a blocking-capable command skips the
@@ -70,3 +70,40 @@ should escape the gate.
 ## Blocked by
 
 None - can start immediately.
+
+## Resolution
+
+Shipped as ruled. `specs/blocking.md` gained **TR-BLOCKING-026** (plus a Redis-deviations
+entry); TR-BLOCKING-025's postcondition now hands the data-present case over to it instead of
+claiming the command "resolves synchronously, exactly as if no pause were active".
+
+Mechanism:
+
+- `NodeWritePauseGate` (`frogdb-core/src/client_registry/mod.rs`) renders the node-global pause
+  for the shard, vended alongside `expiry_paused`/`ReplicaFeedGate` and republished from
+  `publish_pause_derived_state`. It carries the pause **deadline**, not a latch: nothing
+  re-sweeps an idle node's pause state and the shard reads it from a 100 ms timer, so a latch
+  would wedge a deferred pop forever.
+- `ShardWorker::blocking_pop_paused` (write-flagged ∧ `ExecutionStrategy::Blocking` ∧ not
+  replica apply ∧ gate armed) stamps `CommandContext::blocking_pop_paused`; the eight blocking
+  handlers and `XREADGROUP`'s `>` branch park before their availability scan.
+- A waiter parked this way has no wake coming, so the 100 ms blocking sweep runs the
+  satisfaction pass itself once the gate lapses (`resume_pops_deferred_by_pause`), then runs the
+  canonical write effects for exactly the keys it served, via a synthetic `PausedPopServe`
+  record — WAL persistence and the `pending_serve_propagations` flush included.
+
+The deadline still runs through the pause (issue 17's ruled deviation), so a pause outlasting
+the timeout yields the ordinary op-aware nil — deliberately not Redis's `BLOCKED_POSTPONE`
+second deadline regime.
+
+Forcing tests (`redis-regression/tests/pause_tcl.rs`):
+`tcl_a_data_present_blocking_pop_waits_out_the_write_pause`,
+`tcl_a_data_present_blocking_pop_still_times_out_on_its_own_deadline`.
+
+### Residue
+
+A **non-`BLOCK`** `XREADGROUP … >` still escapes the pause: `is_blocking_capable_command` is
+name-based, so the connection gate exempts the command whether or not this invocation can
+block, and an invocation with nowhere to park cannot be closed by parking it. Fixing it means
+making that predicate invocation-aware (or refusing the command at the connection). Out of
+scope for R9's ruled design; file separately if it matters.
