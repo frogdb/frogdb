@@ -1438,6 +1438,49 @@ fn an_unrelated_file_in_the_data_dir_refuses_the_boot() {
     );
 }
 
+/// The refusal names a handful of entries, then says the list is truncated —
+/// and only then. Both halves matter: naming stops at a bound so a startup
+/// error never renders somebody else's whole tree, and "and more" appears
+/// exactly when something went unnamed, so an operator who moves the named
+/// entries out knows whether they are done.
+// FM-PERSISTENCE-051
+#[test]
+fn a_refusal_names_a_handful_of_entries_then_says_and_more() {
+    let boot_message = |count: usize| {
+        let tmp = TempDir::new().unwrap();
+        for i in 0..count {
+            std::fs::write(tmp.path().join(format!("part-{i}")), b"bytes").unwrap();
+        }
+        let cfg = persistence_config(tmp.path(), true);
+        boot_standalone(&cfg)
+            .err()
+            .expect("foreign entries must refuse the boot")
+            .to_string()
+    };
+
+    let at_the_bound = boot_message(8);
+    assert_eq!(
+        at_the_bound.matches("part-").count(),
+        8,
+        "a listing that fits the bound is named in full: {at_the_bound}"
+    );
+    assert!(
+        !at_the_bound.contains("and more"),
+        "a complete listing must not claim truncation: {at_the_bound}"
+    );
+
+    let past_the_bound = boot_message(9);
+    assert_eq!(
+        past_the_bound.matches("part-").count(),
+        8,
+        "the walk stops at the bound instead of rendering the tree: {past_the_bound}"
+    );
+    assert!(
+        past_the_bound.contains("and more"),
+        "an unnamed entry must be admitted to: {past_the_bound}"
+    );
+}
+
 /// The other half of the guard: a directory FrogDB may have comes up silently
 /// and is stamped, and the stamp is what makes the *next* boot silent too. If
 /// this half were wrong, every restart would need the override.
