@@ -1,6 +1,8 @@
 # 39: The flush hold dies — the sender reads Y_s out of the cut artifact
 
-Status: ready-for-agent (after 37)
+Status: ready-for-agent
+
+Sequenced after issue 37 (the dependency below).
 
 Parent: [PRD 36](./36-offset-stamped-batches-restart-bias.md), ruling R21 (campaign
 ledger 2026-08-22). Depends on [37](./37-mint-at-persist-and-primary-stamps.md).

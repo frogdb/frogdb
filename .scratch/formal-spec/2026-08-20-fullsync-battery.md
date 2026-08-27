@@ -1138,3 +1138,80 @@ the secondary window). The row's own class-6 wording — "the mutation is equiva
 its *reason* for deferring to M61 was confused, and only the deferral is retracted here.
 
 Follow-up 2 stays **resolved**; follow-ups 1 and 3 stand.
+
+## Addendum — 2026-08-27: issue-37 per-shard stamps (M115–M119)
+
+**Append-only.** Issue 37's spec+model slice adds `NodeState.stamps: Coverage` (minted at
+`applyWriteOnPrimary`, advanced at `applyFrameAt` landings, installed at
+`applyInstallPayload`, reset to the recovered prefix's coverage at `applyRestart`) and
+three invariants claimed by FM-REPLICATION-067's Model cell: `inv_stamps_match_data`,
+`inv_mint_is_wire_order`, `inv_cut_claims_stamps` — all three guarded behind a
+coverage-family latch `promotedWithUnappliedTail` that scopes them out of the issue-40
+defect region (see the protocol paragraph below). These rows mutate each new guard once,
+per the Mechanics section (single-site replacement, exactly-once assertion, byte-identical
+restore verified per row). The invariant set is now 36; runs pass all of them at once, as
+before.
+
+**Counterexample protocol.** The unmutated model with the three new invariants: `quint
+test` 46 passing; all 36 invariants `[ok]` at 500×20 for seeds `0x1`/`0x2` — verified in
+both the all-invariants conjunction mode *and* per-invariant single runs; witness floor
+green via `just quint-run`. No existing invariant, witness, or exemption moved. **The
+M117 escalation, however, tripped the protocol's stop condition**: at 4000×40 seed `0x1`
+the *unmutated* model (as first written, unguarded) violated all three new invariants —
+and, on the pristine HEAD model with no issue-37 edits, the pre-existing
+`inv_no_hole_below_the_claim` and `inv_overship_is_skipped_not_reapplied` — on a lawful
+install → disconnect → promote → write trace that breaks the model's offset↔index
+identity. That is a pre-existing model defect this battery's escalation surfaced, not a
+regression of this slice; written up with the trace, the reachability analysis, and the
+design question it exposes as
+[issue 40](../replication-correctness/issues/open/40-promotion-of-an-unapplied-installed-payload-breaks-the-offset-index-identity.md).
+Because the new invariants detect the defect far more broadly than HEAD's (they fire on
+the first post-promote write, and `just quint-run`'s conjunction sweep is unseeded), the
+slice landed them guarded on the `promotedWithUnappliedTail` latch (latched in
+`promoteAs` when `data.length() > applied`); the two pre-existing invariants stay
+unguarded — masking them would be a semantic change that belongs to issue 40's ruling.
+The battery rows below ran against the unguarded invariants; the guard does not affect
+their verdicts (the M115/M116 counterexample traces have no issue-40 shape — verified
+below — and M117's analysis concerns the unmutated baseline either way).
+Two sampler caveats found while pinning it down, recorded for future rows: the
+exploration walk is not stable across invariant sets (single-invariant runs visit
+different traces than the conjunction at the same seed, so attribution re-runs are
+corroboration, not proof — the M115/M116 attributions below were therefore verified
+against their actual counterexample traces), and a quint process error prints no
+`No violation found` line, so verdict grepping must key on `[violation]`, never on the
+success line's absence.
+
+| Row | Target | Mutation (old → new) | Expected catcher (pre-registered) | Verdict | Evidence |
+| --- | --- | --- | --- | --- | --- |
+| M115 | `applyWriteOnPrimary` (`_logic.qnt`) — primary mint | `stamps: stampAdvance(p.stamps, shardOf(w), p.recv + 1)` → `stamps: p.stamps` | `inv_stamps_match_data` | CAUGHT-P | 46/46 tests pass; 500×20 `0x1` violation, attributed: `inv_stamps_match_data`, `inv_mint_is_wire_order`, `inv_cut_claims_stamps` — each trace-verified causal (stamps stay zero from the first primary write / under the first cut; 1–4 steps, no promotion, no issue-40 shape) |
+| M116 | `applyFrameAt` land branch (`_machine.qnt`) — replica advance | `stamps: if (w != HOLE) stampAdvance(rn.stamps, shardOf(w), k) else rn.stamps` → `stamps: rn.stamps` | `inv_stamps_match_data` | CAUGHT-P | 46/46 tests pass; 500×20 `0x1` violation, attributed: `inv_stamps_match_data`, `inv_mint_is_wire_order` — trace-verified causal (a replica lands a streamed frame and its claim stays behind; 9 steps, the trace's one promotion is of an empty replica, no issue-40 shape) |
+| M117 | `stampAdvance` (`_logic.qnt`) — non-monotone write | `c.set(sh, max2(c.get(sh), k))` → `c.set(sh, k)` | `inv_stamps_match_data` | MISSED → **N/A** | 46/46 tests pass; green at 500×20 `0x1`/`0x2`. The 4000×40 `0x1` violation first recorded as an escalation catch reproduces identically on the **unmutated** model (same mode/budget/seed) — it is the issue-40 baseline defect, not the mutation. On lawful traces the mutation is equivalent: every `stampAdvance` call site is monotone by construction (see note) |
+| M118 | `cutCoverage` (`_logic.qnt`) — claim unhooked from content | `SHARDS.mapBy(sh => lastOffsetOfShard(p.data, sh, bounds.get(sh)))` → `SHARDS.mapBy(sh => bounds.get(sh))` | `inv_cut_claims_stamps` (co-catch `inv_coverage_brackets_the_payload`) | CAUGHT-T | `writeDuringTransferSurvivesTest`, `overshippedTailMeetsFailoverTest`, `tornCheckpointIsMendedExactlyOnceTest`, `sameHistoryGrantIsNeverRefusedTest` fail (42/46) |
+| M119 | `applyInstallPayload` (`_logic.qnt`) — install drops the stamps | `stamps: s.coverage` → `stamps: noStamps` | `inv_stamps_match_data`; co-catch `inv_replid_offset_paired` (the new `post.stamps == s.coverage` conjunct in `installPairedOk` feeds the `defects.tornIdentity` latch at `deliverPayloadAt`) | CAUGHT-T | `promotionMidSyncTest`, `partialSpliceLeavesFullSyncGhostDarkTest` fail (44/46) |
+
+Notes:
+
+- **M117 is an honest N/A — and the row that surfaced issue 40.** The pre-run analysis
+  argued a lawful trace never calls `stampAdvance` with `k` below the shard's current
+  stamp: primary mints strictly increase; replica landings strictly increase within a
+  stint; across a resync the full arm *replaces* stamps via `applyInstallPayload`
+  (never `stampAdvance`), and any redelivered position it covered is floor-skipped
+  before it can re-stamp (floors and stamps are installed from the same coverage). The
+  escalated 4000×40 run then violated five invariants at once — but the verification
+  pass showed the identical violation on the unmutated model at the same mode, budget,
+  and seed: a lawful promote-over-an-unapplied-installed-payload trace that breaks the
+  offset↔index identity itself (the two pre-existing floor invariants fall on pristine
+  HEAD too). An earlier draft of this note invented a "stamps survive the PSYNC
+  full-arm rewind" mechanism to explain the catch; trace inspection disproved it —
+  retracted. The mutation is unobservable on lawful traces, and on issue-40 defect
+  traces nothing attributes. Verdict N/A per the M05 precedent; the real product of
+  this row is the issue-40 write-up.
+- **M118 lands as CAUGHT-T** — the four scenario tests assert the trailer vector against
+  the payload's content, so the deterministic oracle fires before the sampled one. The
+  pre-registered `inv_cut_claims_stamps` also catches it in isolation (its equality half
+  is exactly what the mutation unhooks); recorded per the verdict vocabulary's
+  test-first precedence.
+- **M115/M116 verdict asymmetry is the fusion claim.** Dropping the primary mint trips
+  `inv_cut_claims_stamps` too (the cut reads the primary's stamps); dropping only the
+  replica advance cannot reach a cut (cuts read primaries), so it attributes to the two
+  node-local invariants only.

@@ -68,6 +68,19 @@ module replication_fullsync_logic {
   pure def coverageOfPayload(d: List[WriteId]): Coverage =
     SHARDS.mapBy(sh => lastOffsetOfShard(d, sh, d.length()))
 
+  // --- Per-shard stamps (issue 37, FM-PERSISTENCE-060 / FM-REPLICATION-067) ---
+
+  pure val noStamps: Coverage = SHARDS.mapBy(_ => NO_FLOOR)
+
+  // Advance one shard's stamp to the offset of a write persisted for it.
+  // Monotone by construction (FM-PERSISTENCE-060: a batch's stamp key is the
+  // *max* offset in the batch), so replaying an already-stamped position never
+  // regresses the claim. The stamp projection of a data prefix is
+  // `coverageOfPayload` — the stamps a store recovering that prefix would
+  // surface.
+  pure def stampAdvance(c: Coverage, sh: ShardId, k: Offset): Coverage =
+    c.set(sh, max2(c.get(sh), k))
+
   // --- PSYNC arm decision (TR-REPLICATION-001, FM-REPLICATION-013) ---
 
   // `window_contains`: the two-bound check, replid-first. The primary arm needs
@@ -170,6 +183,11 @@ module replication_fullsync_logic {
     // A first push into an unarmed buffer opens the window at this command's
     // start offset, which for a unit-length write is the pre-write head.
     floor: if (p.floor == UNARMED) p.recv else p.floor,
+    // Issue 37 / FM-REPLICATION-067: the mint point. The offset mint, the frame
+    // enqueue (`data.append` above) and the shard's stamp advance are one
+    // critical section, which is why mint order *is* wire order — modelled as
+    // one assignment so a mutation separating them is observable.
+    stamps: stampAdvance(p.stamps, shardOf(w), p.recv + 1),
   }
 
   // FM-REPLICATION-016: FIFO eviction raises the floor to the evicted entry's
@@ -240,6 +258,10 @@ module replication_fullsync_logic {
     recv: s.grant_offset,
     applied: s.grant_offset,
     floors: s.coverage,
+    // Issue 37: the payload was persisted carrying the primary's stamps, so
+    // installing it installs the claim that describes it — which, by
+    // FM-REPLICATION-066's exactness, is the coverage of the installed data.
+    stamps: s.coverage,
     recovered: false,
   }
 
@@ -254,6 +276,7 @@ module replication_fullsync_logic {
       post.recv == s.grant_offset,
       post.applied == s.grant_offset,
       post.floors == s.coverage,
+      post.stamps == s.coverage,
       not(post.recovered),
     }
 
@@ -469,14 +492,20 @@ module replication_fullsync_logic {
   // tests (`a_recovered_stint_refuses_every_window_grant`,
   // `a_recovered_identity_comes_back_with_its_floors`).
   pure def applyRestart(pre: NodeState, unclean: bool, keep: Offset, freshGen: Gen): NodeState =
+    // Issue 37: the stamps come back off disk with the data that carries them
+    // (they commit in the same batch, FM-PERSISTENCE-060), so a recovered stint
+    // surfaces exactly the coverage of what it recovered. Well-formedness only —
+    // no new restart semantics here (R24's restart transitions are issues 38/24).
     if (restartKeepsIdentity(pre, unclean, keep))
       { ...pre, role: Primary, data: pre.data.slice(0, keep), recv: keep, applied: keep,
         floor: UNARMED, link: None, last_departure: None,
-        floors: noFloors, recovered: true }
+        floors: noFloors, stamps: coverageOfPayload(pre.data.slice(0, keep)),
+        recovered: true }
     else
       { ...pre, role: Primary, data: pre.data.slice(0, keep), recv: keep, applied: keep,
         floor: UNARMED, link: None, last_departure: None,
-        floors: noFloors, recovered: true,
+        floors: noFloors, stamps: coverageOfPayload(pre.data.slice(0, keep)),
+        recovered: true,
         replid: freshGen, replid2: Some(pre.replid), second_offset: keep }
 
   pure def restartOffsetPairedOk(post: NodeState): bool =

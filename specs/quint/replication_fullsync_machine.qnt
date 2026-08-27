@@ -131,6 +131,14 @@ module replication_fullsync_machine {
     frameSkipped: bool,
     superseded: bool,
     settleDiscardedFrames: bool,
+    // Issue 40: a replica promoted while holding installed payload it had not
+    // applied (`data.length() > applied`). From that state on, the model's
+    // offset↔index identity is broken on the new primary (its next write
+    // appends past the tail while minting `recv + 1`), so the issue-37 stamp
+    // invariants scope themselves out behind this latch until issue 40 rules
+    // the intended semantics. A latch, not a live predicate: the poisoned
+    // data outlives the promoting node's own restart via cut payloads.
+    promotedWithUnappliedTail: bool,
     uncleanRestartReminted: bool,
     tailApplied: bool,
     corpseSession: bool,
@@ -205,13 +213,13 @@ module replication_fullsync_machine {
           second_offset: NO_WINDOW, recv: 0, applied: 0, floor: UNARMED,
           link: None, last_departure: None, acks_ignored: 0,
           frames_skipped: 0, floors: noFloors, floor_skipped: 0,
-          recovered: false }
+          stamps: noStamps, recovered: false }
       else
         { role: Replica, data: List(), replid: NO_HISTORY, replid2: None,
           second_offset: NO_WINDOW, recv: 0, applied: 0, floor: UNARMED,
           link: None, last_departure: None, acks_ignored: 0,
           frames_skipped: 0, floors: noFloors, floor_skipped: 0,
-          recovered: false })
+          stamps: noStamps, recovered: false })
     all {
       nodes' = n0,
       sessions' = SIDS.mapBy(_ => freshSession(INITIAL_PRIMARY, INITIAL_PRIMARY)),
@@ -240,6 +248,7 @@ module replication_fullsync_machine {
         spliceAbandoned: false,
         partialViaSecondary: false, evictionForcedFull: false, ackIgnored: false,
         superseded: false, settleDiscardedFrames: false,
+        promotedWithUnappliedTail: false,
         uncleanRestartReminted: false, tailApplied: false, corpseSession: false,
         fullSyncStreaming: false,
       },
@@ -496,7 +505,15 @@ module replication_fullsync_machine {
     val disposition = frameDisposition(rn, k, w)
     val rnPost =
       if (disposition == CoveredByFloor) applyFloorSkip(rn, k)
-      else { ...rn, data: applyFrameToData(rn.data, k, w), applied: k }
+      // Issue 37 / FM-REPLICATION-067: a landed frame is persisted with its
+      // shard's stamp in the same batch, so the replica's claim advances with
+      // the data — never separately. A floor skip moves neither: the installed
+      // payload already carried both the position and the stamp covering it.
+      // `w` is never `HOLE` on a lawful primary's stream; the guard keeps a
+      // hole (which no shard owns) from mis-attributing a stamp.
+      else { ...rn, data: applyFrameToData(rn.data, k, w), applied: k,
+             stamps: if (w != HOLE) stampAdvance(rn.stamps, shardOf(w), k)
+                     else rn.stamps }
     all {
       s.phase == Streaming,
       linkIs(rn, sid),
@@ -652,7 +669,9 @@ module replication_fullsync_machine {
       defects' = { ...defects,
         tornIdentity: latch(defects.tornIdentity, not(promotePairedOk(nn, nPost))) },
       coverage' = { ...coverage,
-        settleDiscardedFrames: latch(coverage.settleDiscardedFrames, nn.recv > nn.applied) },
+        settleDiscardedFrames: latch(coverage.settleDiscardedFrames, nn.recv > nn.applied),
+        promotedWithUnappliedTail: latch(coverage.promotedWithUnappliedTail,
+          nn.data.length() > nn.applied) },
     }
   }
 

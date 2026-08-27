@@ -5,6 +5,21 @@ Status: ready-for-agent
 Parent: [PRD 36](./36-offset-stamped-batches-restart-bias.md), rulings R18/R19/R23
 (campaign ledger 2026-08-22). First of the four sub-issues; 38, 24, 39 depend on it.
 
+> **Progress 2026-08-27 — spec + model half landed** (branch
+> `worktree-issue-37-spec-model`): FM-PERSISTENCE-060, FM-REPLICATION-067/068, the
+> FM-REPLICATION-004 companion cell, `replication_fullsync*.qnt` per-shard `stamps`
+> state + `inv_stamps_match_data` / `inv_mint_is_wire_order` / `inv_cut_claims_stamps`,
+> and battery rows M115–M119. The three new FM rows carry `Forced by | MISSING` gap
+> links back to this issue. **Outstanding: the entire Rust implementation** (scope
+> items 1–4, all acceptance boxes) — the impl session swaps the MISSING links for
+> forcing tests, flips `replication.md`'s TR-REPLICATION-021 "Not implemented" clause,
+> and runs the mutants gates. The battery escalation also surfaced
+> [issue 40](./40-promotion-of-an-unapplied-installed-payload-breaks-the-offset-index-identity.md):
+> a pre-existing model defect (promotion over an unapplied installed payload breaks the
+> offset↔index identity) plus a design question the stamps exposed — stamps minted under
+> one replid are not comparable after a history change; the impl session should read
+> issue 40's ruling before wiring recovery.
+
 ## Scope
 
 1. **Move the mint+enqueue to the persist point.** Today the offset `fetch_add` and the

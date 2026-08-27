@@ -416,3 +416,48 @@ clean-shutdown marker + state-file demotion; **39** hold deletion + sender-reads
 
 Interim note: the breach counter ruled at the top of this session (issue-35 close-out
 gate) still lands — it is real observability until 39 deletes the machinery it counts.
+
+---
+
+## 2026-08-27 — issue-37 spec + model slice landed (W3 continuation)
+
+The spec-first half of issue 37 (mint-at-persist, per-shard stamps) is in; the Rust
+implementation is deliberately deferred to its own session against these rows.
+
+- **Rows.** FM-PERSISTENCE-060 (stamp↔data batch atomicity, both directions),
+  FM-REPLICATION-067 (mint order is wire order), FM-REPLICATION-068 (count always,
+  enqueue when active), plus FM-REPLICATION-004's Invariant cell naming the stamps as
+  `Y_s`'s source of truth. All three new rows carry the sanctioned
+  `Forced by | MISSING ([gap: …])` form (FM-CLUSTER-104 precedent) — warn-only in
+  `lint-spec`, swapped for forcing tests when the impl lands.
+  TR-REPLICATION-021's "Not implemented" clause deliberately not flipped.
+- **Model.** `replication_fullsync*.qnt` gains `NodeState.stamps: Coverage`: minted at
+  `applyWriteOnPrimary` (fused with the enqueue — the FM-REPLICATION-067 critical
+  section), advanced at `applyFrameAt` landings, installed with the payload's coverage
+  at `applyInstallPayload`, reset to the recovered prefix's coverage at `applyRestart`
+  (well-formedness only — R24 restart transitions stay issues 38/24). Three new
+  invariants, claimed by FM-REPLICATION-067's Model cell: `inv_stamps_match_data`
+  (claim == coverage, continuously), `inv_mint_is_wire_order` (stamps never lag or
+  lead the wire), `inv_cut_claims_stamps` (the artefact's bounds read off the sender's
+  stamps; the ≤-half guarded on a live session since a Disconnected session's cut
+  outlives its primary's restart). All three are additionally guarded behind the
+  coverage-family latch `promotedWithUnappliedTail`, scoping them out of the issue-40
+  defect region (below) until that ruling lands. FM-REPLICATION-068 has no model cell:
+  the fullsync model has no standalone/no-session mode, noted in the row.
+- **Battery.** Addendum in `2026-08-20-fullsync-battery.md` (M115–M119), run per its
+  Mechanics; verdicts recorded there (M115/M116 CAUGHT-P trace-verified, M118/M119
+  CAUGHT-T, M117 N/A).
+- **Finding: issue 40.** The M117 escalation surfaced a **pre-existing** fullsync model
+  defect, reproducible on pristine HEAD: promoting a replica that installed a full-sync
+  payload it has not applied (`data.length() > applied = 0`) breaks the model's
+  offset↔index identity on the new primary's next write, violating
+  `inv_no_hole_below_the_claim` / `inv_overship_is_skipped_not_reapplied` (and, before
+  their guard, the three new stamp invariants) at 4000×40 seed `0x1` single-invariant
+  runs — while every configured gate budget stays green. Trace, reachability analysis,
+  and the design question it exposes (stamps are not comparable across a replid change)
+  are written up in `issues/open/40-…offset-index-identity.md`; the model fix waits on
+  that ruling (R17–R24 family) rather than guessing here — this slice only latches the
+  region (`promotedWithUnappliedTail`) and guards its own new invariants on it; the two
+  pre-existing invariants stay unguarded.
+- Gates: `just quint-check`, `just quint-run`, `just lint-spec` green (three MISSING
+  warnings expected). No Rust changes ⇒ no `mutants-diff` this slice.

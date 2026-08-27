@@ -164,6 +164,15 @@ module replication_fullsync_types {
     // Distinct from `frames_skipped`: that one counts a *sender* bug, this one
     // counts the lawful mend of a payload that reached past the claim.
     floor_skipped: int,
+    // Issue 37 (FM-PERSISTENCE-060, FM-REPLICATION-067): the per-shard
+    // replication stamps — the highest offset each shard's store has persisted,
+    // committed batch-atomically with the data it names. Minted at the persist
+    // point (offset fetch_add fused with the stamp write), so the vector is at
+    // all times exactly the per-shard coverage of `data` — never ahead of it,
+    // never behind it. Distinct from `floors`: floors are *installed* skip
+    // bounds describing a payload this node received; stamps are what this
+    // node's own stores *claim* to hold.
+    stamps: Coverage,
     // Ruling R16: this node's offsets came from crash recovery rather than from
     // a completed sync, so its keyspace may sit above what it claims and it
     // holds no vector describing by how much. Such a stint refuses window grants

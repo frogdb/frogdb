@@ -39,6 +39,10 @@
 //   FM-REPLICATION-066  inv_coverage_brackets_the_payload,
 //                       inv_overship_is_skipped_not_reapplied,
 //                       inv_no_hole_below_the_claim
+//   FM-REPLICATION-067  inv_mint_is_wire_order, inv_stamps_match_data,
+//                       inv_cut_claims_stamps
+//   FM-PERSISTENCE-060  inv_stamps_match_data (model shadow of the batch-atomic
+//                       stamp; the crash/atomicity half is implementation-only)
 //   FM-REPLICATION-001  inv_reapply_is_a_noop (R4)
 //   FM-REPLICATION-065  inv_reapply_is_a_noop (R7, the receiver-side skip)
 //   FM-REPLICATION-004  inv_payload_covers_grant, inv_applied_covered_by_data
@@ -261,6 +265,75 @@ module replication_fullsync {
   // head over it, count it) held on every skip.
   val inv_overship_is_skipped_not_reapplied: bool =
     not(defects.overshipDoubleApplied) and not(defects.floorSkipMisdisposed)
+
+  // --- Per-shard stamps (issue 37, FM-REPLICATION-067 / FM-PERSISTENCE-060) ---
+
+  // The claim a node's stores carry equals the coverage of the data they hold —
+  // continuously, on every node, in every reachable state. This is the model
+  // shadow of FM-PERSISTENCE-060's batch atomicity: a stamp that could commit
+  // without its data (claim ahead — recovery skips frames whose effects it does
+  // not hold) or data without its stamp (claim behind — recovery re-executes
+  // effects it already holds, the D1 shape) would each break one direction of
+  // this equality. The model has no torn intermediate state to express, which
+  // is the point: minting at the persist point makes the fused assignment the
+  // only assignment.
+  //
+  // Guarded on `promotedWithUnappliedTail` (issue 40): once a replica promotes
+  // over an installed-but-unapplied payload, the model's offset↔index identity
+  // is broken at HEAD — the stamp invariants scope themselves out of that
+  // region until issue 40 rules the intended semantics.
+  val inv_stamps_match_data: bool =
+    not(coverage.promotedWithUnappliedTail) implies
+    NODES.forall(n =>
+      nodes.get(n).stamps == coverageOfPayload(nodes.get(n).data))
+
+  // FM-REPLICATION-067's fusion, stated over the wire itself: the backlog (a
+  // primary's `data` is also the stream content it serves) and the stamps
+  // advance in the same order. Every position on the wire is covered by its own
+  // shard's stamp — the stamp was minted in the same critical section that
+  // enqueued the frame, so it can never lag — and no shard's stamp reaches past
+  // the wire head — it can never lead. Weaker than `inv_stamps_match_data` by
+  // design: this is the ordering claim alone, so a mutation that reorders the
+  // mint against the enqueue trips it without needing the full equality.
+  // Guarded on `promotedWithUnappliedTail` like `inv_stamps_match_data` —
+  // see issue 40.
+  val inv_mint_is_wire_order: bool =
+    not(coverage.promotedWithUnappliedTail) implies
+    NODES.forall(n => {
+      val d = nodes.get(n).data
+      val st = nodes.get(n).stamps
+      and {
+        d.indices().forall(i =>
+          d.nth(i) != HOLE implies (i + 1) <= st.get(shardOf(d.nth(i)))),
+        SHARDS.forall(sh => st.get(sh) <= d.length()),
+      }
+    })
+
+  // At the cut, the artefact's claim reads off the sender's stamps: each
+  // shard's bound in the trailer vector equals the stamp a store recovering the
+  // payload would surface (issue 37's recovery contract — recovery reads the
+  // same keys the cut wrote), and no bound exceeds what the primary has stamped
+  // (a claim above the persisted coverage would promise history no store
+  // holds). The second half is guarded on a live session: a disconnected
+  // session keeps its cut artefact, but its primary may since have restarted
+  // and truncated — the stale artefact makes no claim about the new stint's
+  // stamps. Overlaps `inv_coverage_brackets_the_payload` on the equality half
+  // deliberately: that row states the artefact's internal exactness, this one
+  // pins the artefact to the *stamps* as its source.
+  // Guarded on `promotedWithUnappliedTail` like `inv_stamps_match_data` —
+  // see issue 40.
+  val inv_cut_claims_stamps: bool =
+    not(coverage.promotedWithUnappliedTail) implies
+    SIDS.forall(k => {
+      val s = sessions.get(k)
+      val p = nodes.get(s.primary)
+      and {
+        s.payload_cut implies SHARDS.forall(sh =>
+          s.coverage.get(sh) == coverageOfPayload(s.payload).get(sh)),
+        (s.payload_cut and s.phase != Disconnected) implies SHARDS.forall(sh =>
+          s.coverage.get(sh) <= p.stamps.get(sh)),
+      }
+    })
 
   // --- Partial-resync soundness ---
 

@@ -1,6 +1,9 @@
 # 36: PRD — log-first offsets: stamps, rotation, and the death of the flush hold
 
-Status: prd (rulings settled 2026-08-22; work lands via issues 37, 38, 24, 39)
+Status: ready-for-human
+
+PRD design record, not a work item: rulings settled 2026-08-22, work lands via issues
+37, 38, 24, 39 — closes on the user's call once the sub-issues land.
 
 Ruled 2026-08-22, campaign ledger R17–R24
 (`.scratch/formal-spec/2026-08-19-quint-completeness-campaign.md`). This document is the
