@@ -35,6 +35,31 @@ Accepted structural limits, documented at the model, no further action: **M22**
 **M06** (compound-only visibility with M08). Detector-attribution flags (F6/F7/F13,
 M38/M39, M34 form) are mechanical design-doc text corrections — bundled into W1.
 
+### Batch disposition — cluster issue 44 / R2 (landed 2026-08-23)
+
+The five attribution corrections and the four accepted-limitation notes were re-measured
+against the **post-R3/R4/R5 model** (cluster issue 43) one mutation at a time — mutate,
+`quint test` the migration model, walk the full 42-invariant conjunction, revert — and
+recorded at their sites. Two of the Q4-era corrections were themselves wrong and are
+now superseded:
+
+| Row | Corrected attribution (measured 2026-08-23) | Site |
+|---|---|---|
+| **F6 / M65** (delete `clearStaleRecord`) | **CAUGHT-T, five run tests**: `recordOutlivesRegistrationTest`, `staleRecordAfterForgetAndRejoinTest`, `staleRecordAfterOtherMemberResetTest`, `staleRecordAcrossWipeAndRebootTest`, `foreignRefusalDoesNotDisposeTest`. No invariant fires (2000×40, seeds `0x1`/`0x2`); `fenceClearsWithinThreeStepsTest` **passes**, so the `witnessFenceClears` half does *not* bite either — the Q4 correction had the halves inverted. R5's `inv_stale_record_never_admits` is untouched by this mutant. | design doc, ext-18 mutation (15) |
+| **F7 / M59** (drop the refusal's `stage_id` binding half) | **MISSED**. 93/93 run tests pass, walk clean at 2000×40 — the surviving `reg_seq` half of `refusalBinds` discriminates in every trace the battery reaches. `inv_no_live_record_disposed_by_a_foreign_refusal` / `foreignRefusalDoesNotDisposeTest`, named by the Q4 correction, are the **other** half's detector (row **M68**, drop `reg_seq`): measured, that mutant fails exactly `foreignRefusalDoesNotDisposeTest`. Closing M59 needs a fixture that re-stages under the *same* registration (via `completeAdoption`) with a dead stage's refusal in flight — model work, not a doc fix. | design doc, ext-17 mutation (9) |
+| **F13 / M21** (target-departure unassign+mark) | Unassign half: `inv_slot_owner_valid` at 500×20 + `orphanRehomeToSourceTest`, `removeNodeForceEvictsLiveOwnerTest` (unchanged). Mark half: no invariant at 2000×40, **three** tests — `reapDeferredWhileTargetGoneTest`, `orphanRehomeToSourceTest`, `orphanRehomeToAnotherPrimaryTest`; `failPromotionRefusedAfterSourceDepartedTest` dropped from the list. | design doc, ext-12 residue row |
+| **M38 / M39** (volatile record / adoption edged on the admission apply) | Correction stands: both are CAUGHT-T, `inv_member_keyspace_is_tracked` green at 2000×40 for each. M38 now also fails R5's `staleRecordAcrossWipeAndRebootTest`; M39 fails the four already named. | design doc, ext-15 staged-flip row |
+| **M34** (`admitted` vs `identityWritten` binding) | **Equivalent mutation, no kill expected**: `identityOrderOk`'s `Some` arm is `lexGt` (strict domination) and its `None` arm makes `Some(identity) != None` trivial, so `admitted ≡ identityWritten` in this model. The row's killing form is the unconditional one (cancel on a *refused* report), caught by `inv_no_spurious_cancel`. | comment at `identityWritten`, `cluster_migration_failover_machine.qnt` |
+
+Accepted-limitation notes (each ending "revisit only if campaign work makes the observable
+cheap") were recorded at the model: **M06** at `reportTargetIngest`, **M22** in
+`cluster_migration_failover_temporal.qnt`'s header, **M32** at the
+`defects.crossShardSuccessor` field, **M37** at `completeAdoption`. M32 and M37 are
+CAUGHT since `2eb66e35`; what stays accepted is the *residual* — M32's kill is a
+postcondition ghost restating the guard rather than a doc-level observable (the semantic
+observable is phase-3 territory), and M37's `keys` is a slot-id set, so the modelled
+discard is the slot-claim projection of a byte-level dataset drop.
+
 ## Model lifecycle standardized
 
 The Q1→Q4 pipeline (build → modularize → properties → documented mutation battery → gap

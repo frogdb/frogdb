@@ -178,6 +178,15 @@ module cluster_migration_failover_machine {
     // replica of the demoted primary in the *pre*-state. The semantic observable (the
     // successor actually holds the shard's data) is phase-3 replication-model territory;
     // this ghost is the structural one the migration model can see.
+    //
+    // **Accepted limitation** (cluster issue 44 / R2, 2026-08-23). No *doc-level*
+    // observable distinguishes the M32 mutant: dropping `isInShardReplicaOf` from
+    // `canDemoteNode` leaves both invariants the design doc names true, because the
+    // demoted source keeps its copy (demote-don't-remove) and the mis-homed successor is
+    // a live primary. This ghost restates the guard as a postcondition rather than
+    // observing the mis-home, so the row is CAUGHT-P by construction, not by a
+    // property the design already owed; revisit only if campaign work makes the
+    // observable cheap.
     crossShardSuccessor: bool,
     // TR-CLUSTER-025 / FM-CLUSTER-014 (anti-churn) — a FAIL-flag transition that moved
     // the config epoch. Health churn must never bump it.
@@ -590,6 +599,14 @@ module cluster_migration_failover_machine {
     val cls = refusalClassOf(nodes, n, kind, inc, seq, obsRole, obsEpoch)
     val admitted = cls == Whole
     val identity = { inc: inc, seq: seq, run_id: ns.run_id }
+    // Battery row **M34** (cluster issue 44 / R2, noted 2026-08-23): in *this* model
+    // `admitted ≡ identityWritten`. `admitted` requires `identityOrderOk`, whose `Some`
+    // arm is `lexGt` on `(incarnation, identity_seq)` — strict domination, so the proposed
+    // pair differs from the stored one — and whose `None` arm leaves
+    // `Some(identity) != None` trivially true. So re-binding the cancel below from
+    // `identityWritten` to `admitted` is an **equivalent mutation**: no kill is expected
+    // from it, and the row's real (killing) form is the unconditional one — cancel on a
+    // *refused* report — which `inv_no_spurious_cancel` catches.
     val identityWritten = admitted and ns.stored_identity != Some(identity)
     val cancelled = if (identityWritten) slotsSourcedBy(migrations, n) else Set()
     // `incarnation` follows the mint: in the ordinary case it is already `inc`, and after a
@@ -924,6 +941,14 @@ module cluster_migration_failover_machine {
   // copy claim to", with the ruling's exemption list verbatim — it owns the slot, it is
   // the source or target of a live migration for it, or a residue entry names it
   // (`trackedDirectly`).
+  //
+  // **Accepted limitation** (cluster issue 44 / R2, 2026-08-23). The real
+  // dataset-discard path is outside this model's state scope: `keys` is a set of slot
+  // ids, not a dataset, so what is modelled here is the *slot-claim projection* of the
+  // discard plus the `adoptionDiscardedKeys` coverage ghost — enough to give row M37 a
+  // surface (CAUGHT-T on the hoist variant, CAUGHT-P+T on the unexempted-discard
+  // variant), but not the byte-level discard the design row is about; revisit only if
+  // campaign work makes the observable cheap.
   action completeAdoption(n: NodeId): bool = {
     val ns = nodes.get(n)
     val discarded = ns.keys.filter(s => not(trackedDirectly(slots, migrations, residue, n, s)))
@@ -1115,6 +1140,16 @@ module cluster_migration_failover_machine {
   // position drawn from the **durable** set (a volatile-only report would outlive a
   // power-loss restart it did not survive), it carries the attesting run, and a
   // **cross-run** report *replaces* the stored pair — it may legitimately regress.
+  //
+  // **Accepted limitation — row M06** (cluster issue 44 / R2, 2026-08-23). Reverting the
+  // cross-run *replace* on the second arm to a monotone `max2` is invisible to the battery
+  // in isolation: with row M08's durable guard intact this action can only ever propose
+  // `m.target_durable`, which is monotone and always at least the stored `pos` for the
+  // current run, and on a cross-run tag the stored position belongs to a dead run and is
+  // below the durable point that survived it — so `max2(stored, durable)` and `durable`
+  // coincide in every reachable state. The mutant is observable only as a **compound**
+  // edit with M08 (report the volatile applied position *and* max), and the battery drives
+  // single actions by discipline; revisit only if campaign work makes the observable cheap.
   action reportTargetIngest(s: SlotId): bool =
     match migrations.get(s) {
       | Some(m) => {
