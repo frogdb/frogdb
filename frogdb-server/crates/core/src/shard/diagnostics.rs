@@ -6,15 +6,16 @@ use frogdb_types::metrics::definitions::{
     WalDurabilityLagMs, WalLastFlushOk, WalLastFlushTimestamp, WalPendingBytes, WalPendingOps,
 };
 
+use crate::clock;
 use crate::store::Store;
 
 use super::counters::HotShardStatsResponse;
 use super::message::ScatterOp;
 use super::types::{
     BigKeyInfo, BigKeysScanResponse, ExpiryIndexCheckInfo, InfoShardSnapshot, LockTableInfo,
-    MemoryCheckInfo, ShardMemoryStats, TieredCounts, VllContinuationLockInfo, VllKeyIntentInfo,
-    VllPendingOpInfo, VllQueueInfo, WaitQueueInfo, WaitQueueKeyInfo, WaitQueueLogEntryInfo,
-    WaitQueueLogInfo, WaitQueueWaiterInfo, WalLagStatsResponse,
+    MemoryCheckInfo, ObjectInfo, ShardMemoryStats, TieredCounts, VllContinuationLockInfo,
+    VllKeyIntentInfo, VllPendingOpInfo, VllQueueInfo, WaitQueueInfo, WaitQueueKeyInfo,
+    WaitQueueLogEntryInfo, WaitQueueLogInfo, WaitQueueWaiterInfo, WalLagStatsResponse,
 };
 use super::worker::ShardWorker;
 
@@ -296,6 +297,35 @@ impl ShardWorker {
             total_entries: self.store.keys_with_expiry_count(),
             anomalies: self.store.audit_expiry_index(),
         }
+    }
+
+    /// Collect one key's internals for `DEBUG OBJECT <key>`, or `None` when the
+    /// key is absent or already past its TTL (the caller turns that into Redis's
+    /// `ERR no such key`).
+    ///
+    /// Reads only what the store already holds: the value's encoding name and
+    /// persisted payload length, and the LRU stamps `OBJECT IDLETIME` reports
+    /// from. Deliberately does *not* touch the key's access metadata — Redis's
+    /// DEBUG OBJECT looks the key up `LOOKUP_NOTOUCH` for exactly this reason,
+    /// so inspecting a key cannot reset the idle time being inspected.
+    pub(crate) fn collect_object_info(&mut self, key: &[u8]) -> Option<ObjectInfo> {
+        // Logically-expired keys read as absent even before the sweep removes
+        // them, matching what every command's own lookup observes.
+        if !self.store.exists_unexpired(key) {
+            return None;
+        }
+        let metadata = self.store.get_metadata(key)?;
+        // `get` materializes a warm (spilled) value; there is no way to report a
+        // value's encoding or serialized size without it in hand.
+        let value = self.store.get(key)?;
+
+        Some(ObjectInfo {
+            refcount: frogdb_types::Value::REPORTED_REFCOUNT,
+            encoding: value.encoding_name(),
+            serialized_length: frogdb_persistence::serialization::serialized_payload_len(&value),
+            lru: frogdb_persistence::serialization::instant_to_unix_ms(metadata.last_access) / 1000,
+            lru_seconds_idle: clock::elapsed(metadata.last_access).as_secs(),
+        })
     }
 
     /// Format a ScatterOp for display.

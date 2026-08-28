@@ -399,73 +399,9 @@ impl Command for ObjectCommand {
                 let key = &args[1];
 
                 match ctx.store.get(key) {
-                    Some(value) => {
-                        let encoding = match &*value {
-                            Value::String(sv) => {
-                                if sv.as_integer().is_some() {
-                                    "int"
-                                } else {
-                                    "embstr"
-                                }
-                            }
-                            Value::SortedSet(zset) => {
-                                // Redis uses listpack for small sets, skiplist for larger ones
-                                if zset.len() <= 128 {
-                                    "listpack"
-                                } else {
-                                    "skiplist"
-                                }
-                            }
-                            Value::Hash(hash) => {
-                                if hash.is_listpack() {
-                                    "listpack"
-                                } else {
-                                    "hashtable"
-                                }
-                            }
-                            Value::List(list) => {
-                                // Redis uses quicklist (linked list of listpacks)
-                                if list.len() <= 64 {
-                                    "listpack"
-                                } else {
-                                    "quicklist"
-                                }
-                            }
-                            Value::Set(set) => {
-                                if set.is_listpack() {
-                                    "listpack"
-                                } else {
-                                    "hashtable"
-                                }
-                            }
-                            Value::Stream(_) => {
-                                // Redis uses radix tree for streams
-                                "radix-tree"
-                            }
-                            Value::BloomFilter(_) => {
-                                // Bloom filters use a custom scalable structure
-                                "bloom"
-                            }
-                            Value::HyperLogLog(hll) => {
-                                // HyperLogLog can be sparse or dense
-                                if hll.is_sparse() { "sparse" } else { "dense" }
-                            }
-                            Value::TimeSeries(_) => {
-                                // TimeSeries uses Gorilla compression
-                                "gorilla"
-                            }
-                            Value::Json(_) => {
-                                // JSON documents use a tree structure
-                                "raw"
-                            }
-                            Value::CuckooFilter(_) => "cuckoo",
-                            Value::TDigest(_) => "tdigest",
-                            Value::TopK(_) => "topk",
-                            Value::CountMinSketch(_) => "cms",
-                            Value::VectorSet(_) => "vectorset",
-                        };
-                        Ok(Response::bulk(Bytes::from(encoding)))
-                    }
+                    // The name comes from `Value::encoding_name` so this arm and
+                    // `DEBUG OBJECT`'s `encoding:` token can never disagree.
+                    Some(value) => Ok(Response::bulk(Bytes::from(value.encoding_name()))),
                     // A missing key is not an error for OBJECT ENCODING — Redis
                     // 8.6's `kvobjCommandLookupOrReply` replies `shared.null`
                     // for ENCODING/REFCOUNT/IDLETIME/FREQ alike (verified
@@ -523,7 +459,9 @@ impl Command for ObjectCommand {
                 let key = &args[1];
 
                 if ctx.store.contains(key) {
-                    Ok(Response::Integer(1)) // Always 1 (no sharing)
+                    // Always 1 (no sharing) — shared with `DEBUG OBJECT`'s
+                    // `refcount:` token so the two can never disagree.
+                    Ok(Response::Integer(Value::REPORTED_REFCOUNT))
                 } else {
                     Ok(Response::null())
                 }

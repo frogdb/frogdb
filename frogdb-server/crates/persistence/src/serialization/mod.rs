@@ -81,6 +81,19 @@ pub fn serialize(value: &Value, metadata: &KeyMetadata) -> Vec<u8> {
     build_frame(marker, metadata, &payload)
 }
 
+/// The byte length of `value`'s persisted payload — the frame [`serialize`]
+/// would write, minus its fixed [`HEADER_SIZE`] header.
+///
+/// This is the value's own serialized size, independent of the key name and of
+/// the expiry/LFU metadata the header carries, which is what `DEBUG OBJECT`
+/// reports as `serializedlength` (Redis computes its equivalent the same way,
+/// via `rdbSavedObjectLen`). Like Redis's, it is a real encode — the payload is
+/// built and measured, not estimated — so it costs one serialization of the
+/// value and is meant for introspection, not hot paths.
+pub fn serialized_payload_len(value: &Value) -> usize {
+    serialize_value(value).1.len()
+}
+
 /// Wrap a raw payload in the 24-byte header for `marker`, deriving expiry and LFU
 /// from `metadata` exactly as [`serialize`] does. Shared by [`serialize`] and the
 /// HLL delta-operand codec so every persisted frame writes an identical header.
@@ -711,6 +724,34 @@ mod unit_tests {
             expires_at <= Instant::now(),
             "and it is a deadline that has already passed"
         );
+    }
+
+    /// `serialized_payload_len` reports exactly the payload `serialize` writes:
+    /// the whole frame minus the fixed header, for values of very different
+    /// sizes. `DEBUG OBJECT`'s `serializedlength:` token is this number, so it
+    /// has to track the real codec rather than approximate it.
+    #[test]
+    fn serialized_payload_len_is_the_frame_without_its_header() {
+        let metadata = KeyMetadata::new(0);
+        let values = [
+            Value::String(StringValue::new(Bytes::from_static(b"hi"))),
+            Value::String(StringValue::new(Bytes::from(vec![b'x'; 4096]))),
+            {
+                let mut z = SortedSetValue::new();
+                for i in 0..64 {
+                    z.add(Bytes::from(format!("member-{i}")), i as f64);
+                }
+                Value::SortedSet(z)
+            },
+        ];
+        for value in values {
+            let frame = serialize(&value, &metadata);
+            assert_eq!(
+                serialized_payload_len(&value),
+                frame.len() - HEADER_SIZE,
+                "payload length must match the frame the codec actually writes"
+            );
+        }
     }
 
     /// A `payload_len` larger than the buffer is refused as `Truncated` before

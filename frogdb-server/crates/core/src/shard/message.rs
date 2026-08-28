@@ -922,6 +922,16 @@ pub enum DebugIntrospectionMsg {
         /// Channel to report whether the key existed / had a TTL.
         response_tx: oneshot::Sender<crate::store::BackdateExpiryResult>,
     },
+
+    /// Gather one key's internals (DEBUG OBJECT): encoding, serialized payload
+    /// length and LRU stamps, read from the shard that owns the key.
+    ObjectInfo {
+        /// The key to inspect.
+        key: Bytes,
+        /// Channel to report the key's internals; `None` when the key is absent
+        /// or already past its TTL.
+        response_tx: oneshot::Sender<Option<super::types::ObjectInfo>>,
+    },
 }
 
 /// What one shard reports when it has drained its WAL flush engine.
@@ -1251,6 +1261,7 @@ impl DebugIntrospectionMsg {
             DebugIntrospectionMsg::MemoryCheck { .. } => "MemoryCheck",
             DebugIntrospectionMsg::ExpiryIndexCheck { .. } => "ExpiryIndexCheck",
             DebugIntrospectionMsg::ExpireBackdate { .. } => "ExpireBackdate",
+            DebugIntrospectionMsg::ObjectInfo { .. } => "ObjectInfo",
         }
     }
 }

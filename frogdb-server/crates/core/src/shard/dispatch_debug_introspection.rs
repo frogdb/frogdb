@@ -1,5 +1,6 @@
 //! Dispatch for the always-available DEBUG introspection messages
-//! (LOCKTABLE / WAITQUEUE / MEMORY-CHECK / EXPIRY-INDEX-CHECK / EXPIRE-BACKDATE).
+//! (LOCKTABLE / WAITQUEUE / MEMORY-CHECK / EXPIRY-INDEX-CHECK / EXPIRE-BACKDATE /
+//! OBJECT).
 //! The snapshot probes are read-only per-shard collectors handled inside the
 //! shard event loop — the probe surface the concurrency-invariant quiescence
 //! checkers consult. EXPIRE-BACKDATE is the one mutator: it rewrites a single
@@ -36,6 +37,9 @@ impl ShardWorker {
             } => {
                 let result = self.store.backdate_expiry(&key, ms);
                 let _ = response_tx.send(result);
+            }
+            DebugIntrospectionMsg::ObjectInfo { key, response_tx } => {
+                let _ = response_tx.send(self.collect_object_info(&key));
             }
         }
     }

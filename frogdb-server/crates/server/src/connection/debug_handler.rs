@@ -330,6 +330,23 @@ impl DebugProvider for ConnectionHandler {
         })
     }
 
+    /// DEBUG OBJECT <key> — gather the key's internals from the owning shard.
+    /// One keyed round-trip through the same timed send/timeout helper
+    /// [`Self::expire_backdate`] uses; the executor formats the reply.
+    fn object_info<'a>(
+        &'a self,
+        shard_id: usize,
+        key: Bytes,
+    ) -> BoxFuture<'a, Result<Option<frogdb_core::shard::ObjectInfo>, Response>> {
+        Box::pin(async move {
+            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+            let msg = frogdb_core::shard::DebugIntrospectionMsg::ObjectInfo { key, response_tx };
+            self.scatter_gather()
+                .query_one(shard_id, msg, response_rx)
+                .await
+        })
+    }
+
     /// DEBUG KEYSIZES-HIST-ASSERT — merge keysize histograms across all shards.
     fn keysizes_snapshot<'a>(&'a self) -> BoxFuture<'a, KeysizeHistograms> {
         Box::pin(async move {
