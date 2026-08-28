@@ -754,9 +754,22 @@ pub struct SubcommandSpec {
     /// Argument count accepted, counting the subcommand token.
     pub arity: Arity,
     /// The *behavioral* flags this subcommand carries — the
-    /// [`BEHAVIORAL_FLAGS`] subset. Everything else (LOADING, STALE, NOSCRIPT,
-    /// ADMIN, …) stays a container-level fact; see [`SubcommandSpec::flags_over`].
+    /// [`BEHAVIORAL_FLAGS`] subset. Everything else (ADMIN, PUBSUB, FAST, …)
+    /// stays a container-level fact; see [`SubcommandSpec::flags_over`].
     pub flags: CommandFlags,
+    /// This row's admission gates ([`ADMISSION_FLAGS`]), or `None` to inherit
+    /// the container's verbatim.
+    ///
+    /// `None` is the overwhelming common case and the conservative one: a
+    /// container declares the union of what its subcommands need, and a row
+    /// that says nothing is judged by it. `Some(f)` **replaces** the
+    /// container's admission subset with `f` — not a union, because the point
+    /// is to let a row *clear* a gate its siblings need (every container's
+    /// `HELP` drops `noscript`) as well as add one its siblings do not
+    /// (`CLUSTER RESET` is the only `noscript` row under `CLUSTER`).
+    ///
+    /// `ADMIN` is deliberately not expressible here — see [`ADMISSION_FLAGS`].
+    pub admission: Option<CommandFlags>,
     /// Where this subcommand's keys sit in the container's argument vector.
     pub keys: KeySpec,
 }
@@ -767,21 +780,56 @@ pub struct SubcommandSpec {
 /// gate, op-rate classification), and exactly the ones that genuinely differ
 /// between subcommands of one container.
 ///
-/// Everything else stays a container-level fact and carries through unchanged.
-/// `ADMIN` in particular is deliberately absent: FrogDB's per-subcommand admin
-/// surface is declared once, in [`SPLIT_ADMIN_SURFACES`], and resolved through
-/// [`admin_surface`]. A second per-subcommand copy here would be a second
-/// source of truth for the same question.
+/// Everything else stays a container-level fact and carries through unchanged,
+/// except the admission gates a row may opt into refining — see
+/// [`ADMISSION_FLAGS`].
+///
+/// `ADMIN` in particular is deliberately absent from both sets: FrogDB's
+/// per-subcommand admin surface is declared once, in [`SPLIT_ADMIN_SURFACES`],
+/// and resolved through [`admin_surface`]. A second per-subcommand copy here
+/// would be a second source of truth for the same question.
 pub const BEHAVIORAL_FLAGS: CommandFlags = CommandFlags::WRITE
     .union(CommandFlags::READONLY)
     .union(CommandFlags::DENYOOM);
 
+/// The admission gates a [`SubcommandSpec`] may override
+/// ([`SubcommandSpec::admission`]): the three flags that decide whether an
+/// invocation is *admitted at all*, as opposed to how it behaves once it runs.
+///
+/// Redis declares these per subcommand and does so non-uniformly — most visibly
+/// every container's `HELP` drops `noscript` and gains `stale`, and `CLUSTER
+/// RESET` is the one `noscript` row under a container that is otherwise wholly
+/// script-callable. A container-level-only model has to pick one answer for all
+/// its rows, and either choice is wrong for the other half (redis-feel issue
+/// 20).
+///
+/// `ADMIN` is *not* here, and that exclusion is the point: widening what a row
+/// may declare must not quietly give rows a second way to open an admin
+/// surface. [`SPLIT_ADMIN_SURFACES`] stays the single source of truth for the
+/// per-subcommand admin question.
+pub const ADMISSION_FLAGS: CommandFlags = CommandFlags::NOSCRIPT
+    .union(CommandFlags::STALE)
+    .union(CommandFlags::LOADING);
+
 impl SubcommandSpec {
     /// This subcommand's flags laid over its container's: the behavioral half
-    /// is replaced wholesale, the rest of the container's declaration carries
-    /// through unchanged.
+    /// is replaced wholesale, the admission half is replaced only where the row
+    /// opts in, and the rest of the container's declaration carries through
+    /// unchanged.
     pub fn flags_over(&self, container: CommandFlags) -> CommandFlags {
-        container.difference(BEHAVIORAL_FLAGS) | self.flags
+        let inherited = match self.admission {
+            Some(_) => container.difference(BEHAVIORAL_FLAGS.union(ADMISSION_FLAGS)),
+            None => container.difference(BEHAVIORAL_FLAGS),
+        };
+        inherited | self.flags | self.admission.unwrap_or_else(CommandFlags::empty)
+    }
+
+    /// This row with its admission gates declared outright rather than
+    /// inherited. The single way [`Self::admission`] is ever set, so a row
+    /// reads as "the common case, plus the one fact that differs".
+    pub const fn with_admission(mut self, admission: CommandFlags) -> Self {
+        self.admission = Some(admission);
+        self
     }
 }
 
@@ -807,7 +855,7 @@ static CONTAINER_SUBCOMMANDS: &[(&str, &[SubcommandSpec])] = &[
             sub("DRYRUN", Arity::AtLeast(3)),
             sub("GENPASS", Arity::AtLeast(1)),
             sub("GETUSER", Arity::Fixed(2)),
-            sub("HELP", Arity::Fixed(1)),
+            help(),
             sub("LIST", Arity::Fixed(1)),
             sub("LOAD", Arity::Fixed(1)),
             sub("LOG", Arity::AtLeast(1)),
@@ -823,7 +871,7 @@ static CONTAINER_SUBCOMMANDS: &[(&str, &[SubcommandSpec])] = &[
             sub("CACHING", Arity::Fixed(2)),
             sub("GETNAME", Arity::Fixed(1)),
             sub("GETREDIR", Arity::Fixed(1)),
-            sub("HELP", Arity::Fixed(1)),
+            help(),
             sub("ID", Arity::Fixed(1)),
             sub("INFO", Arity::Fixed(1)),
             sub("KILL", Arity::AtLeast(2)),
@@ -851,14 +899,22 @@ static CONTAINER_SUBCOMMANDS: &[(&str, &[SubcommandSpec])] = &[
             sub("FAILOVER", Arity::AtLeast(1)),
             sub("FORGET", Arity::Fixed(2)),
             sub("GETKEYSINSLOT", Arity::Fixed(3)),
-            sub("HELP", Arity::Fixed(1)),
+            help(),
             sub("INFO", Arity::Fixed(1)),
             sub("KEYSLOT", Arity::Fixed(2)),
             sub("MEET", Arity::AtLeast(3)),
             sub("MYID", Arity::Fixed(1)),
             sub("NODES", Arity::Fixed(1)),
             sub("REPLICATE", Arity::Fixed(2)),
-            sub("RESET", Arity::AtLeast(1)),
+            // The one `noscript` row under CLUSTER, upstream and here: RESET
+            // tears down this node's cluster identity, which a script has no
+            // business doing and no way to replicate deterministically. The
+            // container itself stays script-callable so `CLUSTER MYID` and
+            // friends keep working, which is exactly the see-saw a row-level
+            // override exists to break. `STALE` is re-declared because an
+            // override replaces the container's admission subset wholesale.
+            sub("RESET", Arity::AtLeast(1))
+                .with_admission(CommandFlags::NOSCRIPT.union(CommandFlags::STALE)),
             sub("SAVECONFIG", Arity::Fixed(1)),
             sub("SET-CONFIG-EPOCH", Arity::Fixed(2)),
             sub("SETSLOT", Arity::AtLeast(3)),
@@ -873,7 +929,7 @@ static CONTAINER_SUBCOMMANDS: &[(&str, &[SubcommandSpec])] = &[
             sub("DOCS", Arity::AtLeast(1)),
             sub("GETKEYS", Arity::AtLeast(2)),
             sub("GETKEYSANDFLAGS", Arity::AtLeast(2)),
-            sub("HELP", Arity::Fixed(1)),
+            help(),
             sub("INFO", Arity::AtLeast(1)),
             sub("LIST", Arity::AtLeast(1)),
         ],
@@ -882,7 +938,7 @@ static CONTAINER_SUBCOMMANDS: &[(&str, &[SubcommandSpec])] = &[
         "CONFIG",
         &[
             sub("GET", Arity::AtLeast(2)),
-            sub("HELP", Arity::Fixed(1)),
+            help(),
             sub("RESETSTAT", Arity::Fixed(1)),
             sub("REWRITE", Arity::Fixed(1)),
             sub("SET", Arity::AtLeast(3)),
@@ -894,7 +950,7 @@ static CONTAINER_SUBCOMMANDS: &[(&str, &[SubcommandSpec])] = &[
             write("DELETE", Arity::Fixed(2)),
             sub("DUMP", Arity::Fixed(1)),
             write("FLUSH", Arity::AtLeast(1)),
-            sub("HELP", Arity::Fixed(1)),
+            help(),
             sub("KILL", Arity::Fixed(1)),
             sub("LIST", Arity::AtLeast(1)),
             allocating_write("LOAD", Arity::AtLeast(2)),
@@ -909,7 +965,7 @@ static CONTAINER_SUBCOMMANDS: &[(&str, &[SubcommandSpec])] = &[
             sub("BANDS", Arity::AtLeast(1)),
             sub("DOCTOR", Arity::Fixed(1)),
             sub("GRAPH", Arity::Fixed(2)),
-            sub("HELP", Arity::Fixed(1)),
+            help(),
             sub("HISTOGRAM", Arity::AtLeast(1)),
             sub("HISTORY", Arity::Fixed(2)),
             sub("LATEST", Arity::Fixed(1)),
@@ -920,7 +976,7 @@ static CONTAINER_SUBCOMMANDS: &[(&str, &[SubcommandSpec])] = &[
         "MEMORY",
         &[
             sub("DOCTOR", Arity::Fixed(1)),
-            sub("HELP", Arity::Fixed(1)),
+            help(),
             // FrogDB extension: Redis 8.6.1 has MEMORY MALLOC-STATS, not this.
             sub("MALLOC-SIZE", Arity::AtLeast(2)),
             sub("PURGE", Arity::Fixed(1)),
@@ -933,7 +989,7 @@ static CONTAINER_SUBCOMMANDS: &[(&str, &[SubcommandSpec])] = &[
         &[
             read_key("ENCODING", Arity::Fixed(2)),
             read_key("FREQ", Arity::Fixed(2)),
-            sub("HELP", Arity::Fixed(1)),
+            help(),
             read_key("IDLETIME", Arity::Fixed(2)),
             read_key("REFCOUNT", Arity::Fixed(2)),
         ],
@@ -942,7 +998,7 @@ static CONTAINER_SUBCOMMANDS: &[(&str, &[SubcommandSpec])] = &[
         "PUBSUB",
         &[
             sub("CHANNELS", Arity::AtLeast(1)),
-            sub("HELP", Arity::Fixed(1)),
+            help(),
             sub("NUMPAT", Arity::Fixed(1)),
             sub("NUMSUB", Arity::AtLeast(1)),
             sub("SHARDCHANNELS", Arity::AtLeast(1)),
@@ -954,7 +1010,7 @@ static CONTAINER_SUBCOMMANDS: &[(&str, &[SubcommandSpec])] = &[
         &[
             sub("EXISTS", Arity::AtLeast(2)),
             sub("FLUSH", Arity::AtLeast(1)),
-            sub("HELP", Arity::Fixed(1)),
+            help(),
             sub("KILL", Arity::Fixed(1)),
             sub("LOAD", Arity::Fixed(2)),
         ],
@@ -963,7 +1019,7 @@ static CONTAINER_SUBCOMMANDS: &[(&str, &[SubcommandSpec])] = &[
         "SLOWLOG",
         &[
             sub("GET", Arity::AtLeast(1)),
-            sub("HELP", Arity::Fixed(1)),
+            help(),
             sub("LEN", Arity::Fixed(1)),
             sub("RESET", Arity::Fixed(1)),
         ],
@@ -972,7 +1028,7 @@ static CONTAINER_SUBCOMMANDS: &[(&str, &[SubcommandSpec])] = &[
         "HOTKEYS",
         &[
             sub("GET", Arity::Fixed(1)),
-            sub("HELP", Arity::Fixed(1)),
+            help(),
             sub("RESET", Arity::Fixed(1)),
             sub("START", Arity::AtLeast(1)),
             sub("STOP", Arity::Fixed(1)),
@@ -988,7 +1044,7 @@ static CONTAINER_SUBCOMMANDS: &[(&str, &[SubcommandSpec])] = &[
             // exactly when an operator needs them.
             write_key("DELCONSUMER", Arity::Fixed(4)),
             write_key("DESTROY", Arity::Fixed(3)),
-            sub("HELP", Arity::Fixed(1)),
+            help(),
             write_key("SETID", Arity::AtLeast(4)),
         ],
     ),
@@ -997,17 +1053,18 @@ static CONTAINER_SUBCOMMANDS: &[(&str, &[SubcommandSpec])] = &[
         &[
             read_key("CONSUMERS", Arity::Fixed(3)),
             read_key("GROUPS", Arity::Fixed(2)),
-            sub("HELP", Arity::Fixed(1)),
+            help(),
             read_key("STREAM", Arity::AtLeast(2)),
         ],
     ),
 ];
 
 // Row constructors. `sub` is the common case — a keyless subcommand whose
-// access class is whatever its container declares; the rest name the fact they
-// add. `_key` variants put the key at `args[1]`, immediately after the
-// subcommand token, which is where every keyed container subcommand Redis
-// documents puts it.
+// access class and admission gates are whatever its container declares; the
+// rest name the fact they add. `_key` variants put the key at `args[1]`,
+// immediately after the subcommand token, which is where every keyed container
+// subcommand Redis documents puts it. A row that refines an admission gate says
+// so with [`SubcommandSpec::with_admission`].
 
 const fn row(
     name: &'static str,
@@ -1019,12 +1076,25 @@ const fn row(
         name,
         arity,
         flags,
+        admission: None,
         keys,
     }
 }
 
 const fn sub(name: &'static str, arity: Arity) -> SubcommandSpec {
     row(name, arity, CommandFlags::empty(), KeySpec::None)
+}
+
+/// Every container's `HELP` row, which is the same row every time.
+///
+/// `HELP` prints a static usage string: it reads no keyspace, allocates
+/// nothing, and discloses nothing the container's own name does not. So Redis
+/// gives it `stale`+`loading` and withholds `noscript` on *every* container,
+/// whatever the container's own gates are — help stays answerable on a
+/// link-down replica and from inside a script. FrogDB says the same thing here,
+/// once, instead of once per container.
+const fn help() -> SubcommandSpec {
+    sub("HELP", Arity::Fixed(1)).with_admission(CommandFlags::STALE.union(CommandFlags::LOADING))
 }
 
 const fn read(name: &'static str, arity: Arity) -> SubcommandSpec {
@@ -1137,6 +1207,12 @@ pub enum SpecError {
     /// particular is declared in [`SPLIT_ADMIN_SURFACES`]), so a row carrying
     /// one would be a second, silently-ignored source of truth.
     SubcommandFlagsNotBehavioral { subcommand: &'static str },
+    /// A [`SubcommandSpec`] declared an admission override outside
+    /// [`ADMISSION_FLAGS`]. The override *replaces* the container's admission
+    /// subset, so a bit outside that subset would either be silently dropped or
+    /// — worse, for `ADMIN` — become a second way to open an admin surface that
+    /// [`SPLIT_ADMIN_SURFACES`] does not know about.
+    SubcommandAdmissionNotAdmission { subcommand: &'static str },
     /// A `ConnectionLevel` command declared a shard-side WAL effect. These
     /// commands are intercepted before shard routing, so they must be
     /// `WalStrategy::NoOp`.
@@ -1208,6 +1284,12 @@ impl std::fmt::Display for SpecError {
                 write!(
                     f,
                     "subcommand {subcommand} declared a flag outside BEHAVIORAL_FLAGS"
+                )
+            }
+            SpecError::SubcommandAdmissionNotAdmission { subcommand } => {
+                write!(
+                    f,
+                    "subcommand {subcommand} declared an admission override outside ADMISSION_FLAGS (admin is declared in SPLIT_ADMIN_SURFACES)"
                 )
             }
             SpecError::ArityTooSmallForKeys { needs, min } => {
@@ -1322,6 +1404,13 @@ impl CommandSpec {
             for row in rows {
                 if !BEHAVIORAL_FLAGS.contains(row.flags) {
                     return Err(SpecError::SubcommandFlagsNotBehavioral {
+                        subcommand: row.name,
+                    });
+                }
+                if let Some(admission) = row.admission
+                    && !ADMISSION_FLAGS.contains(admission)
+                {
+                    return Err(SpecError::SubcommandAdmissionNotAdmission {
                         subcommand: row.name,
                     });
                 }
@@ -2489,12 +2578,7 @@ mod tests {
             | CommandFlags::FAST
             | CommandFlags::SKIP_SLOWLOG
             | CommandFlags::LOADING;
-        let row = SubcommandSpec {
-            name: "HELP",
-            arity: Arity::Fixed(1),
-            flags: CommandFlags::empty(),
-            keys: KeySpec::None,
-        };
+        let row = sub("PLAIN", Arity::Fixed(1));
         let flags = row.flags_over(container);
         assert!(flags.contains(CommandFlags::FAST));
         assert!(flags.contains(CommandFlags::SKIP_SLOWLOG));
@@ -2502,8 +2586,107 @@ mod tests {
         assert!(!flags.contains(CommandFlags::READONLY));
     }
 
+    /// A row that declares no admission override inherits the container's three
+    /// admission gates verbatim — the default, and the reason adding the field
+    /// changed nothing for the ~130 rows that do not opt in.
+    #[test]
+    fn a_row_without_an_override_inherits_the_container_gates() {
+        let container = CommandFlags::READONLY | ADMISSION_FLAGS;
+        let flags = sub("PLAIN", Arity::Fixed(1)).flags_over(container);
+        assert_eq!(flags & ADMISSION_FLAGS, ADMISSION_FLAGS);
+        assert!(sub("PLAIN", Arity::Fixed(1)).admission.is_none());
+    }
+
+    /// An override *replaces* the container's admission subset rather than
+    /// unioning with it — that is what lets a row clear a gate its siblings
+    /// need. Everything outside the subset is untouched.
+    #[test]
+    fn an_admission_override_replaces_the_container_gates() {
+        let container = CommandFlags::READONLY
+            | CommandFlags::NOSCRIPT
+            | CommandFlags::LOADING
+            | CommandFlags::FAST;
+        let row = sub("HELP", Arity::Fixed(1))
+            .with_admission(CommandFlags::STALE | CommandFlags::LOADING);
+        let flags = row.flags_over(container);
+        // Cleared: the container's `noscript` did not survive the override.
+        assert!(!flags.contains(CommandFlags::NOSCRIPT));
+        // Added: `stale` the container never carried.
+        assert!(flags.contains(CommandFlags::STALE));
+        assert!(flags.contains(CommandFlags::LOADING));
+        // Untouched: non-admission, non-behavioural container facts carry.
+        assert!(flags.contains(CommandFlags::FAST));
+        assert!(!flags.contains(CommandFlags::READONLY));
+    }
+
+    /// The override composes with the behavioural half rather than replacing it:
+    /// a keyed, allocating row may still refine its gates.
+    #[test]
+    fn an_admission_override_composes_with_the_behavioural_half() {
+        let container = CommandFlags::WRITE | CommandFlags::DENYOOM | CommandFlags::STALE;
+        let row = allocating_write_key("CREATE", Arity::AtLeast(4))
+            .with_admission(CommandFlags::NOSCRIPT);
+        let flags = row.flags_over(container);
+        assert_eq!(
+            flags,
+            CommandFlags::WRITE | CommandFlags::DENYOOM | CommandFlags::NOSCRIPT
+        );
+    }
+
+    /// The two rows the override exists for, read out of the live table: every
+    /// container's HELP drops `noscript` and gains `stale`, and `CLUSTER RESET`
+    /// adds the `noscript` its siblings must not have.
+    #[test]
+    fn the_declared_overrides_resolve_the_way_upstream_declares_them() {
+        let help = subcommand_spec("CONFIG", &argv(&["HELP"])).expect("CONFIG HELP must resolve");
+        let config_container = CommandFlags::NOSCRIPT | CommandFlags::LOADING | CommandFlags::STALE;
+        let flags = help.flags_over(config_container);
+        assert!(!flags.contains(CommandFlags::NOSCRIPT));
+        assert!(flags.contains(CommandFlags::STALE));
+        assert!(flags.contains(CommandFlags::LOADING));
+
+        let reset =
+            subcommand_spec("CLUSTER", &argv(&["RESET", "HARD"])).expect("CLUSTER RESET resolves");
+        let cluster_container = CommandFlags::STALE;
+        let flags = reset.flags_over(cluster_container);
+        assert!(flags.contains(CommandFlags::NOSCRIPT));
+        assert!(flags.contains(CommandFlags::STALE));
+        // A sibling under the same container stays script-callable — the
+        // see-saw a container-level-only model could not break.
+        let myid = subcommand_spec("CLUSTER", &argv(&["MYID"])).expect("CLUSTER MYID resolves");
+        assert!(
+            !myid
+                .flags_over(cluster_container)
+                .contains(CommandFlags::NOSCRIPT)
+        );
+    }
+
+    /// `ADMIN` stays out of reach of a row: `SPLIT_ADMIN_SURFACES` is the single
+    /// source of truth for the per-subcommand admin surface, and validation
+    /// refuses any override that would become a second one.
+    #[test]
+    fn an_override_may_only_carry_admission_flags() {
+        assert!(ADMISSION_FLAGS.contains(CommandFlags::NOSCRIPT));
+        assert!(ADMISSION_FLAGS.contains(CommandFlags::STALE));
+        assert!(ADMISSION_FLAGS.contains(CommandFlags::LOADING));
+        for rejected in [
+            CommandFlags::ADMIN,
+            CommandFlags::WRITE,
+            CommandFlags::READONLY,
+            CommandFlags::DENYOOM,
+            CommandFlags::PUBSUB,
+            CommandFlags::FAST,
+        ] {
+            assert!(
+                !ADMISSION_FLAGS.contains(rejected),
+                "{rejected:?} must not be declarable as a row-level admission override"
+            );
+        }
+    }
+
     /// Every declared row is internally coherent: its arity reaches the key its
-    /// `KeySpec` names, and it carries only behavioural flags. `CommandSpec::
+    /// `KeySpec` names, it carries only behavioural flags, and any admission
+    /// override it declares carries only admission flags. `CommandSpec::
     /// validate` enforces the same thing per registered command; this walks the
     /// table itself so a row on a feature-gated container is still checked.
     #[test]
@@ -2526,6 +2709,15 @@ mod tests {
                     "{container}|{} declares non-behavioural flags",
                     row.name
                 );
+                if let Some(admission) = row.admission {
+                    assert!(
+                        ADMISSION_FLAGS.contains(admission),
+                        "{container}|{} declares an admission override outside \
+                         ADMISSION_FLAGS ({admission:?}); admin is declared in \
+                         SPLIT_ADMIN_SURFACES",
+                        row.name
+                    );
+                }
                 if let Some(needs) = row.keys.min_required_args() {
                     assert!(
                         row.arity.min() >= needs,
