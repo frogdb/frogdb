@@ -25,6 +25,16 @@ pub fn is_forbidden_in_script(cmd: &str) -> Option<&'static str> {
 }
 
 /// Check if a command + subcommand combination is forbidden in scripts.
+///
+/// The refusal of last resort, for a subcommand FrogDB declares no
+/// [`crate::command_spec::SubcommandSpec`] row for. A row that exists says
+/// `noscript` with an admission override instead (redis-feel issue 20), and the
+/// admission chokepoint enforces it with upstream's own wording — that is where
+/// `CLUSTER RESET` is refused, so the flag is its single source of truth.
+///
+/// `CLUSTER FLUSHSLOTS` stays here because FrogDB does not dispatch it: there
+/// is no row to hang a flag on, so the container's script-callable declaration
+/// would otherwise admit it.
 pub fn is_forbidden_subcommand(parts: &[Bytes]) -> Option<&'static str> {
     if parts.len() < 2 {
         return None;
@@ -32,7 +42,6 @@ pub fn is_forbidden_subcommand(parts: &[Bytes]) -> Option<&'static str> {
     let cmd = String::from_utf8_lossy(&parts[0]).to_uppercase();
     let subcmd = String::from_utf8_lossy(&parts[1]).to_uppercase();
     match (cmd.as_str(), subcmd.as_str()) {
-        ("CLUSTER", "RESET") => Some("ERR command 'CLUSTER RESET' is not allowed from script"),
         ("CLUSTER", "FLUSHSLOTS") => {
             Some("ERR command 'CLUSTER FLUSHSLOTS' is not allowed from script")
         }

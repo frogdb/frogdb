@@ -1316,6 +1316,10 @@ async fn tcl_eval_sha1hex_wrong_number_of_args() {
 // EVAL — CLUSTER RESET cannot be invoked from script
 // ---------------------------------------------------------------------------
 
+/// The refusal comes from the `noscript` bit on the `CLUSTER|RESET` row
+/// (redis-feel issue 20), not from a hand-maintained side-table of forbidden
+/// subcommands — so the assertion pins the flag path's verbatim upstream
+/// wording rather than any phrasing a side-table could have produced.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_cluster_reset_not_allowed_from_script() {
     let server = TestServer::start_standalone().await;
@@ -1328,8 +1332,8 @@ async fn tcl_eval_cluster_reset_not_allowed_from_script() {
         Response::Error(e) => {
             let msg = String::from_utf8_lossy(e);
             assert!(
-                msg.contains("not allowed") || msg.contains("denied"),
-                "expected not-allowed error, got: {msg}"
+                msg.contains("This Redis command is not allowed from script"),
+                "expected the noscript admission refusal, got: {msg}"
             );
         }
         other => panic!("expected Error, got {other:?}"),

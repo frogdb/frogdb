@@ -676,14 +676,15 @@ const FLAG_EXEMPTIONS: &[(&str, &str)] = &[
 
 /// Shared reason for the two containers whose own vendored row carries nothing
 /// but `SENTINEL`, while every subcommand under it is `noscript stale`.
-const CONTAINER_UNION_VS_SENTINEL_ROW: &str = "the admission gates `noscript` and `stale` are container-level facts in \
-     FrogDB — `SubcommandSpec::flags_over` only lets a row refine the behavioral \
-     flags (`write`/`readonly`/`denyoom`), so the container carries the union of \
-     what its subcommands need. Upstream declares them per subcommand and leaves \
-     the container's own row holding `SENTINEL` alone, which says nothing about \
-     either gate. The union is what FrogDB actually enforces, and it matches \
-     every subcommand upstream declares except `HELP` (see the \
-     SUBCOMMAND_FLAG_EXEMPTIONS entry)";
+const CONTAINER_UNION_VS_SENTINEL_ROW: &str = "upstream's own row for this container holds `SENTINEL` alone, which says \
+     nothing about either admission gate — Redis keeps the real declaration on \
+     the per-subcommand command-table entries this row only groups. FrogDB's \
+     container spec is a live fallback rather than a grouping label: it is what \
+     gates an invocation whose subcommand no `SubcommandSpec` row declares, so \
+     it carries the union its subcommands need. The rows that differ say so \
+     themselves now (`SubcommandSpec::admission`, redis-feel issue 20) and are \
+     checked one by one against upstream, which is where the real comparison \
+     happens";
 
 /// Shared reason for the four vector-set commands that carry `fast` here and
 /// not upstream.
@@ -917,31 +918,16 @@ const SUBCOMMAND_EXTENSIONS: &[(&str, &str)] = &[
 /// vendored row carries no `command_flags` at all, so the whole-command flag
 /// gate skipped all three containers.
 const SUBCOMMAND_FLAG_EXEMPTIONS: &[(&str, &str)] = &[
-    ("ACL|HELP", HELP_INHERITS_CONTAINER_GATES),
-    ("CLIENT|HELP", HELP_INHERITS_CONTAINER_GATES),
-    ("CONFIG|HELP", HELP_INHERITS_CONTAINER_GATES),
-    ("FUNCTION|HELP", HELP_INHERITS_CONTAINER_GATES),
-    ("SCRIPT|HELP", HELP_INHERITS_CONTAINER_GATES),
-    ("MEMORY|HELP", HELP_UNDER_STALE_LESS_CONTAINER),
-    ("OBJECT|HELP", HELP_UNDER_STALE_LESS_CONTAINER),
-    (
-        "CLUSTER|RESET",
-        "upstream marks CLUSTER RESET alone `noscript`; FrogDB gates the whole \
-         CLUSTER container without it, because the gates are container-level here \
-         (see the CONTAINER_UNION_VS_SENTINEL_ROW reason) and marking the container \
-         would refuse every other CLUSTER subcommand inside a script. The refusal \
-         itself is not missing — `is_forbidden_subcommand` names CLUSTER RESET (and \
-         CLUSTER FLUSHSLOTS) explicitly, so a script calling it is rejected before \
-         the flag is ever consulted",
-    ),
     (
         "SCRIPT|LOAD",
         "upstream gives SCRIPT LOAD `stale` and no other non-HELP SCRIPT \
-         subcommand; FrogDB's container therefore carries no `stale` (matching \
-         DEBUG/EXISTS/FLUSH/KILL) and refuses SCRIPT LOAD on a link-down replica \
-         too. Loading a script onto a replica that cannot see its primary is not \
-         a read the client needs served, and admitting it would mean admitting the \
-         whole container",
+         subcommand. FrogDB *can* now say that — `SubcommandSpec::admission` \
+         (redis-feel issue 20) lets a row declare its own gates — and \
+         deliberately does not: loading a script onto a replica that cannot see \
+         its primary is not a read the client needs served, and the script it \
+         loads would be evaluated against a keyspace of unbounded age. The \
+         divergence is a choice now rather than a modelling limit, so it stays \
+         here as one",
     ),
     ("HOTKEYS|HELP", WHOLE_ADMIN_HELP),
     ("LATENCY|HELP", WHOLE_ADMIN_HELP),
@@ -963,36 +949,16 @@ const SUBCOMMAND_FLAG_EXEMPTIONS: &[(&str, &str)] = &[
     ("SLOWLOG|RESET", SLOWLOG_CONTAINER_FLAGS),
 ];
 
-/// Shared reason for the containers whose `HELP` inherits the container's
-/// `noscript` gate, which upstream clears on `HELP` alone (and, on the same
-/// row, gives `HELP` a `stale` the container does not carry).
-const HELP_INHERITS_CONTAINER_GATES: &str = "the admission gates are container-level in FrogDB: `SubcommandSpec::flags_over` \
-     only lets a row refine `write`/`readonly`/`denyoom`, so a subcommand cannot \
-     clear the container's `noscript` or add a `stale` of its own. Upstream clears \
-     `noscript` on every container's HELP and gives it `stale`; here HELP is judged \
-     by the container it lives in. Both bits are truthful about what FrogDB does — \
-     HELP really is refused from a script, and really is refused on a link-down \
-     replica when the container is — and changing either means changing the gate, \
-     not the metadata";
-
-/// Shared reason for the two `readonly` containers whose `HELP` upstream opens
-/// to stale replicas.
-const HELP_UNDER_STALE_LESS_CONTAINER: &str = "upstream gives this container's HELP `stale` and no other subcommand under it; \
-     FrogDB gates the container as the keyspace read it is, with no `stale`, and \
-     HELP inherits that (see the HELP_INHERITS_CONTAINER_GATES reason for why a row \
-     cannot carry the bit on its own). Marking the container would admit MEMORY \
-     USAGE / OBJECT ENCODING on a link-down replica — the exact stale keyspace read \
-     `replica-serve-stale-data: no` exists to refuse";
-
 /// Shared reason for the three containers FrogDB gates wholly admin, where
 /// upstream leaves `HELP` open.
 const WHOLE_ADMIN_HELP: &str = "FrogDB gates this container with the whole-command admin flag rather than a \
      `SPLIT_ADMIN_SURFACES` entry, so HELP is admin-only here and open upstream. \
      The flag is truthful — a plain client port really does refuse it — and \
      opening HELP means moving the container into the split table, which is an \
-     admin-gate change rather than a metadata one. The container's `noscript` and \
-     `stale` gates reach HELP the same way, for the same reason (see \
-     HELP_INHERITS_CONTAINER_GATES)";
+     admin-gate change rather than a metadata one. `admin` is the only bit left \
+     diverging: the admission gates now come from the row (redis-feel issue 20), \
+     so this HELP is `stale`/`loading` and not `noscript`, exactly as upstream \
+     declares it";
 
 /// Shared reason for the SLOWLOG container's `fast`/`skip_slowlog` marks, which
 /// upstream sets on no `SLOWLOG` subcommand.

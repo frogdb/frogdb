@@ -8273,6 +8273,40 @@ async fn the_serve_stale_data_knob_restores_redis_behaviour() {
     replica.shutdown().await;
 }
 
+/// The stale gate reads *subcommand* flags, not container flags (redis-feel
+/// issue 20). MEMORY is a `READONLY` container with no `STALE` bit, so the
+/// whole container used to fall on the closed side of the gate — including
+/// `MEMORY HELP`, which is static text that cannot be stale and which upstream
+/// declares `stale`/`loading`. With the row carrying its own admission
+/// override, HELP survives a down link while `MEMORY USAGE` — a real read of
+/// the unboundedly-stale local keyspace — still gets `-MASTERDOWN`.
+#[tokio::test]
+async fn a_link_down_replica_serves_container_help_but_not_container_reads() {
+    let (primary, replica) = start_primary_replica_pair(TestServerConfig::default()).await;
+
+    assert_ok(&primary.send("SET", &["stale-key", "v1"]).await);
+    wait_for_replication(&primary, 5_000).await;
+
+    primary.shutdown().await;
+    wait_for_link_down(&replica).await;
+
+    let help = replica.send("MEMORY", &["HELP"]).await;
+    assert!(
+        !is_error(&help),
+        "MEMORY HELP declares its own STALE admission override and must survive \
+         a down link, got: {help:?}"
+    );
+
+    let usage = replica.send("MEMORY", &["USAGE", "stale-key"]).await;
+    assert_eq!(
+        get_error_message(&usage),
+        Some("MASTERDOWN Link with MASTER is down and replica-serve-stale-data is set to 'no'."),
+        "MEMORY USAGE reads the stale keyspace and must still be gated, got: {usage:?}"
+    );
+
+    replica.shutdown().await;
+}
+
 /// The gate is replica-only: a primary has no link to lose, so the default
 /// must not touch a standalone node's reads.
 #[tokio::test]
