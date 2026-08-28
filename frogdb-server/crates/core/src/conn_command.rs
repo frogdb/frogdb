@@ -592,6 +592,17 @@ pub trait DebugProvider: Send + Sync {
         ms: u64,
     ) -> BoxFuture<'a, Response>;
 
+    /// DEBUG OBJECT <key> — gather the key's internals from the shard that owns
+    /// it (the executor resolved `shard_id` from the key). `Ok(None)` means the
+    /// key is absent or already expired, which the executor renders as Redis's
+    /// `ERR no such key`; `Err` carries the shard-unavailable/timeout reply
+    /// already formed by the round-trip helper.
+    fn object_info<'a>(
+        &'a self,
+        shard_id: usize,
+        key: Bytes,
+    ) -> BoxFuture<'a, Result<Option<crate::shard::ObjectInfo>, Response>>;
+
     /// DEBUG KEYSIZES-HIST-ASSERT — the keysize histograms merged across every
     /// shard. The executor resolves the requested type/bin and compares.
     fn keysizes_snapshot<'a>(&'a self) -> BoxFuture<'a, crate::KeysizeHistograms>;
@@ -1116,6 +1127,13 @@ mod tests {
             _key: Bytes,
             _ms: u64,
         ) -> BoxFuture<'a, Response> {
+            unimplemented!()
+        }
+        fn object_info<'a>(
+            &'a self,
+            _shard_id: usize,
+            _key: Bytes,
+        ) -> BoxFuture<'a, Result<Option<crate::shard::ObjectInfo>, Response>> {
             unimplemented!()
         }
         fn keysizes_snapshot<'a>(&'a self) -> BoxFuture<'a, crate::KeysizeHistograms> {

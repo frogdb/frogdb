@@ -19,9 +19,13 @@
 //!
 //! DEBUG is registered *only* as a `CommandImpl::Connection` executor. `COMMAND
 //! GETKEYS` resolves it through the registry union (`get_entry`), so this
-//! executor's [`dynamic_keys`] override supplies DEBUG OBJECT's key directly —
+//! executor's [`dynamic_keys`] override supplies the key of each
+//! [keyed subcommand](KEYED_SUBCOMMANDS) — OBJECT and EXPIRE-BACKDATE — directly;
 //! no shard-local key-extraction stub is required. The spec declares
-//! `KeySpec::Dynamic` + `MOVABLEKEYS` so `COMMAND` metadata is correct.
+//! `KeySpec::Dynamic` + `MOVABLEKEYS` so `COMMAND` metadata is correct. The two
+//! halves are held in agreement by `every_keyed_subcommand_is_dispatched`: a
+//! subcommand `dynamic_keys` declares but dispatch rejects is metadata that lies
+//! to a cluster-aware client, and that test fails on it.
 //!
 //! [`dynamic_keys`]: ConnectionCommand::dynamic_keys
 
@@ -70,6 +74,16 @@ static DEBUG_SPEC: CommandSpec = CommandSpec {
     strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin),
 };
 
+/// The DEBUG subcommands that take a key as their second argument.
+///
+/// The single source of truth for [`DebugConnCommand::dynamic_keys`]. Every name
+/// here must also have a dispatch arm in [`DebugConnCommand::execute`] — a
+/// subcommand that declares a key `COMMAND GETKEYS` would report but that
+/// dispatch rejects is untruthful metadata, so
+/// `every_keyed_subcommand_is_dispatched` cross-checks this list against the
+/// dispatch.
+const KEYED_SUBCOMMANDS: [&[u8]; 2] = [b"OBJECT", b"EXPIRE-BACKDATE"];
+
 /// The registrable, `'static` DEBUG executor. Registered via
 /// [`frogdb_core::CommandRegistry::register_connection`] in `server/register.rs`.
 pub(crate) static DEBUG_CONN_COMMAND: DebugConnCommand = DebugConnCommand;
@@ -84,12 +98,12 @@ impl ConnectionCommand for DebugConnCommand {
         &DEBUG_SPEC
     }
 
-    /// DEBUG OBJECT's and DEBUG EXPIRE-BACKDATE's key is each subcommand's second
-    /// argument; every other subcommand is keyless.
+    /// A [keyed subcommand](KEYED_SUBCOMMANDS)'s key is its second argument;
+    /// every other subcommand is keyless.
     fn dynamic_keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.len() >= 2 {
             let subcommand = args[0].to_ascii_uppercase();
-            if subcommand == b"OBJECT".as_slice() || subcommand == b"EXPIRE-BACKDATE".as_slice() {
+            if KEYED_SUBCOMMANDS.contains(&subcommand.as_slice()) {
                 return vec![&args[1]];
             }
         }
@@ -227,6 +241,22 @@ impl ConnectionCommand for DebugConnCommand {
                     let shard_id = shard_for_key(&key, num_shards);
                     debug.expire_backdate(shard_id, key, ms).await
                 }
+                b"OBJECT" => {
+                    // args[0] = "OBJECT", args[1] = key
+                    if args.len() != 2 {
+                        return Response::error(
+                            "ERR wrong number of arguments for 'DEBUG OBJECT' command",
+                        );
+                    }
+                    let key = args[1].clone();
+                    let shard_id = shard_for_key(&key, num_shards);
+                    match debug.object_info(shard_id, key).await {
+                        Ok(Some(info)) => format_object_info(&info),
+                        // Redis's reply for a key DEBUG OBJECT cannot find.
+                        Ok(None) => Response::error("ERR no such key"),
+                        Err(err) => err,
+                    }
+                }
                 b"CLUSTER" => {
                     if args.len() > 1 && args[1].eq_ignore_ascii_case(b"CHECK") {
                         format_check_response(
@@ -332,7 +362,7 @@ fn debug_help() -> Response {
         "DEBUG BUNDLE LIST",
         "    List available diagnostic bundles.",
         "DEBUG OBJECT <key>",
-        "    Inspect key internals.",
+        "    Inspect key internals: refcount, encoding, serializedlength, lru stamps.",
         "DEBUG HASHING <key> [key ...]",
         "    Show hash slot and shard for keys.",
         "DEBUG RESP3 BIGNUMBER <value>",
@@ -367,6 +397,29 @@ fn debug_structsize() -> Response {
     ];
     let output: Vec<String> = pairs.iter().map(|(k, v)| format!("{}:{}", k, v)).collect();
     Response::Bulk(Some(Bytes::from(output.join(" "))))
+}
+
+/// Render `DEBUG OBJECT <key>`'s reply: a status line of `token:value` pairs,
+/// as Redis's is.
+///
+/// **Only truthful tokens are emitted.** Redis's line also carries `at:<ptr>`
+/// and, for lists, `ql_nodes`/`ql_avg_node`/…; both are absent here, and
+/// deliberately:
+///
+/// - `at:` is the value's heap address. Printing it to any client that can run
+///   DEBUG leaks the process's ASLR layout for no diagnostic gain, so FrogDB
+///   omits it — a documented deviation-as-improvement.
+/// - `ql_*` describe quicklist internals (node count, per-node fill, LZF
+///   compression). FrogDB's list is not a quicklist, so every one of those
+///   numbers would be invented. An absent token is better than a fabricated one.
+///
+/// Everything that *is* printed comes from the same logic as its `OBJECT`
+/// subcommand twin — see [`frogdb_core::shard::ObjectInfo`].
+fn format_object_info(info: &frogdb_core::shard::ObjectInfo) -> Response {
+    Response::Simple(SafeStatus::sanitized(format!(
+        "refcount:{} encoding:{} serializedlength:{} lru:{} lru_seconds_idle:{}",
+        info.refcount, info.encoding, info.serialized_length, info.lru, info.lru_seconds_idle,
+    )))
 }
 
 /// DEBUG HASHING <key> [key ...] — hash slot and shard mapping for the keys.
@@ -1159,6 +1212,7 @@ mod tests {
         enabled: bool,
         cluster_check: Option<Vec<frogdb_core::Violation>>,
         replication_check: Option<Vec<frogdb_core::Violation>>,
+        object_info: Option<frogdb_core::shard::ObjectInfo>,
     }
 
     impl StubDebug {
@@ -1167,7 +1221,13 @@ mod tests {
                 enabled,
                 cluster_check: Some(Vec::new()),
                 replication_check: Some(Vec::new()),
+                object_info: None,
             }
+        }
+
+        fn with_object_info(mut self, object_info: Option<frogdb_core::shard::ObjectInfo>) -> Self {
+            self.object_info = object_info;
+            self
         }
 
         fn with_cluster_check(
@@ -1245,6 +1305,13 @@ mod tests {
             _ms: u64,
         ) -> BoxFuture<'a, Response> {
             Box::pin(async { Response::ok() })
+        }
+        fn object_info<'a>(
+            &'a self,
+            _shard_id: usize,
+            _key: Bytes,
+        ) -> BoxFuture<'a, Result<Option<frogdb_core::shard::ObjectInfo>, Response>> {
+            Box::pin(async move { Ok(self.object_info.clone()) })
         }
         fn keysizes_snapshot<'a>(&'a self) -> BoxFuture<'a, KeysizeHistograms> {
             Box::pin(async { KeysizeHistograms::new() })
@@ -1471,6 +1538,168 @@ mod tests {
             .execute(&mut fx.ctx(Some(&stub)), &[arg("CLUSTER"), arg("NOPE")])
             .await;
         assert!(matches!(resp, Response::Error(_)), "got {resp:?}");
+    }
+
+    fn sample_object_info() -> frogdb_core::shard::ObjectInfo {
+        frogdb_core::shard::ObjectInfo {
+            refcount: 1,
+            encoding: "listpack",
+            serialized_length: 42,
+            lru: 1_700_000_000,
+            lru_seconds_idle: 7,
+        }
+    }
+
+    /// The reply is a status line of `token:value` pairs, and it carries exactly
+    /// the truthful tokens — no `at:` heap pointer, no fabricated `ql_*`
+    /// quicklist counters.
+    #[tokio::test]
+    async fn object_reports_truthful_tokens_only() {
+        let stub = StubDebug::new(true).with_object_info(Some(sample_object_info()));
+        let fx = super::tests_fixture::Deps::new();
+        let resp = DebugConnCommand
+            .execute(
+                &mut fx.ctx_with_num_shards(Some(&stub), 1),
+                &[arg("OBJECT"), arg("k")],
+            )
+            .await;
+
+        let line = match resp {
+            Response::Simple(s) => String::from_utf8(s.to_vec()).unwrap(),
+            other => panic!("expected a status line, got {other:?}"),
+        };
+        let tokens: Vec<&str> = line.split(' ').collect();
+        assert_eq!(
+            tokens,
+            vec![
+                "refcount:1",
+                "encoding:listpack",
+                "serializedlength:42",
+                "lru:1700000000",
+                "lru_seconds_idle:7",
+            ],
+            "got {line}"
+        );
+    }
+
+    /// A key the owning shard cannot find answers with Redis's own error, not an
+    /// empty or zeroed line.
+    #[tokio::test]
+    async fn object_missing_key_reports_no_such_key() {
+        let stub = StubDebug::new(true).with_object_info(None);
+        let fx = super::tests_fixture::Deps::new();
+        let resp = DebugConnCommand
+            .execute(
+                &mut fx.ctx_with_num_shards(Some(&stub), 1),
+                &[arg("OBJECT"), arg("absent")],
+            )
+            .await;
+        match resp {
+            Response::Error(e) => assert_eq!(&e[..], b"ERR no such key"),
+            other => panic!("expected error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn object_rejects_bad_arity() {
+        let stub = StubDebug::new(true).with_object_info(Some(sample_object_info()));
+        let fx = super::tests_fixture::Deps::new();
+        for args in [
+            vec![arg("OBJECT")],
+            vec![arg("OBJECT"), arg("k"), arg("extra")],
+        ] {
+            let resp = DebugConnCommand
+                .execute(&mut fx.ctx_with_num_shards(Some(&stub), 1), &args)
+                .await;
+            assert!(matches!(resp, Response::Error(_)), "got {resp:?}");
+        }
+    }
+
+    /// The exact reply the dispatch's catch-all produces for `subcommand`.
+    fn unknown_subcommand_error(subcommand: &str) -> Response {
+        Response::error(format!("ERR Unknown DEBUG subcommand '{subcommand}'"))
+    }
+
+    /// Every subcommand whose key `dynamic_keys` declares must have a dispatch
+    /// arm.
+    ///
+    /// This is the container-wide gate for the class of bug this test was born
+    /// from: `DEBUG OBJECT` was declared keyed — so `COMMAND GETKEYS DEBUG
+    /// OBJECT k` reported `k`, and a cluster-aware client routed to `k`'s slot
+    /// owner — while dispatch answered `ERR Unknown DEBUG subcommand 'OBJECT'`.
+    /// Adding a name to [`KEYED_SUBCOMMANDS`] without an arm in `execute` fails
+    /// here.
+    #[tokio::test]
+    async fn every_keyed_subcommand_is_dispatched() {
+        let stub = StubDebug::new(true);
+        let fx = super::tests_fixture::Deps::new();
+
+        for subcommand in KEYED_SUBCOMMANDS {
+            let name = String::from_utf8(subcommand.to_vec()).unwrap();
+
+            // The declaration half: the key is the second argument.
+            let args = [Bytes::from(name.clone()), Bytes::from_static(b"k")];
+            assert_eq!(
+                DebugConnCommand.dynamic_keys(&args),
+                vec![b"k".as_slice()],
+                "DEBUG {name} is listed as keyed but dynamic_keys does not extract its key",
+            );
+
+            // The dispatch half: whatever it answers, it must not be the
+            // unknown-subcommand catch-all.
+            let resp = DebugConnCommand
+                .execute(&mut fx.ctx_with_num_shards(Some(&stub), 1), &args)
+                .await;
+            assert_ne!(
+                resp,
+                unknown_subcommand_error(&name),
+                "DEBUG {name} declares a key via dynamic_keys but dispatch rejects it",
+            );
+        }
+    }
+
+    /// Every subcommand `DEBUG HELP` advertises must have a dispatch arm.
+    ///
+    /// The wider half of the same gate: `HELP` is a documented promise to
+    /// operators, so a name that appears there and nowhere in the dispatch is
+    /// the same lie in a different place. The subcommand may still reject the
+    /// probe (wrong arity, missing nested subcommand, unsafe-and-unsupported) —
+    /// only the catch-all is disqualifying.
+    #[tokio::test]
+    async fn every_help_advertised_subcommand_is_dispatched() {
+        let stub = StubDebug::new(true);
+        let fx = super::tests_fixture::Deps::new();
+
+        let Response::Array(lines) = debug_help() else {
+            panic!("DEBUG HELP must reply with an array");
+        };
+        let mut checked = 0;
+        for line in lines {
+            let Response::Bulk(Some(text)) = line else {
+                panic!("DEBUG HELP lines are bulk strings");
+            };
+            let text = String::from_utf8(text.to_vec()).unwrap();
+            // Usage lines start with "DEBUG <SUBCOMMAND>"; the indented lines
+            // between them are prose.
+            let Some(rest) = text.strip_prefix("DEBUG ") else {
+                continue;
+            };
+            let name = rest.split(' ').next().unwrap().to_string();
+            checked += 1;
+
+            let resp = DebugConnCommand
+                .execute(
+                    &mut fx.ctx_with_num_shards(Some(&stub), 1),
+                    &[Bytes::from(name.clone())],
+                )
+                .await;
+            assert_ne!(
+                resp,
+                unknown_subcommand_error(&name),
+                "DEBUG HELP advertises {name} but dispatch does not accept it",
+            );
+        }
+        assert!(checked > 10, "expected HELP to advertise the whole surface");
     }
 }
 

@@ -1220,6 +1220,34 @@ pub struct ExpiryIndexCheckInfo {
     pub anomalies: Vec<ExpiryIndexAnomaly>,
 }
 
+/// Response for `DEBUG OBJECT <key>` — the internals of one live key, gathered
+/// on the shard that owns it.
+///
+/// Every field is a fact the store actually holds. Redis's `at:<ptr>` and its
+/// `ql_*` quicklist counters have no truthful analogue here (a heap address is
+/// an ASLR information leak, and FrogDB's list is not a quicklist), so they are
+/// absent from this struct rather than fabricated at the formatting seam.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectInfo {
+    /// References to the value — always
+    /// [`Value::REPORTED_REFCOUNT`](frogdb_types::Value::REPORTED_REFCOUNT), the
+    /// same answer `OBJECT REFCOUNT` gives.
+    pub refcount: i64,
+    /// The value's encoding name, from
+    /// [`Value::encoding_name`](frogdb_types::Value::encoding_name) — the same
+    /// answer `OBJECT ENCODING` gives.
+    pub encoding: &'static str,
+    /// Byte length of the value's persisted payload
+    /// ([`frogdb_persistence::serialization::serialized_payload_len`]).
+    pub serialized_length: usize,
+    /// The key's last-access stamp as Unix seconds — FrogDB's LRU clock. Redis
+    /// reports a 24-bit truncation of the same quantity.
+    pub lru: i64,
+    /// Seconds since the key was last accessed — the same answer
+    /// `OBJECT IDLETIME` gives.
+    pub lru_seconds_idle: u64,
+}
+
 /// Pub/Sub limits info for a shard.
 #[derive(Debug, Clone, Default)]
 pub struct PubSubLimitsInfo {

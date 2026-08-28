@@ -241,6 +241,84 @@ impl Value {
         }
     }
 
+    /// The reference count FrogDB reports for a live key.
+    ///
+    /// Values are never shared or interned between keys, so every existing key
+    /// holds exactly one reference. Both introspection surfaces that report a
+    /// refcount — `OBJECT REFCOUNT` and `DEBUG OBJECT`'s `refcount:` token —
+    /// read it from here so they can never disagree.
+    pub const REPORTED_REFCOUNT: i64 = 1;
+
+    /// The Redis-compatible encoding name for this value.
+    ///
+    /// The single source of truth for both introspection surfaces that report an
+    /// encoding — `OBJECT ENCODING` and `DEBUG OBJECT`'s `encoding:` token — so
+    /// the two can never disagree. Names follow Redis's vocabulary for the
+    /// closest structural analogue of FrogDB's representation; where FrogDB has
+    /// a type Redis lacks (bloom, t-digest, ...) the name is FrogDB's own.
+    pub fn encoding_name(&self) -> &'static str {
+        match self {
+            Value::String(sv) => {
+                if sv.as_integer().is_some() {
+                    "int"
+                } else {
+                    "embstr"
+                }
+            }
+            Value::SortedSet(zset) => {
+                // Redis uses listpack for small sets, skiplist for larger ones
+                if zset.len() <= 128 {
+                    "listpack"
+                } else {
+                    "skiplist"
+                }
+            }
+            Value::Hash(hash) => {
+                if hash.is_listpack() {
+                    "listpack"
+                } else {
+                    "hashtable"
+                }
+            }
+            Value::List(list) => {
+                // Redis uses quicklist (linked list of listpacks)
+                if list.len() <= 64 {
+                    "listpack"
+                } else {
+                    "quicklist"
+                }
+            }
+            Value::Set(set) => {
+                if set.is_listpack() {
+                    "listpack"
+                } else {
+                    "hashtable"
+                }
+            }
+            // Redis uses radix tree for streams
+            Value::Stream(_) => "radix-tree",
+            // Bloom filters use a custom scalable structure
+            Value::BloomFilter(_) => "bloom",
+            // HyperLogLog can be sparse or dense
+            Value::HyperLogLog(hll) => {
+                if hll.is_sparse() {
+                    "sparse"
+                } else {
+                    "dense"
+                }
+            }
+            // TimeSeries uses Gorilla compression
+            Value::TimeSeries(_) => "gorilla",
+            // JSON documents use a tree structure
+            Value::Json(_) => "raw",
+            Value::CuckooFilter(_) => "cuckoo",
+            Value::TDigest(_) => "tdigest",
+            Value::TopK(_) => "topk",
+            Value::CountMinSketch(_) => "cms",
+            Value::VectorSet(_) => "vectorset",
+        }
+    }
+
     /// Returns the [`KeysizeType`] for this value, if it participates in
     /// keysize histogram tracking.
     pub fn keysize_type(&self) -> Option<crate::histogram::KeysizeType> {

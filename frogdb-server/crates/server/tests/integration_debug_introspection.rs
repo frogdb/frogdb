@@ -376,3 +376,173 @@ async fn debug_expiry_index_check_consistent_after_expire() {
 
     server.shutdown().await;
 }
+
+// ---------------------------------------------------------------------------
+// DEBUG OBJECT
+// ---------------------------------------------------------------------------
+
+/// Parse `DEBUG OBJECT`'s status line into its `token:value` pairs.
+///
+/// Fails the test if the reply is not a status line or if any field is not a
+/// `token:value` pair, so a malformed line cannot pass as an empty map.
+fn parse_object_line(resp: &Response) -> std::collections::HashMap<String, String> {
+    let line = match resp {
+        Response::Simple(s) => String::from_utf8_lossy(s).into_owned(),
+        other => panic!("DEBUG OBJECT must reply with a status line, got {other:?}"),
+    };
+    line.split(' ')
+        .map(|field| {
+            let (token, value) = field
+                .split_once(':')
+                .unwrap_or_else(|| panic!("field {field:?} is not token:value in {line:?}"));
+            (token.to_string(), value.to_string())
+        })
+        .collect()
+}
+
+/// Every emitted field is real: the encoding agrees with `OBJECT ENCODING` for
+/// each value shape, the refcount agrees with `OBJECT REFCOUNT`, the lengths and
+/// stamps parse as numbers — and no `at:` pointer or fabricated `ql_*` token is
+/// present.
+#[tokio::test]
+async fn debug_object_fields_agree_with_the_object_command() {
+    use crate::common::response_helpers::{unwrap_bulk, unwrap_integer};
+
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // A representative value of each shape whose encoding is shape-dependent.
+    client.command(&["SET", "obj-int", "12345"]).await;
+    client
+        .command(&["SET", "obj-str", "a-plain-string-value"])
+        .await;
+    client.command(&["RPUSH", "obj-list", "a", "b", "c"]).await;
+    client.command(&["HSET", "obj-hash", "f", "v"]).await;
+
+    for key in ["obj-int", "obj-str", "obj-list", "obj-hash"] {
+        let fields = parse_object_line(&client.command(&["DEBUG", "OBJECT", key]).await);
+
+        // The truthful-fields-only contract: exactly these tokens, no `at:`
+        // heap pointer and no quicklist `ql_*` counters.
+        let mut tokens: Vec<&str> = fields.keys().map(String::as_str).collect();
+        tokens.sort_unstable();
+        assert_eq!(
+            tokens,
+            vec![
+                "encoding",
+                "lru",
+                "lru_seconds_idle",
+                "refcount",
+                "serializedlength",
+            ],
+            "unexpected token set for {key}"
+        );
+
+        // encoding: the same answer OBJECT ENCODING gives.
+        let encoding = client.command(&["OBJECT", "ENCODING", key]).await;
+        assert_eq!(
+            fields["encoding"],
+            String::from_utf8_lossy(unwrap_bulk(&encoding)),
+            "encoding disagrees with OBJECT ENCODING for {key}"
+        );
+
+        // refcount: the same answer OBJECT REFCOUNT gives.
+        let refcount = client.command(&["OBJECT", "REFCOUNT", key]).await;
+        assert_eq!(
+            fields["refcount"].parse::<i64>().unwrap(),
+            unwrap_integer(&refcount),
+            "refcount disagrees with OBJECT REFCOUNT for {key}"
+        );
+
+        // The remaining tokens are numbers, and a stored value is never
+        // zero-length once serialized.
+        assert!(
+            fields["serializedlength"].parse::<usize>().unwrap() > 0,
+            "serializedlength must be a real byte count for {key}"
+        );
+        fields["lru"].parse::<i64>().unwrap();
+        fields["lru_seconds_idle"].parse::<u64>().unwrap();
+    }
+
+    server.shutdown().await;
+}
+
+/// A string that holds an integer encodes differently from one that does not —
+/// proof the encoding token tracks the value, not just its type.
+#[tokio::test]
+async fn debug_object_encoding_distinguishes_int_from_raw_strings() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SET", "enc-int", "42"]).await;
+    client.command(&["SET", "enc-str", "forty-two"]).await;
+
+    let int_fields = parse_object_line(&client.command(&["DEBUG", "OBJECT", "enc-int"]).await);
+    let str_fields = parse_object_line(&client.command(&["DEBUG", "OBJECT", "enc-str"]).await);
+    assert_eq!(int_fields["encoding"], "int");
+    assert_ne!(str_fields["encoding"], "int");
+
+    server.shutdown().await;
+}
+
+/// Redis's reply for a key DEBUG OBJECT cannot find.
+#[tokio::test]
+async fn debug_object_missing_key_errors() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    match client.command(&["DEBUG", "OBJECT", "no-such-key"]).await {
+        Response::Error(e) => assert_eq!(&e[..], b"ERR no such key"),
+        other => panic!("expected ERR no such key, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+/// An expired-but-not-yet-swept key reads as absent, exactly as it does for
+/// every other lookup.
+#[tokio::test]
+async fn debug_object_expired_key_errors() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SET", "gone", "v", "EX", "100"]).await;
+    // Backdate the deadline instead of sleeping; the key is now logically
+    // expired but has not been swept.
+    client
+        .command(&["DEBUG", "EXPIRE-BACKDATE", "gone", "1000"])
+        .await;
+
+    match client.command(&["DEBUG", "OBJECT", "gone"]).await {
+        Response::Error(e) => assert_eq!(&e[..], b"ERR no such key"),
+        other => panic!("expected ERR no such key, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+/// The metadata half of the contract: `COMMAND GETKEYS` still reports the key,
+/// and the dispatch it points at now actually accepts it. These two assertions
+/// are the issue this command was implemented for — they must never diverge
+/// again.
+#[tokio::test]
+async fn debug_object_getkeys_agrees_with_dispatch() {
+    use crate::common::response_helpers::extract_bulk_strings;
+
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["COMMAND", "GETKEYS", "DEBUG", "OBJECT", "k"])
+        .await;
+    assert_eq!(extract_bulk_strings(&resp), vec!["k"]);
+
+    client.command(&["SET", "k", "v"]).await;
+    let resp = client.command(&["DEBUG", "OBJECT", "k"]).await;
+    assert!(
+        matches!(resp, Response::Simple(_)),
+        "the key COMMAND GETKEYS reports must be one dispatch accepts, got {resp:?}"
+    );
+
+    server.shutdown().await;
+}
