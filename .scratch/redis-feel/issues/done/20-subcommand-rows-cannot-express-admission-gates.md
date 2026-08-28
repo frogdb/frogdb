@@ -1,6 +1,6 @@
 # Subcommand rows cannot express `noscript` / `stale`, so nine parity exemptions are structural
 
-Status: ready-for-agent
+Status: done
 
 ## Origin
 
@@ -87,3 +87,38 @@ General mechanism (option a):
   (shrink-only list, removal is the enforcement).
 - ADMIN stays out of the override — `SPLIT_ADMIN_SURFACES` is already the
   single source of truth for per-subcommand admin.
+
+## Resolution (2026-08-28)
+
+Implemented (`d74f86c2`). `SubcommandSpec` gained `admission:
+Option<CommandFlags>` set via `const fn with_admission`; `None` inherits the
+container's admission subset, `Some` replaces it wholesale (a row can clear
+noscript, not only add). New `ADMISSION_FLAGS = NOSCRIPT | STALE | LOADING`;
+ADMIN stays out (`SPLIT_ADMIN_SURFACES` remains the sole per-subcommand admin
+authority). `SpecError::SubcommandAdmissionNotAdmission` rejects non-admission
+bits at validation.
+
+Key finding: no gate call-site edits were needed. All three `admit_command`
+sites, the MASTERDOWN gate in `run_pre_checks`, the script gate, and the
+COMMAND INFO/DOCS nested-row emitter already read per-invocation flags through
+`CommandImpl::flags_for` -> `flags_over` — widening `flags_over` was the single
+seam.
+
+Data: all 15 container HELP rows declare `STALE | LOADING` via one shared
+`help()` constructor (behavior change: HELP served on a link-down replica,
+Redis parity). `CLUSTER|RESET` carries `NOSCRIPT | STALE` via the override and
+its `is_forbidden_subcommand` arm is deleted (FLUSHSLOTS stays in the
+side-table — FrogDB dispatches no FLUSHSLOTS row to hang a flag on,
+documented). `SCRIPT|LOAD` stays a deliberate deviation, exemption reworded to
+"expressible but retained by choice".
+
+Exemptions: 8 structural entries removed (7 HELP rows + CLUSTER|RESET); dead
+reason constants deleted; survivors all diverge on non-admission bits only.
+No new divergences surfaced by the widened comparison.
+
+Forcing tests: override math + upstream-resolution units in
+`command_spec.rs`; integration
+`a_link_down_replica_serves_container_help_but_not_container_reads`
+(MEMORY HELP ok, MEMORY USAGE -> MASTERDOWN, `replica-serve-stale-data no`);
+`tcl_eval_cluster_reset_not_allowed_from_script` strengthened to pin the exact
+flag-path wording.
