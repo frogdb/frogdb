@@ -1,6 +1,6 @@
 # DEBUG OBJECT: key metadata declares a key the dispatch never accepts
 
-Status: needs-triage
+Status: ready-for-agent
 
 ## Origin
 
@@ -76,3 +76,25 @@ Two coherent endings, and picking one is the triage decision:
 Either way the fix should come with a regression test that runs both halves
 against each other (`COMMAND GETKEYS` vs actual dispatch) for the DEBUG
 container, so a future subcommand cannot re-open the same gap silently.
+
+## Ruling (2026-08-28)
+
+Direction 1 — **implement `DEBUG OBJECT`** with a truthful-fields-only reply:
+
+| Token | Plan |
+|---|---|
+| `at:<ptr>` | omit — heap address is an ASLR info leak; deviation-as-improvement, documented |
+| `refcount` | emit, reuse the OBJECT REFCOUNT arm's logic |
+| `encoding` | emit, reuse the OBJECT ENCODING arm's names (self-consistent) |
+| `serializedlength` | emit only if the persistence value codec is cheaply reusable for a byte length; otherwise omit first pass (fabricated length is worse than an absent token) |
+| `lru`, `lru_seconds_idle` | emit via the IDLETIME/FREQ logic |
+| `ql_*` | omit — quicklist internals do not map to our list repr |
+
+Missing key: match Redis (`ERR no such key`).
+
+Mandatory regardless of reply shape: a container-wide regression test that
+cross-checks every `dynamic_keys` declaration against the dispatch arms for the
+DEBUG container, so a declared-but-undispatched subcommand can never reappear.
+Update `debug_help()` and the module docs to match reality. Vendored regression
+suites that excluded DEBUG OBJECT tests (`incr_tcl.rs`, `expire_tcl.rs`, ...)
+may be revisited in a follow-up, not in this change.

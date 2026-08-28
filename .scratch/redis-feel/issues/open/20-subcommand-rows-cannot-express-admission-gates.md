@@ -1,6 +1,6 @@
 # Subcommand rows cannot express `noscript` / `stale`, so nine parity exemptions are structural
 
-Status: needs-triage
+Status: ready-for-agent
 
 ## Origin
 
@@ -61,3 +61,29 @@ two container entries.
 Cost to watch: `flags_over`'s validation and the `ADMIN` split (`SPLIT_ADMIN_SURFACES`)
 are the other half of this model; changing what a row may declare should not
 quietly give rows a second way to open an admin surface.
+
+## Ruling (2026-08-28)
+
+General mechanism (option a):
+
+- Add an optional admission-override to `SubcommandSpec` — `None` = inherit the
+  container's admission flags (today's behavior for all existing rows);
+  `Some(...)` = the row's NOSCRIPT/STALE/LOADING verbatim. Naive widening of
+  `BEHAVIORAL_FLAGS` is ruled out: `flags_over` replaces that half wholesale and
+  would silently clear noscript/stale on all existing rows.
+- Plumb subcommand-effective flags into both gates: the noscript branch in
+  `command_admission` and the stale (MASTERDOWN) gate in `run_pre_checks`. Both
+  already see argv; subcommand row resolution already exists.
+- HELP rows declare `stale + loading` (upstream marks every container HELP
+  `loading stale`) — behavior change: HELP is served on a link-down replica,
+  Redis parity.
+- `CLUSTER|RESET` declares noscript via the override; the
+  `is_forbidden_subcommand` side-table entry for it dies (single source of
+  truth). Verify CLUSTER FLUSHSLOTS handling before removing anything else.
+- `SCRIPT|LOAD` stays a deliberate, documented deviation (refusing stale
+  SCRIPT LOAD is the ruled behavior) — its exemption entry remains by choice,
+  reworded to say so.
+- The 9 structural HELP exemptions in `SUBCOMMAND_FLAG_EXEMPTIONS` come off
+  (shrink-only list, removal is the enforcement).
+- ADMIN stays out of the override — `SPLIT_ADMIN_SURFACES` is already the
+  single source of truth for per-subcommand admin.
