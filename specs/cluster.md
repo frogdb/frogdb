@@ -1598,12 +1598,19 @@ integer and Redis has the same property; the distinction lives in the logs.
 | Forced by | `cluster_forward_returns_none_when_this_node_owns_the_slot`, `cluster_forward_distinguishes_an_unowned_slot_from_local_ownership`, `cluster_forward_distinguishes_an_unaddressable_owner_from_local_ownership`, `cluster_route_names_a_reachable_remote_owner`, `test_local_forwarder_forward_returns_none`, `cluster_forward_reports_the_owners_subscriber_count` |
 | Bug refs | fixed: [36-spublish-conflates-unowned-slot-with-local-ownership.md](../.scratch/hardening/issues/done/36-spublish-conflates-unowned-slot-with-local-ownership.md) |
 
-The local fallback itself stays deliberate: delivering locally is strictly better than dropping,
-because FrogDB's `SSUBSCRIBE` does not slot-route subscribers, so no other node would deliver the
-message either. Redis answers `MOVED`/`CLUSTERDOWN` for a shard channel it does not serve; matching
-that is a client-visible change gated on the broader "should shard pub/sub slot-route at all"
-question, and is not this row's subject. What this row pins is that the fallback is *named* rather
-than disguised as correct ownership.
+The local fallback itself stays deliberate. Subscribers *are* slot-routed at subscribe time —
+`SSUBSCRIBE` and `SUNSUBSCRIBE` both run the per-channel `SlotMigrationCoordinator::route()` loop
+and answer `MOVED`/`CLUSTERDOWN` for a channel this node does not own, same as a keyed command
+(`frogdb-server/crates/server/src/connection/pubsub_conn_command.rs`). So the `Unowned` and
+`OwnerUnaddressable` cases this row covers are not "any node could be serving this channel's
+subscribers" — they are a slot-map gap: registrations stranded from before the slot moved off this
+node, plus any client that subscribed during the same gap this `SPUBLISH` landed in. Delivering to
+those best-effort is deliberate: there is no owner to refuse toward. Redis answers `CLUSTERDOWN`
+for a shard channel it does not serve; adopting that refusal here is a client-visible change,
+tracked separately as
+[issue 21](../.scratch/redis-feel/issues/open/21-spublish-refusal-semantics.md), and is not this
+row's subject. What this row pins is that the fallback is *named* rather than disguised as correct
+ownership.
 
 ## FM-CLUSTER-071 — `CLUSTER NODES` renders one exact line per node
 
@@ -2206,7 +2213,7 @@ rediscovered. Each is a candidate row for the gap-filling step of this phase.
 | Gossip counters in `CLUSTER INFO` | No per-type lines at all; `cluster_stats_messages_sent`/`_received` count real bus frames | Per-type lines for every non-zero counter, then the same two totals | Not a deviation any more. Redis skips a per-type line whose counter is zero, and FrogDB's per-type counters are *structurally* zero (no gossip protocol), so the lines are absent for the same reason they would be absent on an idle Redis node. `total_cluster_links_buffer_limit_exceeded` stays `0`: there is no per-link output buffer limit to exceed, so zero is measured, not fabricated. See FM-CLUSTER-077. |
 | `ping-sent`/`pong-recv` in `CLUSTER NODES` | Always `0 0` | Real timestamps | Same reason; positional fields cannot be omitted without breaking every client's parser, so `0` is the honest placeholder here. |
 | `PFAIL` | Structurally supported, never produced | Set by gossip suspicion before a majority confirms `FAIL` | Leader-only detection has no suspicion phase: the leader either has enough consecutive failures to latch or it does not. |
-| Shard pub/sub slot routing | `SPUBLISH` forwards to the slot owner when it can name one, and otherwise delivers locally; `SSUBSCRIBE` does not slot-route subscribers | Both are slot-routed like keyed commands, answering `MOVED`/`CLUSTERDOWN` | Since subscribers are not pinned to the owner, refusing a publish would drop a message no other node would deliver. The fallback is named rather than silent (FM-CLUSTER-070); adopting Redis' refusal means routing subscribers first. |
+| Shard pub/sub slot routing | `SSUBSCRIBE`/`SUNSUBSCRIBE` are slot-routed like keyed commands, answering `MOVED`/`CLUSTERDOWN`; `SPUBLISH` forwards to the slot owner over the cluster bus when it can name one, and otherwise delivers locally (named + warn-logged) | Publish also answers `MOVED`/`CLUSTERDOWN` rather than forwarding or delivering locally | Forwarding spares the client a redirect round trip. The local fallback is best-effort delivery to subscribers stranded by a slot move or caught in the same slot-map gap, and is named rather than silent (FM-CLUSTER-070); adopting Redis' refusal instead is tracked as [issue 21](../.scratch/redis-feel/issues/open/21-spublish-refusal-semantics.md). |
 | Promotion validity bound | `cluster-promotion-max-lag-bytes`: offset lag behind the best candidate, default 0 (off); a candidate whose offset could not be determined ranks strictly last instead | `cluster-replica-validity-factor`: disconnection *seconds* vs node timeout, default 10, disqualifying outright | Same goal, clock-free spelling. A wall-clock disconnection timer gating a promotion is the anti-pattern this area's preamble rejects; lag in bytes is data both ends already agree on. The tiering half (FM-CLUSTER-105) is always on and needs no tuning, which is why the byte bound can default to off without leaving the MAJ-9 defect open. |
 | `CLUSTER BUMPEPOCH` | Not supported | Supported | Epoch changes are authorized by the replicated log; a manual bump would create a claim no entry justifies. |
 | `CLUSTER SET-CONFIG-EPOCH` | Sets the exact value; refused unless the node knows no peer and holds epoch 0 | Same two guards, same exact assignment | Identical (FM-CLUSTER-076). The command is replicated through Raft rather than applied locally, so the assignment is durable on the log; the guards are Redis' verbatim. |
