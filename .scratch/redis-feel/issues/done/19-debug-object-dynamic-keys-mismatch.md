@@ -1,6 +1,6 @@
 # DEBUG OBJECT: key metadata declares a key the dispatch never accepts
 
-Status: ready-for-agent
+Status: done
 
 ## Origin
 
@@ -98,3 +98,33 @@ DEBUG container, so a declared-but-undispatched subcommand can never reappear.
 Update `debug_help()` and the module docs to match reality. Vendored regression
 suites that excluded DEBUG OBJECT tests (`incr_tcl.rs`, `expire_tcl.rs`, ...)
 may be revisited in a follow-up, not in this change.
+
+## Resolution (2026-08-28)
+
+Implemented (`76df081d`, merged `e0d31826`). `DEBUG OBJECT <key>` is a keyed
+read routed like EXPIRE-BACKDATE (`shard_for_key` ->
+`DebugIntrospectionMsg::ObjectInfo` -> `collect_object_info` in the shard event
+loop). Reply: `refcount:<n> encoding:<name> serializedlength:<n> lru:<n>
+lru_seconds_idle:<n>`.
+
+- `at:` omitted — heap pointer is an ASLR leak; deviation-as-improvement,
+  documented at the formatter. `ql_*` omitted — lists are not quicklists.
+- `serializedlength` is a real measured encode: new
+  `serialized_payload_len` in `frogdb-persistence` (frame minus its fixed
+  24-byte header; same approach as Redis `rdbSavedObjectLen`). Forcing test
+  lives in the locked crate; `mutants-diff frogdb-persistence` run before push.
+- Encoding/refcount logic now shared, not copied: `Value::encoding_name()` +
+  `Value::REPORTED_REFCOUNT` in the types crate; OBJECT ENCODING/REFCOUNT read
+  from them (no behavior change).
+- Missing or expired-but-unswept key -> `ERR no such key`; collector does not
+  touch access metadata (Redis `LOOKUP_NOTOUCH` equivalent).
+
+Container-wide cross-checks added so the gap cannot reopen:
+`every_keyed_subcommand_is_dispatched`,
+`every_help_advertised_subcommand_is_dispatched`
+(`debug_conn_command.rs`). Integration:
+`integration_debug_introspection.rs` (fields agree with OBJECT, int vs raw
+encodings, missing/expired key, GETKEYS agrees with dispatch).
+
+Follow-up (not here): revisit vendored regression suites that excluded
+DEBUG OBJECT tests (`incr_tcl.rs`, `expire_tcl.rs`, ...).
