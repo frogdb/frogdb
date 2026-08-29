@@ -158,6 +158,22 @@ impl QuorumChecker for SelfFenceGate {
     fn quorum_lost_error(&self) -> &'static str {
         self.inner.quorum_lost_error()
     }
+
+    /// Quorum loss is a *keyspace* staleness source, not only a write hazard:
+    /// a node that cannot reach the quorum cannot learn it has been failed over
+    /// and its slots reassigned, so every read it answers comes from a
+    /// pre-partition snapshot of unbounded age (FM-CLUSTER-107).
+    ///
+    /// The same verdict the write rung fences on — deliberately, so a node
+    /// cannot refuse writes while claiming its reads are current — which also
+    /// means the knob disarms both halves together.
+    ///
+    /// The flag is read *first* and short-circuits: this runs once per command
+    /// rather than once per write, and `inner.has_quorum()` walks the node
+    /// table, so a cluster running with the fence off must not pay for it.
+    fn fences_stale_reads(&self) -> bool {
+        self.flags.self_fence_on_quorum_loss() && !self.inner.has_quorum()
+    }
 }
 
 impl frogdb_core::metrics::WriteFenceReporter for SelfFenceGate {
@@ -354,6 +370,122 @@ mod tests {
             flags.promotion_max_lag_bytes(),
             0,
             "the promotion staleness bound ships off"
+        );
+    }
+
+    /// A Raft-fenced node declares its keyspace stale, and a node with quorum
+    /// does not. Without this the fence is write-only: the node refuses the
+    /// write that would diverge, then answers reads from the snapshot it held
+    /// when the partition started, forever.
+    // FM-CLUSTER-107
+    #[test]
+    fn a_quorum_fenced_gate_fences_stale_reads() {
+        let flags = Arc::new(ClusterRuntimeFlags::new(false, true, 100, 0));
+        let fenced =
+            SelfFenceGate::new(Arc::new(FixedChecker { has_quorum: false }), flags.clone());
+        assert!(fenced.fences_stale_reads());
+
+        let healthy = SelfFenceGate::new(Arc::new(FixedChecker { has_quorum: true }), flags);
+        assert!(
+            !healthy.fences_stale_reads(),
+            "a node that can still reach the quorum is not stale"
+        );
+    }
+
+    /// One verdict, both halves. A node must never refuse writes while claiming
+    /// its reads are current — the operator would read the `CLUSTERDOWN` on the
+    /// write path as the whole story and trust the `GET` that succeeded beside
+    /// it. Pinned across all four (flag, quorum) states.
+    // FM-CLUSTER-107
+    #[test]
+    fn read_fencing_and_write_fencing_share_one_verdict() {
+        for quorum in [true, false] {
+            for fence_flag in [true, false] {
+                let flags = Arc::new(ClusterRuntimeFlags::new(false, fence_flag, 100, 0));
+                let gate = SelfFenceGate::new(Arc::new(FixedChecker { has_quorum: quorum }), flags);
+                assert_eq!(
+                    gate.fences_stale_reads(),
+                    !gate.has_quorum(),
+                    "quorum={quorum} fence_flag={fence_flag}: the read fence and the \
+                     write fence must read the same verdict"
+                );
+            }
+        }
+    }
+
+    /// `cluster-self-fence-on-quorum-loss` disarms the read half live, on the
+    /// same instance, the way it already disarms the write half — one knob, one
+    /// restart-free flip, both hazards.
+    // FM-CLUSTER-107
+    #[test]
+    fn the_self_fence_knob_disarms_read_fencing_live() {
+        let flags = Arc::new(ClusterRuntimeFlags::new(false, true, 100, 0));
+        let gate = SelfFenceGate::new(Arc::new(FixedChecker { has_quorum: false }), flags.clone());
+        assert!(gate.fences_stale_reads());
+
+        flags.set_self_fence_on_quorum_loss(false);
+        assert!(
+            !gate.fences_stale_reads(),
+            "the operator who turned the fence off gets availability on both paths"
+        );
+
+        flags.set_self_fence_on_quorum_loss(true);
+        assert!(gate.fences_stale_reads(), "and can turn it back on");
+    }
+
+    /// The knob is consulted *before* the node table. This runs once per
+    /// command, not once per write, and `FailureDetector::has_quorum` walks
+    /// every known node — so a cluster running with the fence off must not pay
+    /// for a verdict it has already declined to act on.
+    // FM-CLUSTER-107
+    #[test]
+    fn the_read_fence_short_circuits_on_the_knob() {
+        struct CountingChecker {
+            calls: std::sync::atomic::AtomicUsize,
+        }
+        impl QuorumChecker for CountingChecker {
+            fn has_quorum(&self) -> bool {
+                self.calls
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                false
+            }
+        }
+
+        let flags = Arc::new(ClusterRuntimeFlags::new(false, false, 100, 0));
+        let inner = Arc::new(CountingChecker {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let gate = SelfFenceGate::new(inner.clone(), flags.clone());
+
+        assert!(!gate.fences_stale_reads());
+        assert_eq!(
+            inner.calls.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "fence off: the node table is never walked"
+        );
+
+        flags.set_self_fence_on_quorum_loss(true);
+        assert!(gate.fences_stale_reads());
+        assert_eq!(
+            inner.calls.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "fence on: the verdict is read exactly once"
+        );
+    }
+
+    /// NOT observable: a checker that does not opt in never fences reads. The
+    /// write rung is shared with replication's replica-loss fence
+    /// (`ReplicationQuorumChecker`), where losing replicas costs durability but
+    /// leaves the keyspace current — so the trait default of `false` is what
+    /// keeps this change from silently refusing reads on a standalone primary.
+    // FM-CLUSTER-107
+    #[test]
+    fn the_trait_default_leaves_a_non_cluster_fence_serving_reads() {
+        let bare = FixedChecker { has_quorum: false };
+        assert!(!bare.has_quorum(), "the write fence is armed");
+        assert!(
+            !bare.fences_stale_reads(),
+            "but reads stay open: only the cluster gate opts in"
         );
     }
 }

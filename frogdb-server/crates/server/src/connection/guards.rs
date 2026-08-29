@@ -11,7 +11,8 @@
 //!
 //! Guard predicates living here:
 //! - [`PreDispatchView::run_pre_checks`] — auth / replica-readonly / quorum-fence
-//!   / admin-port / ACL / pub-sub-mode / stale-read gate
+//!   / admin-port / ACL / pub-sub-mode / stale-read gate (cluster fence, then
+//!   replication link)
 //! - [`PreDispatchView::validate_cluster_slots`] — MOVED/ASK/CROSSSLOT routing
 //! - [`PreDispatchView::check_migrating_source`] — the MIGRATING-source presence
 //!   probe: serve / `ASK` / `TRYAGAIN` while a slot is being handed over
@@ -33,7 +34,9 @@
 //! ASK conversion, rate limiting) stay on [`ConnectionHandler`].
 
 use bytes::Bytes;
-use frogdb_core::command_admission::{ReplicaLink, stale_refusal};
+use frogdb_core::command_admission::{
+    ClusterFence, ReplicaLink, quorum_stale_refusal, stale_refusal,
+};
 use frogdb_core::{
     AclManager, CommandFlags, CommandRegistry, ConnectionLevelOp, CoreMsg, ExecutionStrategy,
     RateLimitExceeded, ScatterOp, ShardSender, WatchEntry, admin_surface, shard_for_key,
@@ -378,6 +381,35 @@ impl PreDispatchView<'_> {
                 "ERR Can't execute '{}': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context",
                 cmd_name
             )));
+        }
+
+        // The cluster half of the staleness gate (cluster-correctness issue 40,
+        // `specs/cluster.md` FM-CLUSTER-107): a node fenced off its own Raft
+        // quorum cannot learn it has been failed over and its slots reassigned,
+        // so its keyspace is a pre-partition snapshot of unbounded age. Before
+        // this rung the fence was write-only — the node refused the write that
+        // would diverge and then answered reads from that snapshot forever.
+        //
+        // Runs *before* the replication half so a cluster node that is also a
+        // link-down replica names the more fundamental failure: `-MASTERDOWN`
+        // says "wait for my primary", which is the wrong instruction for a node
+        // whose slots may already belong to someone else.
+        //
+        // `fences_stale_reads()` is the same verdict the write rung above reads,
+        // and defaults to `false` on the trait: the replication replica-loss
+        // fence shares that rung, and losing replicas costs durability without
+        // making the keyspace stale. Only `SelfFenceGate` opts in.
+        if let Some(qc) = self.cluster.quorum_checker.as_ref()
+            && qc.fences_stale_reads()
+            && let Some(cmd_impl) = self.registry.get_entry(cmd_name)
+            && let Some(err) = quorum_stale_refusal(
+                ClusterFence::QuorumLost {
+                    serve_stale_data: self.config_manager.replica_serve_stale_data(),
+                },
+                cmd_impl.flags_for(args),
+            )
+        {
+            return Some(Response::error(err.to_string()));
         }
 
         // The `stale` gate (redis-feel issue 17): a replica whose link to its
@@ -1247,12 +1279,23 @@ mod tests {
 
     impl ViewFixture {
         fn new(quorum_checker: Option<Arc<dyn QuorumChecker>>) -> Self {
+            Self::with_serve_stale_data(quorum_checker, false)
+        }
+
+        /// Same, with `replica-serve-stale-data` set — the one knob both halves
+        /// of the staleness gate read.
+        fn with_serve_stale_data(
+            quorum_checker: Option<Arc<dyn QuorumChecker>>,
+            serve_stale_data: bool,
+        ) -> Self {
             let mut registry = CommandRegistry::new();
             crate::register_commands(&mut registry);
             let cluster = ClusterDeps {
                 quorum_checker,
                 ..ClusterDeps::default()
             };
+            let mut config = crate::config::Config::default();
+            config.replication.replica_serve_stale_data = serve_stale_data;
             Self {
                 state: ConnectionState::new(1, "127.0.0.1:9999".parse().unwrap(), false),
                 registry: Arc::new(registry),
@@ -1262,9 +1305,7 @@ mod tests {
                 is_replica: AtomicBool::new(false),
                 is_admin: false,
                 admin_enabled: false,
-                config_manager: Arc::new(crate::runtime_config::ConfigManager::new(
-                    &crate::config::Config::default(),
-                )),
+                config_manager: Arc::new(crate::runtime_config::ConfigManager::new(&config)),
             }
         }
 
@@ -1304,15 +1345,106 @@ mod tests {
         }
     }
 
+    /// A checker that opts into the read half of the fence — what
+    /// `SelfFenceGate` does for the cluster's Raft quorum.
+    struct StaleFencingChecker;
+
+    impl QuorumChecker for StaleFencingChecker {
+        fn has_quorum(&self) -> bool {
+            false
+        }
+        fn fences_stale_reads(&self) -> bool {
+            true
+        }
+    }
+
+    /// The write fence alone does not close the read path: the replication
+    /// replica-loss fence shares this rung, and losing replicas costs
+    /// durability without making the keyspace stale, so a checker that does not
+    /// opt in must keep answering reads. This is what stops the cluster fix
+    /// from silently refusing `GET` on a standalone primary with
+    /// `min-replicas-to-write` armed.
+    // FM-CLUSTER-107
     #[test]
-    fn test_self_fence_read_allowed_when_quorum_lost() {
+    fn test_self_fence_read_allowed_when_the_fence_does_not_claim_staleness() {
         let qc = Arc::new(MockQuorumChecker { has_quorum: false });
         let mut fx = ViewFixture::new(Some(qc));
 
         let result = fx.view().run_pre_checks("GET", &[]);
+        assert!(result.is_none(), "a write-only fence must not refuse reads");
+    }
+
+    /// A node fenced off its Raft quorum refuses reads by default. Before this
+    /// the fence was write-only, so the node refused the write that would
+    /// diverge and then answered `GET` from its pre-partition snapshot for as
+    /// long as the partition lasted.
+    // FM-CLUSTER-107
+    #[test]
+    fn the_gauntlet_refuses_a_read_on_a_quorum_fenced_node() {
+        let mut fx = ViewFixture::new(Some(Arc::new(StaleFencingChecker)));
+
+        match fx.view().run_pre_checks("GET", &[]) {
+            Some(Response::Error(msg)) => assert_eq!(
+                String::from_utf8_lossy(&msg),
+                "CLUSTERDOWN The cluster is down (quorum lost, stale reads refused)",
+                "the refusal names the mechanism, not just the state"
+            ),
+            other => panic!("expected a CLUSTERDOWN refusal, got: {other:?}"),
+        }
+    }
+
+    /// The write rung still answers first for a write, so the operator who sees
+    /// `-CLUSTERDOWN` on a `SET` is told writes were rejected — not that a read
+    /// was. Two rungs, two wordings, one verdict.
+    // FM-CLUSTER-107
+    #[test]
+    fn the_gauntlet_names_the_write_fence_for_a_write() {
+        let mut fx = ViewFixture::new(Some(Arc::new(StaleFencingChecker)));
+
+        match fx.view().run_pre_checks("SET", &[]) {
+            Some(Response::Error(msg)) => assert_eq!(
+                String::from_utf8_lossy(&msg),
+                frogdb_core::command::CLUSTER_DOWN_QUORUM_LOST
+            ),
+            other => panic!("expected the write-fence refusal, got: {other:?}"),
+        }
+    }
+
+    /// The exemption set is `CommandFlags::STALE` — the set `COMMAND INFO`
+    /// advertises — so a fenced node stays diagnosable. An operator who cannot
+    /// run `PING` or `INFO` against a partitioned node cannot find out why it is
+    /// partitioned.
+    // FM-CLUSTER-107
+    #[test]
+    fn the_gauntlet_serves_stale_flagged_commands_on_a_fenced_node() {
+        let mut fx = ViewFixture::new(Some(Arc::new(StaleFencingChecker)));
+
+        for cmd in ["PING", "INFO", "CONFIG", "COMMAND", "AUTH"] {
+            assert!(
+                fx.view().run_pre_checks(cmd, &[]).is_none(),
+                "{cmd} carries STALE and must survive the fence"
+            );
+        }
+    }
+
+    /// `replica-serve-stale-data yes` reopens a quorum-fenced node, the same
+    /// knob and the same wire name that reopens a link-down replica: one
+    /// setting governs both sources of unbounded staleness (issue 40 —
+    /// deliberately *not* a second cluster-side knob).
+    // FM-CLUSTER-107
+    #[test]
+    fn the_gauntlet_honours_serve_stale_data_on_a_fenced_node() {
+        let mut fx = ViewFixture::with_serve_stale_data(Some(Arc::new(StaleFencingChecker)), true);
+
         assert!(
-            result.is_none(),
-            "GET should be allowed when quorum is lost"
+            fx.view().run_pre_checks("GET", &[]).is_none(),
+            "the operator who asked for availability gets it"
+        );
+        // The write half is untouched: this knob buys stale *reads*, never a
+        // divergent write.
+        assert!(
+            fx.view().run_pre_checks("SET", &[]).is_some(),
+            "serve-stale-data must never unfence a write"
         );
     }
 
