@@ -251,7 +251,7 @@ impl PreDispatchView<'_> {
         // regardless of whether the async replica-role flag has been applied
         // yet; without it, a keyed write races the flag and intermittently
         // leaks `-READONLY` where `-MOVED` is required. The deferral is
-        // ownership-aware — see [`Self::write_defers_to_cluster_redirect`] for
+        // ownership-aware — see [`Self::defers_to_cluster_redirect`] for
         // why (a slot-owning replica is reachable in FrogDB and must keep the
         // `-READONLY` rejection). Keyless writes (FLUSHALL, …) and
         // standalone-replication writes are not slot-redirectable and still
@@ -264,7 +264,7 @@ impl PreDispatchView<'_> {
         if self.is_replica.load(Ordering::Acquire)
             && let Some(cmd_impl) = self.registry.get_entry(cmd_name)
             && cmd_impl.flags().contains(CommandFlags::WRITE)
-            && !self.write_defers_to_cluster_redirect(cmd_name, args)
+            && !self.defers_to_cluster_redirect(cmd_name, args)
         {
             return Some(Response::error(
                 "READONLY You can't write against a read only replica.",
@@ -436,6 +436,24 @@ impl PreDispatchView<'_> {
         // reason as the MISCONF gate above: the replication executor never
         // builds a `PreDispatchView`.
         //
+        // A cluster slot redirect outranks this rung, exactly as it outranks
+        // the `-READONLY` rung above: Redis `processCommand` runs
+        // `getNodeByQuery` (line ~4636 of `server.c`, unstable) *before* both
+        // the `repl_slave_ro` check (~4755) and the `masterdownerr` check
+        // (~4798), so a keyed command for a slot this node does not serve is
+        // `-MOVED` whatever the replication link is doing. Without the
+        // deferral a cluster replica — whose upstream link is legitimately
+        // down for the whole pre-streaming window — answers `-MASTERDOWN` to
+        // ordinary routed traffic and a client's redirect cache never learns
+        // where the slot actually lives.
+        //
+        // [`Self::defers_to_cluster_redirect`] deliberately does *not* defer a
+        // READONLY-mode replica read: Redis's `getNodeByQuery` returns
+        // `myself` for that case (no redirect), so the command falls through
+        // to this rung and the stale gate must still refuse it. That is the
+        // whole point of the gate — a READONLY client is the one that actually
+        // reads the replica's local keyspace.
+        //
         // Gated on `is_replica()`, not `primary_target().is_some()`: they
         // agree everywhere except the stranded-promotion state (issue 16,
         // `TR-REPLICATION-009`) — a promotion whose persist failed clears
@@ -454,6 +472,7 @@ impl PreDispatchView<'_> {
                 },
                 cmd_impl.flags_for(args),
             )
+            && !self.defers_to_cluster_redirect(cmd_name, args)
         {
             return Some(Response::error(err.to_string()));
         }
@@ -461,15 +480,18 @@ impl PreDispatchView<'_> {
         None
     }
 
-    /// Whether a keyed write on this (replica) connection targets a slot owned
-    /// by *another* node — i.e. it will be answered by a cluster slot redirect
-    /// (`-MOVED`), which must take precedence over the read-only-replica
-    /// rejection (`-READONLY`).
+    /// Whether a keyed command on this connection targets a slot owned by
+    /// *another* node — i.e. it will be answered by a cluster slot redirect
+    /// (`-MOVED`), which must take precedence over the replica-side rungs of
+    /// [`Self::run_pre_checks`]: the read-only rejection (`-READONLY`) and the
+    /// link-down stale rejection (`-MASTERDOWN`).
     ///
     /// Redis `processCommand` runs the cluster redirect (`getNodeByQuery`)
-    /// before the `repl_slave_ro` check, so a keyed write to a slot this node
-    /// does not serve must be `-MOVED`, never `-READONLY`. [`Self::run_pre_checks`]
-    /// consults this to defer the read-only rejection in exactly that case.
+    /// before *both* the `repl_slave_ro` check and the
+    /// `replica-serve-stale-data` / `masterdownerr` check, so a keyed command
+    /// for a slot this node does not serve must be `-MOVED`, never `-READONLY`
+    /// and never `-MASTERDOWN`. [`Self::run_pre_checks`] consults this to defer
+    /// both rejections in exactly that case.
     ///
     /// SAFETY — this check is deliberately *ownership-aware* rather than assuming
     /// the invariant "a replica never owns the slot for its keys". FrogDB
@@ -485,8 +507,19 @@ impl PreDispatchView<'_> {
     /// slot; its primary does) defers to `-MOVED` as required.
     ///
     /// Keyless writes (FLUSHALL, …), cluster-exempt commands, and
-    /// standalone-replication writes return `false` and stay `-READONLY`.
-    fn write_defers_to_cluster_redirect(&self, cmd_name: &str, args: &[Bytes]) -> bool {
+    /// standalone-replication writes return `false` and keep whichever rung
+    /// would have refused them.
+    ///
+    /// A **READONLY-mode replica read** also returns `false`. Redis's
+    /// `getNodeByQuery` answers `myself` for a `CLIENT_READONLY` connection
+    /// issuing a read against the slot its own primary owns — no redirect is
+    /// emitted, and the command falls through to the stale gate. Deferring
+    /// there would let a link-down replica serve arbitrarily stale data to
+    /// exactly the clients that ask it for local reads, which is the hole
+    /// `FM-REPLICATION-067` exists to close. (For a WRITE-flagged command this
+    /// arm is unreachable — writes never carry `CommandFlags::READONLY` — so
+    /// the `-READONLY` rung's behaviour is unchanged by it.)
+    fn defers_to_cluster_redirect(&self, cmd_name: &str, args: &[Bytes]) -> bool {
         // Cluster mode is gated by the same handles `validate_cluster_slots`
         // requires; without them no redirect is produced and READONLY must win.
         let (Some(node_id), Some(cluster_state)) =
@@ -509,6 +542,14 @@ impl PreDispatchView<'_> {
         let Some(entry) = self.registry.get_entry(cmd_name) else {
             return false;
         };
+        // A READONLY connection reading a slot its primary owns is served
+        // locally (`RouteDecision::Moved` rescued by `readonly_eligible` in
+        // `validate_cluster_slots`, FM-CLUSTER-025) — no redirect is produced,
+        // so nothing may be deferred to one. Same predicate as the routing
+        // seam's, so the two cannot disagree about what gets rescued.
+        if self.state.is_readonly() && entry.flags().contains(CommandFlags::READONLY) {
+            return false;
+        }
         let keys = entry.keys(args);
         if keys.is_empty() {
             return false;
