@@ -1132,7 +1132,9 @@ async fn test_psync_with_replication_id() {
 ///
 /// The replica flag comes from config, so the refusal holds from the first
 /// command; the streaming link is waited for anyway so the assertion cannot be
-/// read as racing the handshake.
+/// read as racing the handshake. The wait is on the *replica's* link flag: the
+/// read-back below has to reach the keyspace, and until that flag is up the
+/// `replica-serve-stale-data no` default answers `-MASTERDOWN` instead.
 #[rstest]
 #[case::in_memory(false)]
 #[case::with_persistence(true)]
@@ -1147,6 +1149,7 @@ async fn test_replica_read_only(#[case] persistence: bool) {
     let replica = TestServer::start_replica_with_config(&primary, config).await;
 
     wait_for_connected_slave(&primary).await;
+    wait_for_replica_link_up(&replica).await;
 
     // Try to write to replica
     let response = replica.send("SET", &["replica_key", "value"]).await;
@@ -2478,7 +2481,17 @@ async fn test_demoted_primary_stops_serving_psync_to_its_downstream() {
     // `node` boots writable, takes a downstream of its own, and is then demoted
     // under that downstream's feet.
     let node = TestServer::start_primary_with_config(config.clone()).await;
-    let downstream = TestServer::start_primary_with_config(config).await;
+    // The downstream keeps Redis's `replica-serve-stale-data yes` so the
+    // emptiness assertion at the end of this test still reads the keyspace.
+    // FrogDB's default is `no` (redis-feel issue 17), under which *every* read
+    // on a link-down replica answers `-MASTERDOWN` whether or not the relayed
+    // write arrived — which would let "did not receive the write" pass without
+    // ever looking.
+    let downstream = TestServer::start_primary_with_config(TestServerConfig {
+        replication_replica_serve_stale_data: Some(true),
+        ..config
+    })
+    .await;
 
     assert_ok(
         &downstream
@@ -2605,8 +2618,17 @@ async fn test_chained_replication_rejected_sub_replica_never_receives_data(
     );
 
     // node_b: boots standalone-writable, then REPLICAOF at runtime targets
-    // replica_a — the literal scenario from the acceptance criteria.
-    let node_b = TestServer::start_primary_with_config(config).await;
+    // replica_a — the literal scenario from the acceptance criteria. It keeps
+    // Redis's `replica-serve-stale-data yes` (FrogDB defaults to `no`, see
+    // redis-feel issue 17) so the "never receives data" assertions below reach
+    // the keyspace: under the refusal default a link-down replica answers
+    // `-MASTERDOWN` to every read, which is true whether or not data arrived
+    // and would make this test pass vacuously.
+    let node_b = TestServer::start_primary_with_config(TestServerConfig {
+        replication_replica_serve_stale_data: Some(true),
+        ..config
+    })
+    .await;
     let a_port = replica_a.port().to_string();
     assert_ok(&node_b.send("REPLICAOF", &["127.0.0.1", &a_port]).await);
 
@@ -5811,6 +5833,27 @@ async fn wait_for_connected_slave(primary: &TestServer) {
     panic!("replica never reached streaming phase");
 }
 
+/// Wait until the *replica* reports `master_link_status:up`.
+///
+/// [`wait_for_connected_slave`] watches the primary's side of the same
+/// handshake, which flips first: the primary counts the replica as connected
+/// as soon as it starts feeding it, while the replica's own link flag settles
+/// a moment later. That gap is invisible to most assertions but not to the
+/// `replica-serve-stale-data no` gate, which refuses every non-`STALE` command
+/// until the flag is up — so a test that reads the replica's keyspace must
+/// wait on this side, not the primary's.
+async fn wait_for_replica_link_up(replica: &TestServer) {
+    for _ in 0..50 {
+        if let Some(info) = parse_info_replication(&replica.send("INFO", &["replication"]).await)
+            && info.get("master_link_status").map(String::as_str) == Some("up")
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("replica never reported master_link_status:up");
+}
+
 /// Read + parse a JSON file, retrying briefly to absorb any write latency.
 async fn read_json_file(path: &std::path::Path) -> serde_json::Value {
     for _ in 0..50 {
@@ -5953,6 +5996,9 @@ async fn test_replica_recovers_offset_from_staged_metadata() {
     // 3. Boot a replica on the parent dir. It installs the staged checkpoint and
     //    must recover the offset from the metadata. The primary port is closed;
     //    background reconnect attempts do not affect recovery (which is sync).
+    //    `replica-serve-stale-data` is turned back on (Redis's default; FrogDB
+    //    defaults to `no` since redis-feel issue 17) because the link is down
+    //    for the whole test and step 5 has to read the installed snapshot.
     let replica = TestServer::start_with_config(
         TestServerConfig {
             persistence: true,
@@ -5960,6 +6006,7 @@ async fn test_replica_recovers_offset_from_staged_metadata() {
             num_shards: Some(1),
             replication_primary_host: Some("127.0.0.1".to_string()),
             replication_primary_port: Some(1),
+            replication_replica_serve_stale_data: Some(true),
             ..Default::default()
         },
         ServerRole::Replica,
@@ -6212,7 +6259,10 @@ async fn test_replica_ignores_corrupt_staged_metadata() {
     )
     .unwrap();
 
-    // Boot as a replica: must not panic.
+    // Boot as a replica: must not panic. `replica-serve-stale-data` is turned
+    // back on (Redis's default; FrogDB defaults to `no` since redis-feel issue
+    // 17) because the link is down for the whole test and the last step has to
+    // read the installed snapshot.
     let replica = TestServer::start_with_config(
         TestServerConfig {
             persistence: true,
@@ -6220,6 +6270,7 @@ async fn test_replica_ignores_corrupt_staged_metadata() {
             num_shards: Some(1),
             replication_primary_host: Some("127.0.0.1".to_string()),
             replication_primary_port: Some(1),
+            replication_replica_serve_stale_data: Some(true),
             ..Default::default()
         },
         ServerRole::Replica,
