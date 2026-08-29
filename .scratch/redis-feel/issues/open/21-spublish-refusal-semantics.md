@@ -1,6 +1,6 @@
 # SPUBLISH refusal semantics now that the subscribe path slot-routes
 
-Status: needs-triage
+Status: ready-for-agent
 
 ## Origin
 
@@ -37,3 +37,19 @@ subscribers. Decide per case:
 
 Behavior change touches locked `frogdb-cluster`/`frogdb-cluster-runtime` +
 server: spec-first FM row rewrite, new forcing tests, mutants gate 0.80.
+
+## Ruling (2026-08-29)
+
+- **Case 2: keep bus forwarding.** Smart-proxy stays; documented deviation
+  from Redis's `MOVED`. No change.
+- **Cases 3/4: refuse `CLUSTERDOWN`** (Redis parity). Best-effort local
+  delivery to stranded/gap-window subscribers is dropped — the publisher's
+  receiver count must not imply health that isn't there; cluster breakage
+  surfaces to the publisher instead of silent partial delivery.
+
+Implementation is spec-first: rewrite the FM-CLUSTER-070 pin (cases 3/4 rows
+change from "local delivery + warn" to a pinned `CLUSTERDOWN` error — match
+Redis's error text shape and pin ours), forcing tests for both refusal cases
+plus a case-2 forward-still-works test, `just mutants-diff` on touched locked
+crates (gate 0.80). Sequencing: land after the cluster-40 read-consistency
+spec rows merge (same spec file).

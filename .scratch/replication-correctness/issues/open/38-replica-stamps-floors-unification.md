@@ -1,6 +1,8 @@
 # 38: Replica stamps — floors unify into RocksDB, R15/R16 retire
 
-Status: ready-for-agent (after 37)
+Status: ready-for-agent
+
+Blocked by issue 37.
 
 Parent: [PRD 36](./36-offset-stamped-batches-restart-bias.md), ruling R22 (campaign
 ledger 2026-08-22). Depends on [37](./37-mint-at-persist-and-primary-stamps.md) (the

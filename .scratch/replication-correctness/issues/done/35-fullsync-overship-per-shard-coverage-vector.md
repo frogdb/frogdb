@@ -1,7 +1,9 @@
 # 35: Full-sync overship — per-shard coverage vector, floors, and the window-grant refusal
 
-Status: done (user sign-off 2026-08-22; breach-abort amendment + `full_sync_hold_breaches`
-counter both landed — the counter-first condition)
+Status: done
+
+Signed off by user 2026-08-22; breach-abort amendment + `full_sync_hold_breaches`
+counter both landed — the counter-first condition.
 
 Ruled 2026-08-21, campaign ledger R12–R16
 (`.scratch/formal-spec/2026-08-19-quint-completeness-campaign.md`). This issue owns two

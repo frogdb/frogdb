@@ -1,6 +1,8 @@
 # 24 — a restart keeps the replication id whose history it just lost
 
-Status: ready-for-agent (after issue 37 — see 2026-08-22 amendment)
+Status: ready-for-agent
+
+Blocked by issue 37 — see 2026-08-22 amendment.
 
 ## Parent
 
