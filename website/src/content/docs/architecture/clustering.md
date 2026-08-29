@@ -442,7 +442,8 @@ the false positive is benign:
   wrongly-flagged primary keeps its slots and remains the sole owner cluster-wide.
 - **No split-brain from the flagged node.** A `FAIL` flag does not stop the flagged primary from
   serving. What stops unsafe writes is the independent self-fence (`self-fence-on-quorum-loss`,
-  default on): a primary rejects writes with `CLUSTERDOWN` once *it* loses quorum. A node that keeps quorum (partitioned
+  default on): a primary rejects writes with `CLUSTERDOWN` once *it* loses quorum, and refuses reads
+  on the same verdict unless `replica-serve-stale-data` is on. A node that keeps quorum (partitioned
   from the leader only, not from the majority) safely continues to accept writes; a node that loses
   quorum fences itself. Either way, a write the flagged primary accepts is not lost, because no
   failover transferred its slots.

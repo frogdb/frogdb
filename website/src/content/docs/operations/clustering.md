@@ -99,7 +99,7 @@ The `[cluster]` keys and defaults:
 | `request-timeout-ms` | `10000` | Cluster-bus RPC timeout. |
 | `auto-failover` | `false` | Let the Raft leader promote a replica automatically. |
 | `fail-threshold` | `5` | Consecutive failed probes before a node is marked failed — and consecutive successful probes before the flag is cleared again. |
-| `self-fence-on-quorum-loss` | `true` | Reject writes when this node cannot form a quorum. |
+| `self-fence-on-quorum-loss` | `true` | Fence this node when it cannot form a quorum: writes are rejected, and so are reads unless `replica-serve-stale-data` is on. `stale`-flagged commands (`PING`, `INFO`, `CONFIG`, …) are always answered. |
 | `replica-priority` | `100` | Promotion preference during auto-failover (lower is preferred; `0` never promotes). |
 | `cluster-promotion-max-lag-bytes` | `0` | Data-loss budget for automatic promotion, in replication-offset bytes behind the freshest surviving candidate. `0` disqualifies nobody. Unlike Redis's `cluster-replica-validity-factor`, the bound is spelled in bytes, not disconnection seconds, so no wall clock gates a promotion. Forced failover (`CLUSTER FAILOVER FORCE`/`TAKEOVER`) never consults it. |
 
@@ -143,7 +143,7 @@ Secure the admin surfaces with network isolation and, for the HTTP endpoints, an
 | Scenario | Behavior |
 |---|---|
 | Node failure | With `auto-failover = true`, the Raft leader promotes a replica after `fail-threshold` consecutive failures. With the default `auto-failover = false`, promotion is manual via `CLUSTER FAILOVER`. See [candidate selection](#candidate-selection) for how the successor is chosen. |
-| Quorum loss | With `self-fence-on-quorum-loss = true` (default), a node that cannot form a quorum rejects writes with `CLUSTERDOWN` while continuing to serve reads, preventing split-brain divergence. |
+| Quorum loss | With `self-fence-on-quorum-loss = true` (default), a node that cannot form a quorum fences itself: writes are rejected with `CLUSTERDOWN The cluster is down (quorum lost, writes rejected)`, preventing split-brain divergence, and reads with `CLUSTERDOWN The cluster is down (quorum lost, stale reads refused)` — the node cannot learn its slots were reassigned, so its keyspace is of unbounded age. `replica-serve-stale-data yes` reopens reads (never writes); `stale`-flagged commands are answered either way, so the node stays diagnosable. No staleness bound is offered. |
 | Raft leader loss | A standard openraft election runs, governed by `election-timeout-ms` and `heartbeat-interval-ms`. Explicit leadership transfer is not implemented. |
 
 ### Candidate selection

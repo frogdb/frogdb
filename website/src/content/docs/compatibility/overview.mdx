@@ -65,6 +65,20 @@ FrogDB coordinates cluster membership with Raft consensus rather than Redis Clus
 
 See [Clustering](/operations/clustering/) for bootstrap steps, the admin API, and failure modes.
 
+### A quorum-fenced node refuses reads too
+
+When a cluster node cannot reach a quorum of its peers, `cluster-self-fence-on-quorum-loss` (on by default) fences it. Writes are refused — that part is unsurprising — and so are reads:
+
+```
+CLUSTERDOWN The cluster is down (quorum lost, stale reads refused)
+```
+
+A node that cannot reach the quorum cannot learn it has been failed over and its slots reassigned, so its keyspace is a snapshot of unbounded age. Refusing only writes would leave the half of the split-brain hazard that produces no error anywhere.
+
+Redis's equivalent is `cluster-allow-reads-when-down`, which also defaults to refusing. FrogDB has **no second knob**: the opt-out is `replica-serve-stale-data`, the same setting that reopens a link-down replica, because both cases mean the same thing to a client. Setting it to `yes` reopens reads on a fenced node; it never reopens writes. `stale`-flagged commands (`PING`, `INFO`, `CONFIG`, `COMMAND`, `AUTH`, …) are answered either way, so a fenced node stays diagnosable.
+
+**No staleness bound is offered.** There is no max-age argument, no read timestamp, and no follower-read lease. A partitioned FrogDB node is either unavailable or unbounded — never "at most N seconds behind". Redis offers no bound here either.
+
 ## Replication
 
 ### Stale reads are refused by default
@@ -87,7 +101,7 @@ To get Redis's behaviour back, at boot or live mid-incident:
 CONFIG SET replica-serve-stale-data yes
 ```
 
-The gate is replica-only — a primary or standalone node has no link to lose — and never applies to the replication stream itself.
+This gate is replica-only — a primary or standalone node has no link to lose — and never applies to the replication stream itself. The same knob also governs the cluster-side fence below, which is not replica-only.
 
 ## Cross-slot & multi-shard operations
 
