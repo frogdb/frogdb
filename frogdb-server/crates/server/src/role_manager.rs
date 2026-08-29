@@ -520,6 +520,12 @@ impl RoleManagerHandle {
         self.with_lock(|manager| manager.primary_target())
     }
 
+    /// Whether this node is currently flagged as a replica. See
+    /// [`RoleManager::is_replica`].
+    pub fn is_replica(&self) -> bool {
+        self.with_lock(|manager| manager.is_replica())
+    }
+
     /// Whether the current inbound replication stream is up. See
     /// [`RoleManager::link_up`].
     pub fn link_up(&self) -> bool {
@@ -593,6 +599,10 @@ impl frogdb_core::RoleController for RoleManagerHandle {
 
     fn primary_target(&self) -> Option<SocketAddr> {
         RoleManagerHandle::primary_target(self)
+    }
+
+    fn is_replica(&self) -> bool {
+        RoleManagerHandle::is_replica(self)
     }
 
     fn master_link_up(&self) -> bool {

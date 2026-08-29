@@ -1610,6 +1610,13 @@ impl crate::command::RoleController for FixedRoleController {
     fn primary_target(&self) -> Option<std::net::SocketAddr> {
         self.primary
     }
+    fn is_replica(&self) -> bool {
+        // None of the `ShardIdentity` fixtures exercise the stranded-promotion
+        // divergence (`primary_target() == None` while still flagged a
+        // replica) — they only ever construct a genuine replica or a genuine
+        // primary, for which this agrees with `primary.is_some()`.
+        self.primary.is_some()
+    }
     fn master_link_up(&self) -> bool {
         self.link_up
     }

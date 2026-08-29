@@ -8194,6 +8194,7 @@ async fn wait_for_link_down(replica: &TestServer) {
 /// CONFIG — which is what keeps the node diagnosable and re-pointable while the
 /// gate is closed. That set is the whole reason the gate is flag-driven rather
 /// than a blanket refusal.
+// FM-REPLICATION-067
 #[tokio::test]
 async fn a_link_down_replica_refuses_reads_by_default() {
     let (primary, replica) = start_primary_replica_pair(TestServerConfig::default()).await;
@@ -8253,6 +8254,7 @@ async fn a_link_down_replica_refuses_reads_by_default() {
 
 /// With the knob on at boot, FrogDB is Redis: the link-down replica serves its
 /// stale keyspace and the gate never fires.
+// FM-REPLICATION-067
 #[tokio::test]
 async fn the_serve_stale_data_knob_restores_redis_behaviour() {
     let config = TestServerConfig {
@@ -8280,6 +8282,7 @@ async fn the_serve_stale_data_knob_restores_redis_behaviour() {
 /// declares `stale`/`loading`. With the row carrying its own admission
 /// override, HELP survives a down link while `MEMORY USAGE` — a real read of
 /// the unboundedly-stale local keyspace — still gets `-MASTERDOWN`.
+// FM-REPLICATION-067
 #[tokio::test]
 async fn a_link_down_replica_serves_container_help_but_not_container_reads() {
     let (primary, replica) = start_primary_replica_pair(TestServerConfig::default()).await;
@@ -8309,6 +8312,7 @@ async fn a_link_down_replica_serves_container_help_but_not_container_reads() {
 
 /// The gate is replica-only: a primary has no link to lose, so the default
 /// must not touch a standalone node's reads.
+// FM-REPLICATION-067
 #[tokio::test]
 async fn a_primary_is_never_stale_gated() {
     let server = TestServer::start_standalone().await;
