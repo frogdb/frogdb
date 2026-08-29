@@ -144,11 +144,12 @@ Wire error strings are quoted from source; the canonical registry is
 | `-BUSY` | `BUSY shard busy with continuation lock; retry` | A lock request hit a shard held by a Lua/MULTI continuation lock |
 | `-EXECABORT` | `EXECABORT Transaction discarded because of previous errors.` | EXEC after a queued error |
 | `-VERSIONMISMATCH` | `VERSIONMISMATCH expected <expected> actual <actual>` | Optimistic version check failed |
+| `-MASTERDOWN` | `MASTERDOWN Link with MASTER is down and replica-serve-stale-data is set to 'no'.` | A non-`stale` command reached a replica whose upstream link is down, under FrogDB's `replica-serve-stale-data no` default ([compatibility overview](/compatibility/overview/)) |
+| `-MISCONF` | `MISCONF FrogDB is unable to persist writes: the WAL failed and this shard is fenced. Fix storage, then restart the node.` | The shard's WAL failed and the shard is fenced; not self-clearing |
 
-**Not emitted by FrogDB.** `MASTERDOWN`, `NOREPLICAS`, and `LOADING` exist only as
-passthrough *labels* used when deciding whether to wrap a Lua error — FrogDB never
-produces them (there is no RDB-load phase). `MISCONF` and `NOREPL` do not exist at
-all. Timeouts are reported with the generic `ERR` prefix (for example
+**Not emitted by FrogDB.** `NOREPLICAS` and `LOADING` exist only as passthrough
+*labels* used when deciding whether to wrap a Lua error — FrogDB never produces
+them (there is no RDB-load phase). `NOREPL` does not exist at all. Timeouts are reported with the generic `ERR` prefix (for example
 `ERR timeout …`); there is no `-TIMEOUT` code and no VLL lock-timeout wire error.
 
 ---
