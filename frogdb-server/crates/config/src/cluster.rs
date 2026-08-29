@@ -90,12 +90,17 @@ pub struct ClusterConfigSection {
     // skip: borderline: Raft failure-detector consecutive-failure count, init-time tuning
     pub fail_threshold: u32,
 
-    /// Reject write commands when this node cannot form a quorum with reachable nodes.
+    /// Fence this node when it cannot form a quorum with reachable nodes.
     /// When enabled, writes return CLUSTERDOWN if quorum is lost, preventing
-    /// split-brain data divergence. Reads remain available.
+    /// split-brain data divergence. Reads are fenced too — a node that cannot
+    /// reach the quorum cannot learn its slots were reassigned, so its keyspace
+    /// is of unbounded age — unless `replica-serve-stale-data` is on, which
+    /// reopens reads (never writes). Commands flagged `stale` (PING, INFO,
+    /// CONFIG, …) are always answered, so a fenced node stays diagnosable.
     //
     // Live seam: `SelfFenceGate` consults this through `ClusterRuntimeFlags` on
-    // every write pre-check, so the fence can be lifted or armed at runtime.
+    // every pre-check, so the fence can be lifted or armed at runtime. See
+    // `specs/cluster.md` FM-CLUSTER-059 (writes) and FM-CLUSTER-107 (reads).
     #[serde(default = "default_self_fence_on_quorum_loss")]
     #[param(mutable, name = "cluster-self-fence-on-quorum-loss")]
     pub self_fence_on_quorum_loss: bool,

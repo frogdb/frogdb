@@ -331,6 +331,32 @@ pub trait QuorumChecker: Send + Sync {
     fn quorum_lost_error(&self) -> &'static str {
         CLUSTER_DOWN_QUORUM_LOST
     }
+
+    /// Whether this fence also makes the node's **keyspace** stale — whether a
+    /// *read* answered here may be of unbounded age.
+    ///
+    /// Default `false`, and the default is the load-bearing half. Two fences
+    /// reach the same write rung and only one of them says anything about the
+    /// age of data already in the keyspace:
+    ///
+    /// * The **cluster's Raft quorum** does. A node that cannot reach the
+    ///   quorum cannot learn that it has been failed over and its slots
+    ///   reassigned, so what it holds is a pre-partition snapshot with no bound
+    ///   on its age. `SelfFenceGate` overrides this to say so
+    ///   (`specs/cluster.md` FM-CLUSTER-107).
+    /// * The **replication replica-loss fence** does not. It is about whether
+    ///   *new* writes can be durably acknowledged (`specs/replication.md`
+    ///   FM-REPLICATION-041); a standalone primary whose only replica went away
+    ///   holds a keyspace that is exactly as fresh as it ever was, and must
+    ///   keep answering reads. Inheriting the default is what prevents it being
+    ///   told its cluster is down about a cluster it is not running.
+    ///
+    /// Read once per command by the connection gauntlet, not only per write, so
+    /// an implementation should short-circuit on its own knob before consulting
+    /// anything expensive.
+    fn fences_stale_reads(&self) -> bool {
+        false
+    }
 }
 
 /// What kind of blocking waiter a write command may satisfy.

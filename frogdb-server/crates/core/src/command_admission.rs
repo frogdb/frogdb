@@ -60,6 +60,14 @@
 //! which never reach a shard at all. The decision still lives in this module so
 //! there is one admission policy module, not two.
 //!
+//! [`quorum_stale_refusal`] is the same gate for the *other* staleness source:
+//! a cluster node fenced off its Raft quorum. One knob
+//! (`replica-serve-stale-data`) and one exemption set (`CommandFlags::STALE`)
+//! govern both, but they stay two functions rather than one because they answer
+//! to two different **locked** specs — `specs/cluster.md` FM-CLUSTER-107 and the
+//! replication spec's stale-gate row — and a shared body would make either
+//! area's spec-first edit a change to the other area's contract.
+//!
 //! # Extending it
 //!
 //! [`AdmissionRequest`] carries the execution origin precisely so an
@@ -245,6 +253,55 @@ pub fn stale_refusal(link: ReplicaLink, flags: CommandFlags) -> Option<CommandEr
             serve_stale_data: false,
         } if flags.contains(CommandFlags::STALE) => None,
         ReplicaLink::Down { .. } => Some(CommandError::MasterDown),
+    }
+}
+
+/// This node's relationship to its cluster's Raft quorum, as the staleness gate
+/// reads it.
+///
+/// Built by the connection gauntlet from
+/// [`QuorumChecker::fences_stale_reads`](crate::command::QuorumChecker::fences_stale_reads)
+/// — the same verdict the write rung fences on, and the same one `/status`
+/// renders as a write-fence reason — plus the live `replica-serve-stale-data`
+/// config.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClusterFence {
+    /// Not in cluster mode, a node that still reaches its quorum, or a fence
+    /// the operator disarmed.
+    Healthy,
+    /// A node that cannot reach its cluster's Raft quorum. It cannot learn that
+    /// it has been failed over and its slots reassigned, so whatever its
+    /// keyspace holds is a pre-partition snapshot of unbounded age.
+    QuorumLost {
+        /// The `replica-serve-stale-data` knob — the same one the replication
+        /// half reads. `true` answers from the local keyspace anyway; `false`
+        /// (FrogDB's default) refuses everything the flag does not exempt.
+        serve_stale_data: bool,
+    },
+}
+
+/// The cluster half of the staleness gate: may a command run on a node fenced
+/// off its Raft quorum?
+///
+/// The shape is Redis's `cluster-allow-reads-when-down no`, which refuses reads
+/// on a node whose cluster state is `fail`; FrogDB spells the opt-out with the
+/// knob it already has rather than adding a second one, so one setting governs
+/// both sources of unbounded staleness. The exemption set is the same
+/// `CommandFlags::STALE` set — the one `COMMAND INFO` advertises — so the
+/// enumeration and the gate cannot drift.
+///
+/// Returns the refusal, or `None` when the command may proceed.
+/// See `specs/cluster.md` FM-CLUSTER-107.
+pub fn quorum_stale_refusal(fence: ClusterFence, flags: CommandFlags) -> Option<CommandError> {
+    match fence {
+        ClusterFence::Healthy => None,
+        ClusterFence::QuorumLost {
+            serve_stale_data: true,
+        } => None,
+        ClusterFence::QuorumLost {
+            serve_stale_data: false,
+        } if flags.contains(CommandFlags::STALE) => None,
+        ClusterFence::QuorumLost { .. } => Some(CommandError::ClusterDownStaleRead),
     }
 }
 
@@ -472,6 +529,93 @@ mod tests {
             ),
             Some(MASTER_DOWN.to_string())
         );
+    }
+
+    const CLUSTER_DOWN_STALE_READ: &str =
+        "CLUSTERDOWN The cluster is down (quorum lost, stale reads refused)";
+
+    fn quorum(flags: CommandFlags, fence: ClusterFence) -> Option<String> {
+        quorum_stale_refusal(fence, flags).map(|err| err.to_string())
+    }
+
+    /// A node that still reaches its quorum gates nothing, whatever the knob
+    /// says — the fence is the trigger, not the knob.
+    // FM-CLUSTER-107
+    #[test]
+    fn a_healthy_quorum_gates_nothing() {
+        assert_eq!(quorum(CommandFlags::READONLY, ClusterFence::Healthy), None);
+    }
+
+    /// The default: a read on a node fenced off its Raft quorum is refused, and
+    /// the refusal names the cluster, not the replication link.
+    // FM-CLUSTER-107
+    #[test]
+    fn a_quorum_fenced_node_refuses_a_read_by_default() {
+        assert_eq!(
+            quorum(
+                CommandFlags::READONLY,
+                ClusterFence::QuorumLost {
+                    serve_stale_data: false
+                }
+            ),
+            Some(CLUSTER_DOWN_STALE_READ.to_string())
+        );
+    }
+
+    /// The exemption set is `CommandFlags::STALE` — the same set the
+    /// replication half uses, and the same one `COMMAND INFO` advertises — so a
+    /// fenced node stays diagnosable (INFO, CONFIG, CLUSTER, PING, AUTH, ...).
+    // FM-CLUSTER-107
+    #[test]
+    fn a_stale_flagged_command_survives_the_quorum_fence() {
+        assert_eq!(
+            quorum(
+                CommandFlags::STALE,
+                ClusterFence::QuorumLost {
+                    serve_stale_data: false
+                }
+            ),
+            None
+        );
+    }
+
+    /// One knob, two staleness sources: `replica-serve-stale-data yes` reopens
+    /// the cluster half exactly as it reopens the replication half.
+    // FM-CLUSTER-107
+    #[test]
+    fn the_serve_stale_data_knob_reopens_a_quorum_fenced_node() {
+        assert_eq!(
+            quorum(
+                CommandFlags::READONLY,
+                ClusterFence::QuorumLost {
+                    serve_stale_data: true
+                }
+            ),
+            None
+        );
+    }
+
+    /// The two halves answer different codes for the same knob setting. An
+    /// operator has to be able to tell "my cluster lost quorum" from "my
+    /// replication link died" from the refusal alone.
+    // FM-CLUSTER-107
+    #[test]
+    fn the_cluster_fence_and_the_link_fence_name_different_mechanisms() {
+        let cluster = quorum(
+            CommandFlags::READONLY,
+            ClusterFence::QuorumLost {
+                serve_stale_data: false,
+            },
+        );
+        let link = stale(
+            CommandFlags::READONLY,
+            ReplicaLink::Down {
+                serve_stale_data: false,
+            },
+        );
+        assert_ne!(cluster, link);
+        assert!(cluster.unwrap().starts_with("CLUSTERDOWN"));
+        assert!(link.unwrap().starts_with("MASTERDOWN"));
     }
 
     #[test]

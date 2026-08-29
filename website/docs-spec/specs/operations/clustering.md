@@ -106,9 +106,10 @@ port) and NO `POST /admin/cluster`.
 - Node failure → if `auto-failover=true`, the Raft leader promotes a replica
   after `fail-threshold` consecutive failures, ordered by `replica-priority`.
   Default is manual (`auto-failover=false`).
-- Quorum loss → with `self-fence-on-quorum-loss=true` (default) the node rejects
-  writes with **CLUSTERDOWN** while keeping reads available (split-brain
-  prevention).
+- Quorum loss → with `self-fence-on-quorum-loss=true` (default) the node fences
+  itself: writes **and** reads are rejected with **CLUSTERDOWN** (split-brain
+  prevention, plus an unbounded-staleness keyspace). `replica-serve-stale-data`
+  reopens reads only; `stale`-flagged commands always answer.
 - Raft leader loss → standard openraft election
   (`election-timeout-ms`/`heartbeat-interval-ms`); leadership transfer is not
   implemented.

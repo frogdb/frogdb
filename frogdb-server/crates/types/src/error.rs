@@ -179,6 +179,19 @@ define_command_errors! {
     /// included: clients and proxies match this string.
     MasterDown => "MASTERDOWN Link with MASTER is down and replica-serve-stale-data is set to 'no'.",
 
+    /// A non-`STALE` command on a cluster node fenced off its Raft quorum that
+    /// may not serve stale data.
+    ///
+    /// Redis's code, FrogDB's detail. Upstream answers a bare
+    /// `-CLUSTERDOWN The cluster is down` when `cluster-allow-reads-when-down`
+    /// is `no`; the parenthetical names the mechanism so an operator reading
+    /// one line knows which fence refused and which knob reopens it — the same
+    /// shape the write refusal ([`Self::ClusterDown`]'s sibling,
+    /// `frogdb_core::command::CLUSTER_DOWN_QUORUM_LOST`) already uses. The
+    /// `CLUSTERDOWN` code is what clients and proxies match on, and it is
+    /// verbatim.
+    ClusterDownStaleRead => "CLUSTERDOWN The cluster is down (quorum lost, stale reads refused)",
+
     /// Internal server error.
     Internal { message: String } => "ERR {message}",
 
