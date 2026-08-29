@@ -2,8 +2,7 @@
 //!
 //! Excludes: `needs:debug` tests (SCAN unknown type, SCAN with expired keys,
 //! SCAN with expired keys with TYPE/PATTERN filter), `external:skip` (cluster
-//! variant), encoding loops / `assert_encoding` / DEBUG OBJECT tests, and
-//! CONFIG SET tests.
+//! variant), encoding loops / `assert_encoding` tests, and CONFIG SET tests.
 //!
 //! ## Intentional exclusions
 //!
@@ -12,7 +11,11 @@
 //! - `{$type} HSCAN with encoding $enc` — intentional-incompatibility:encoding — internal-encoding
 //! - `{$type} ZSCAN with encoding $enc` — intentional-incompatibility:encoding — internal-encoding
 //!
-//! (SCAN with expired keys test now passes with DEBUG SET-ACTIVE-EXPIRE support)
+//! (SCAN with expired keys test now passes with DEBUG SET-ACTIVE-EXPIRE
+//! support. Issue 19 follow-up: upstream `unit/scan.tcl`'s encoding loops use
+//! `assert_encoding` — i.e. `OBJECT ENCODING` — not `DEBUG OBJECT`, so there
+//! was nothing here gated on DEBUG OBJECT's absence; the exclusion above is
+//! the permanent internal-encoding one.)
 
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::{TestClient, TestServer};
