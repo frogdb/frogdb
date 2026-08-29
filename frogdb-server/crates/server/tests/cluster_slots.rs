@@ -1861,3 +1861,102 @@ async fn test_keyless_script_is_never_redirected() {
 
     harness.shutdown_all().await;
 }
+
+// ============================================================================
+// Tier 20: redirect precedence over the replica pre-check ladder
+// (FM-REPLICATION-067)
+// ============================================================================
+
+/// Poll `INFO replication` on `node_id` until it reports both `role:slave` and
+/// `master_link_status:down` — the exact state `FM-REPLICATION-067`'s
+/// `-MASTERDOWN` rung fires in. Returns the `INFO` body so a caller can quote
+/// it. Panics on timeout, because a test that cannot reach the state cannot
+/// force the precedence it exists to pin.
+async fn wait_for_link_down_replica(
+    harness: &ClusterTestHarness,
+    node_id: u64,
+    timeout: Duration,
+) -> String {
+    let start = std::time::Instant::now();
+    let mut last = String::new();
+    loop {
+        let resp = harness
+            .node(node_id)
+            .unwrap()
+            .send("INFO", &["replication"])
+            .await;
+        if let Some(body) = bulk_string(&resp) {
+            if body.contains("role:slave") && body.contains("master_link_status:down") {
+                return body;
+            }
+            last = body;
+        }
+        assert!(
+            start.elapsed() < timeout,
+            "timed out waiting for node {node_id} to read as a link-down replica; \
+             last INFO replication was:\n{last}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+// FM-REPLICATION-067
+/// A cluster slot redirect outranks the link-down stale gate.
+///
+/// Redis `processCommand` runs its cluster redirect (`getNodeByQuery`) *before*
+/// both the read-only-replica check (`repl_slave_ro`) and the
+/// `replica-serve-stale-data` check (`masterdownerr`), so a keyed command for a
+/// slot this node does not serve is answered `-MOVED` whatever the replication
+/// link is doing. Without the deferral in `defers_to_cluster_redirect` a
+/// cluster replica — whose upstream link is legitimately down for the whole
+/// pre-streaming window — answers `-MASTERDOWN` to ordinary routed traffic and
+/// the client's redirect cache never learns where the slot actually lives.
+///
+/// The `READONLY` arm is the carve-out that keeps the stale gate meaningful:
+/// `getNodeByQuery` answers `myself` for a `READONLY` connection reading a slot
+/// its own primary owns, so no redirect is produced and the stale rung must
+/// still refuse the read rather than serving unboundedly stale data.
+#[tokio::test]
+async fn test_cluster_redirect_outranks_the_link_down_stale_gate() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster_with_replicas(1, 1).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    let replica_id = harness.replica_ids()[0];
+
+    // Forcing precondition: the node must actually be a replica with a down
+    // link, or the `-MASTERDOWN` rung this test outranks would never fire.
+    let info = wait_for_link_down_replica(&harness, replica_id, Duration::from_secs(10)).await;
+
+    let replica = harness.node(replica_id).unwrap();
+    let mut client = replica.connect().await;
+
+    // A read and a write, neither in READONLY mode: both are routed commands
+    // for a slot the primary owns, so both are `-MOVED`.
+    for cmd in [vec!["GET", "foo"], vec!["SET", "foo", "bar"]] {
+        let resp = client.command(&cmd).await;
+        assert!(
+            is_moved_redirect(&resp).is_some(),
+            "`{}` on a link-down cluster replica must be MOVED (the slot's \
+             primary), not a replication-state error; got {:?}. INFO said:\n{info}",
+            cmd.join(" "),
+            resp
+        );
+    }
+
+    // READONLY reads are served locally by the routing seam (FM-CLUSTER-025),
+    // so no redirect exists to defer to and the stale gate applies.
+    assert!(!is_error(&client.command(&["READONLY"]).await));
+    let resp = client.command(&["GET", "foo"]).await;
+    let err = get_error_message(&resp).unwrap_or_default();
+    assert!(
+        err.starts_with("MASTERDOWN"),
+        "a READONLY read on a link-down replica is served locally by the \
+         routing seam, so the stale gate must refuse it; got {:?}",
+        resp
+    );
+
+    harness.shutdown_all().await;
+}
