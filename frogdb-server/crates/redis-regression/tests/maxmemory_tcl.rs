@@ -362,24 +362,47 @@ async fn tcl_maxmemory_volatile_only_volatile_ttl() {
 
 #[tokio::test]
 async fn tcl_lru_lfu_value_of_key_just_added() {
+    // Port of upstream unit/maxmemory.tcl's "lru/lfu value of the key just
+    // added": OBJECT IDLETIME/FREQ only report meaningful data under the
+    // matching eviction policy, so the policy must be switched explicitly
+    // before each half of the assertion — `OBJECT FREQ` errors outright
+    // under a non-LFU policy (see `frogdb-server/crates/commands`'s OBJECT
+    // FREQ handler), which is what the original port (missing the `CONFIG
+    // SET maxmemory-policy` calls) was tripping over.
     let server = start_maxmemory_server().await;
     let mut client = server.connect().await;
 
-    // Create a key
-    client.command(&["SET", "mykey", "myval"]).await;
-
-    // A freshly-created key should have idle time 0 (or close to 0)
-    let idle = unwrap_integer(&client.command(&["OBJECT", "IDLETIME", "mykey"]).await);
+    assert_ok(
+        &client
+            .command(&["CONFIG", "SET", "maxmemory-policy", "allkeys-lru"])
+            .await,
+    );
+    client.command(&["SET", "foo", "a"]).await;
+    let idle = unwrap_integer(&client.command(&["OBJECT", "IDLETIME", "foo"]).await);
     assert!(
-        idle <= 1,
-        "OBJECT IDLETIME of just-added key should be 0 or 1, got {idle}"
+        idle <= 2,
+        "OBJECT IDLETIME of just-added key should be 0-2, got {idle}"
+    );
+    client.command(&["DEL", "foo"]).await;
+    client.command(&["SET", "foo", "1"]).await;
+    client.command(&["GET", "foo"]).await;
+    let idle = unwrap_integer(&client.command(&["OBJECT", "IDLETIME", "foo"]).await);
+    assert!(
+        idle <= 2,
+        "OBJECT IDLETIME of just-accessed key should be 0-2, got {idle}"
     );
 
-    // LFU counter should be > 0 for a just-created key (initial value is 5)
-    let freq = unwrap_integer(&client.command(&["OBJECT", "FREQ", "mykey"]).await);
-    assert!(
-        freq > 0,
-        "OBJECT FREQ of just-added key should be > 0, got {freq}"
+    assert_ok(
+        &client
+            .command(&["CONFIG", "SET", "maxmemory-policy", "allkeys-lfu"])
+            .await,
+    );
+    client.command(&["DEL", "foo"]).await;
+    client.command(&["SET", "foo", "a"]).await;
+    let freq = unwrap_integer(&client.command(&["OBJECT", "FREQ", "foo"]).await);
+    assert_eq!(
+        freq, 5,
+        "OBJECT FREQ of just-added key should be the LFU initial value of 5, got {freq}"
     );
 }
 
