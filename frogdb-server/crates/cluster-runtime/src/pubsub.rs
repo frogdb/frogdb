@@ -2,12 +2,15 @@
 //!
 //! In cluster mode, pub/sub messages need to reach subscribers on all nodes:
 //! - `PUBLISH` broadcasts to every node (broadcast pub/sub).
-//! - `SPUBLISH` forwards to the slot-owning node (sharded pub/sub).
+//! - `SPUBLISH` forwards to the slot-owning node (sharded pub/sub), or refuses
+//!   with `CLUSTERDOWN` when the local view cannot place the slot on any node.
 //!
 //! `SSUBSCRIBE` redirects are not decided here: the handler routes the channel's
 //! slot through the shared `coordinator.route()` + `RouteDecision::to_response`
 //! seam (the same path keyed commands use), so the migration/ASKING/CLUSTERDOWN
-//! logic lives in exactly one place.
+//! logic lives in exactly one place. `SPUBLISH`'s refusal is rendered by the
+//! connection layer through that same `redirect::clusterdown_slot` constructor,
+//! so the two paths cannot drift apart on the wire.
 //!
 //! In standalone mode, the `Local` variant is a no-op — all delivery is local.
 
@@ -106,11 +109,11 @@ fn extract_forward_count(response: &ClusterRpcResponse) -> Option<usize> {
 
 /// Where a shard channel's slot says an `SPUBLISH` belongs.
 ///
-/// The three non-`Remote` variants all end in local delivery, but only `Local`
-/// is *correct* local delivery: the other two are fallbacks taken because the
-/// slot map could not answer. Collapsing them (they were all a bare `None`) made
-/// a message delivered on a node that does not own the slot look identical to
-/// one delivered on the node that does — see hardening issue 36.
+/// Exactly one variant — `Local` — authorizes local delivery. `Remote` forwards;
+/// the other two are states in which the local view cannot place the slot at
+/// all, and `SPUBLISH` refuses (FM-CLUSTER-070). They stay separate variants
+/// because "no owner in the slot map" and "owner with no address" are different
+/// operational problems, even though the client sees one reply (issue 36).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShardRoute {
     /// This node owns the slot. Deliver locally; nothing is wrong.
@@ -122,16 +125,15 @@ pub enum ShardRoute {
         /// The owner's cluster-bus address.
         addr: std::net::SocketAddr,
     },
-    /// Nobody owns the slot — bootstrap, post-`FORGET`, or mid-reset. Delivery
-    /// falls back to local so the message is not dropped, but subscribers on
-    /// different nodes then see different subsets of the traffic.
+    /// Nobody owns the slot — bootstrap, post-`FORGET`, or mid-reset. No node
+    /// can be named to serve the channel, so the publish is refused.
     Unowned {
         /// The channel's slot.
         slot: u16,
     },
     /// A peer owns the slot but this node holds no address for it, so no RPC is
-    /// possible. Same local fallback, different cause: a registry gap rather
-    /// than an unassigned slot.
+    /// possible. Same refusal, different cause: a registry gap rather than an
+    /// unassigned slot.
     OwnerUnaddressable {
         /// The slot's owner, per the replicated slot map.
         owner: NodeId,
@@ -141,38 +143,47 @@ pub enum ShardRoute {
 }
 
 impl ShardRoute {
-    /// True when the caller must perform local delivery — correct ownership and
-    /// both fallbacks.
+    /// True only when this node owns the slot, the one route that authorizes
+    /// local delivery.
     pub fn delivers_locally(&self) -> bool {
-        !matches!(self, Self::Remote { .. })
+        matches!(self, Self::Local)
     }
 }
 
-/// Outcome of an `SPUBLISH` handed to the forwarder.
+/// Why the local view could not place a shard channel's slot.
 ///
-/// `Forwarded` is the only variant carrying a subscriber count; every other
-/// variant means the caller still has to deliver locally, and says why.
+/// Both causes yield the same client reply (`CLUSTERDOWN Hash slot <slot> not
+/// served`); the distinction is what the operator reads out of the warn log and
+/// what the forcing tests assert.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpublishRefusal {
+    /// The slot has no owner in the replicated slot map.
+    Unowned,
+    /// The slot has an owner, but this node holds no address for it.
+    OwnerUnaddressable {
+        /// The slot's owner, per the replicated slot map.
+        owner: NodeId,
+    },
+}
+
+/// Outcome of an `SPUBLISH` handed to the forwarder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpublishOutcome {
     /// Sent to the slot's owner. Carries the owner's subscriber count (`0` when
     /// the RPC failed, timed out, or answered with the wrong shape — logged in
     /// [`send_pubsub_rpc`]).
     Forwarded(usize),
-    /// Not routed: the caller delivers locally. Carries the route that decided
-    /// it, so a correct local delivery stays distinguishable from a fallback.
-    Local(ShardRoute),
-}
-
-impl SpublishOutcome {
-    /// The remote subscriber count, or `None` when the caller must deliver
-    /// locally. This is the shape the connection layer consumes, so the
-    /// client-visible reply is unchanged by the added distinction.
-    pub fn remote_count(&self) -> Option<usize> {
-        match self {
-            Self::Forwarded(count) => Some(*count),
-            Self::Local(_) => None,
-        }
-    }
+    /// This node owns the slot (or there is no cluster): the caller delivers
+    /// locally and replies with the local subscriber count.
+    Local,
+    /// The local view cannot place the slot on any node. The caller delivers
+    /// nothing and replies `CLUSTERDOWN Hash slot <slot> not served`.
+    Refused {
+        /// The channel's slot, named in the reply.
+        slot: u16,
+        /// Which of the two unplaceable states produced the refusal.
+        cause: SpublishRefusal,
+    },
 }
 
 /// Forwarder for cross-node pub/sub message delivery.
@@ -269,18 +280,17 @@ impl ClusterPubSubForwarder {
     ///
     /// [`SpublishOutcome::Forwarded`] carries the owner's subscriber count (`0`
     /// when the RPC failed, timed out, or answered with the wrong shape —
-    /// logged in `send_pubsub_rpc`). Every other outcome leaves delivery to the
-    /// caller and names the route that decided it: correct local ownership, or
-    /// one of the two fallbacks, which are warn-logged here because a message
-    /// delivered on a node that does not own its slot is a silent divergence
-    /// between subscribers on different nodes.
+    /// logged in `send_pubsub_rpc`). [`SpublishOutcome::Local`] leaves delivery
+    /// to the caller: this node owns the slot. [`SpublishOutcome::Refused`] is
+    /// the two states in which the local view cannot place the slot on any node;
+    /// they are warn-logged here and the caller answers `CLUSTERDOWN`.
     ///
-    /// Redis answers `MOVED`/`CLUSTERDOWN` for a shard channel it does not
-    /// serve; FrogDB's shard pub/sub does not slot-route subscribers at all, so
-    /// refusing here would drop messages nobody else would deliver. The
-    /// client-visible reply is therefore unchanged — the distinction is
-    /// internal, and the "should shard pub/sub slot-route at all" question is
-    /// tracked separately.
+    /// Refusing rather than delivering locally is Redis parity and parity with
+    /// FrogDB's own `SSUBSCRIBE`, which already answers `CLUSTERDOWN` for a slot
+    /// it cannot place. A count returned from a node that does not own the slot
+    /// would claim a delivery it did not make — see FM-CLUSTER-070. Forwarding
+    /// to a *reachable* owner (rather than answering `MOVED`) is the one
+    /// remaining deviation.
     pub async fn forward_spublish(&self, channel: &[u8], message: &[u8]) -> SpublishOutcome {
         let Self::Cluster {
             cluster_state,
@@ -288,29 +298,35 @@ impl ClusterPubSubForwarder {
             node_id,
         } = self
         else {
-            return SpublishOutcome::Local(ShardRoute::Local);
+            return SpublishOutcome::Local;
         };
 
         let route = route_shard_channel_in(cluster_state, network_factory, *node_id, channel);
         let (owner_id, addr) = match route {
             ShardRoute::Remote { owner, addr } => (owner, addr),
-            ShardRoute::Local => return SpublishOutcome::Local(route),
+            ShardRoute::Local => return SpublishOutcome::Local,
             ShardRoute::Unowned { slot } => {
                 warn!(
                     slot,
-                    "SPUBLISH on a slot nobody owns: delivering locally, so subscribers on \
-                     other nodes will not see this message"
+                    "SPUBLISH on a slot nobody owns: refusing with CLUSTERDOWN, since no node \
+                     can be named to serve this channel"
                 );
-                return SpublishOutcome::Local(route);
+                return SpublishOutcome::Refused {
+                    slot,
+                    cause: SpublishRefusal::Unowned,
+                };
             }
             ShardRoute::OwnerUnaddressable { owner, slot } => {
                 warn!(
                     slot,
                     owner_id = owner,
-                    "SPUBLISH owner has no registered address: delivering locally, so \
-                     subscribers on the owner will not see this message"
+                    "SPUBLISH owner has no registered address: refusing with CLUSTERDOWN, since \
+                     this node cannot reach the slot's owner"
                 );
-                return SpublishOutcome::Local(route);
+                return SpublishOutcome::Refused {
+                    slot,
+                    cause: SpublishRefusal::OwnerUnaddressable { owner },
+                };
             }
         };
 
@@ -476,11 +492,15 @@ mod tests {
 
     // FM-CLUSTER-069, FM-CLUSTER-070
     #[tokio::test]
-    async fn test_local_forwarder_forward_returns_none() {
+    async fn test_local_forwarder_forward_delivers_locally() {
         let forwarder = ClusterPubSubForwarder::Local;
         let result = forwarder.forward_spublish(b"chan", b"msg").await;
-        assert_eq!(result, SpublishOutcome::Local(ShardRoute::Local));
-        assert_eq!(result.remote_count(), None);
+        assert_eq!(
+            result,
+            SpublishOutcome::Local,
+            "a standalone node owns everything: never a refusal"
+        );
+        assert!(forwarder.route_shard_channel(b"chan").delivers_locally());
     }
 
     /// A single-node cluster has nobody to fan out to: the broadcast must not
@@ -510,22 +530,28 @@ mod tests {
     /// address lookup or RPC.
     // FM-CLUSTER-070
     #[tokio::test]
-    async fn cluster_forward_returns_none_when_this_node_owns_the_slot() {
+    async fn cluster_forward_delivers_locally_when_this_node_owns_the_slot() {
         let forwarder = ClusterPubSubForwarder::Cluster {
             cluster_state: cluster_state(2, Some(1)),
             network_factory: network_with(&[1, 2]),
             node_id: 1,
         };
         let outcome = forwarder.forward_spublish(b"chan", b"msg").await;
-        assert_eq!(outcome, SpublishOutcome::Local(ShardRoute::Local));
-        assert_eq!(outcome.remote_count(), None);
+        assert_eq!(
+            outcome,
+            SpublishOutcome::Local,
+            "owning the slot is the one route that authorizes local delivery"
+        );
+        assert_eq!(forwarder.route_shard_channel(b"chan"), ShardRoute::Local);
+        assert!(forwarder.route_shard_channel(b"chan").delivers_locally());
     }
 
-    /// Nobody owns the slot (bootstrap, post-FORGET, mid-reset). The message is
-    /// delivered locally rather than dropped, and the outcome says so.
+    /// Nobody owns the slot (bootstrap, post-FORGET, mid-reset). No node can be
+    /// named to serve the channel, so the publish is refused rather than
+    /// delivered best-effort to whoever happens to be attached here.
     // FM-CLUSTER-070
     #[tokio::test]
-    async fn cluster_forward_distinguishes_an_unowned_slot_from_local_ownership() {
+    async fn cluster_forward_refuses_an_unowned_slot() {
         let unowned = ClusterPubSubForwarder::Cluster {
             cluster_state: cluster_state(2, None),
             network_factory: network_with(&[1, 2]),
@@ -541,24 +567,32 @@ mod tests {
         let outcome = unowned.forward_spublish(b"chan", b"msg").await;
         assert_eq!(
             outcome,
-            SpublishOutcome::Local(ShardRoute::Unowned { slot }),
-            "an unowned slot must not report as local ownership"
+            SpublishOutcome::Refused {
+                slot,
+                cause: SpublishRefusal::Unowned,
+            },
+            "an unowned slot must be refused, naming the slot for the CLUSTERDOWN reply"
         );
         assert_ne!(
             outcome,
             owned.forward_spublish(b"chan", b"msg").await,
-            "the fallback and the correct delivery must be distinguishable"
+            "the refusal and the correct delivery must be distinguishable"
         );
-        // Client-visible behavior is unchanged: both still deliver locally.
-        assert_eq!(outcome.remote_count(), None);
-        assert!(unowned.route_shard_channel(b"chan").delivers_locally());
+        assert!(
+            !unowned.route_shard_channel(b"chan").delivers_locally(),
+            "no best-effort local delivery on an unowned slot"
+        );
+        assert_eq!(
+            unowned.route_shard_channel(b"chan"),
+            ShardRoute::Unowned { slot }
+        );
     }
 
     /// The owner is another node, but this node has no address for it, so no
-    /// RPC is possible. Same local fallback, different reported cause.
+    /// RPC is possible. Same refusal, different reported cause.
     // FM-CLUSTER-070
     #[tokio::test]
-    async fn cluster_forward_distinguishes_an_unaddressable_owner_from_local_ownership() {
+    async fn cluster_forward_refuses_an_owner_this_node_cannot_address() {
         let unaddressable = ClusterPubSubForwarder::Cluster {
             cluster_state: cluster_state(2, Some(2)),
             // Node 2 owns every slot but is absent from the address registry.
@@ -575,20 +609,67 @@ mod tests {
         let outcome = unaddressable.forward_spublish(b"chan", b"msg").await;
         assert_eq!(
             outcome,
-            SpublishOutcome::Local(ShardRoute::OwnerUnaddressable { owner: 2, slot }),
-            "an unaddressable owner must not report as local ownership"
+            SpublishOutcome::Refused {
+                slot,
+                cause: SpublishRefusal::OwnerUnaddressable { owner: 2 },
+            },
+            "an unaddressable owner must be refused, not delivered locally"
         );
         assert_ne!(
             outcome,
             owned.forward_spublish(b"chan", b"msg").await,
-            "the fallback and the correct delivery must be distinguishable"
+            "the refusal and the correct delivery must be distinguishable"
         );
-        // ... and distinguishable from the *other* fallback, too.
-        assert_ne!(
-            outcome,
-            SpublishOutcome::Local(ShardRoute::Unowned { slot })
+        assert!(
+            !unaddressable
+                .route_shard_channel(b"chan")
+                .delivers_locally(),
+            "no best-effort local delivery when the owner cannot be reached"
         );
-        assert_eq!(outcome.remote_count(), None);
+        assert_eq!(
+            unaddressable.route_shard_channel(b"chan"),
+            ShardRoute::OwnerUnaddressable { owner: 2, slot }
+        );
+    }
+
+    /// Both unplaceable states refuse on the same slot, and the reply the caller
+    /// builds from them is identical — but the *cause* must not collapse, or the
+    /// operator loses the difference between "the slot map has a hole" and "the
+    /// address registry has a hole" (hardening issue 36's property, carried over
+    /// to the refusal).
+    // FM-CLUSTER-070
+    #[tokio::test]
+    async fn cluster_forward_refusals_stay_distinguishable_by_cause() {
+        let unowned = ClusterPubSubForwarder::Cluster {
+            cluster_state: cluster_state(2, None),
+            network_factory: network_with(&[1, 2]),
+            node_id: 1,
+        };
+        let unaddressable = ClusterPubSubForwarder::Cluster {
+            cluster_state: cluster_state(2, Some(2)),
+            network_factory: network_with(&[1]),
+            node_id: 1,
+        };
+
+        let slot = slot_for_key(b"chan");
+        let a = unowned.forward_spublish(b"chan", b"msg").await;
+        let b = unaddressable.forward_spublish(b"chan", b"msg").await;
+
+        let (
+            SpublishOutcome::Refused {
+                slot: sa,
+                cause: ca,
+            },
+            SpublishOutcome::Refused {
+                slot: sb,
+                cause: cb,
+            },
+        ) = (a, b)
+        else {
+            panic!("both unplaceable states must refuse, got {a:?} / {b:?}");
+        };
+        assert_eq!((sa, sb), (slot, slot), "both refusals name the same slot");
+        assert_ne!(ca, cb, "the two causes must not collapse into one");
     }
 
     /// A reachable remote owner is the one route that does not deliver locally.
@@ -740,11 +821,14 @@ mod tests {
             node_id: 1,
         };
         let outcome = forwarder.forward_spublish(b"chan", b"msg").await;
-        assert_eq!(outcome, SpublishOutcome::Forwarded(9));
         assert_eq!(
-            outcome.remote_count(),
-            Some(9),
-            "a forwarded publish must report the owner's count, not `None`"
+            outcome,
+            SpublishOutcome::Forwarded(9),
+            "a forwarded publish must report the owner's count, not the local one"
+        );
+        assert!(
+            !forwarder.route_shard_channel(b"chan").delivers_locally(),
+            "a reachable remote owner is forwarded to, never delivered locally"
         );
     }
 

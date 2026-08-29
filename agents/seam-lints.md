@@ -20,7 +20,7 @@ already drifted (three gates ran on every commit but not under `just lint`).
 | recipe | invariant | in `lint-gates` |
 |---|---|---|
 | `lint-info-seam` | INFO section content is rendered by an `InfoSection` (`crates/server/src/info`), never patched into the wire text with `.replace(...)`/`.replace_range(...)` after the fact | yes |
-| `lint-redirect-seam` | every MOVED / ASK / CROSSSLOT reply is built through `frogdb-types/src/redirect.rs`, never an inline `Response::error(...)` literal (which re-opens the IPv6 address-bracketing bug) | yes |
+| `lint-redirect-seam` | every MOVED / ASK / CROSSSLOT / slot-scoped `CLUSTERDOWN Hash slot` reply is built through `frogdb-types/src/redirect.rs`, never an inline `Response::error(...)` literal (which re-opens the IPv6 address-bracketing bug, and would let the subscribe and publish paths answer different bytes for the same unplaceable slot — FM-CLUSTER-070) | yes |
 | `lint-pubsub-confirmation-seam` | subscribe/unsubscribe confirmations are built through `frogdb_core::PubSubConfirmation` (the RESP3-Push-vs-RESP2-Array owner), and the RESP2 array-null (`*-1\r\n`) literal appears only in `codec.rs` | yes |
 | `lint-failover-atomicity` | a failover or FAIL-marking is one atomic Raft entry (`ClusterCommand::Failover` / `MarkNodeFailed`), never a standalone `IncrementEpoch` write or a hand-rolled `RemoveNode`/`SetRole`/`AssignSlots` saga that can strand other nodes at a stale epoch on a leader crash | yes |
 | `lint-metrics-chokepoint` | metrics are emitted through the typed handles `define_metrics!` generates, never a raw string-named `increment_counter`/`record_gauge`/`record_histogram` call (which re-opens registry drift and the first-caller-fixes-arity panic class) | yes |
