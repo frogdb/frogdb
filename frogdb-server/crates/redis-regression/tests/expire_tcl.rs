@@ -7,7 +7,11 @@
 //! - Active expire cycle / lazy expire stats tests
 //! - Cluster-mode expire scan tests
 //! - CONFIG SET tests (lazyexpire-nested-arbitrary-keys, hz, etc.)
-//! - Encoding loops, DEBUG OBJECT, assert_encoding, assert_refcount
+//!
+//! (Issue 19 follow-up: upstream `unit/expire.tcl` has no `debug object`,
+//! `assert_encoding`, or `assert_refcount` tests to revisit — the only
+//! `needs:debug` tests here are `DEBUG SET-ACTIVE-EXPIRE`/`DEBUG LOADAOF`
+//! ones, already called out above.)
 //!
 //! ## Intentional exclusions
 //!

@@ -41,11 +41,14 @@
 //! Other Redis-internal:
 //! - CONFIG SET for Redis-internal options (lazyfree, io-threads, etc.)
 //! - MONITOR tests (complex interleaving)
-//! - DEBUG OBJECT / DEBUG SET-ACTIVE-EXPIRE tests
-//! - OBJECT FREQ/IDLETIME/REFCOUNT tests
 //! - ACL-dependent tests (CLIENT KILL maxAGE with ACL)
 //! - bgsave/bgrewriteaof tests
 //! - CONFIG SET rollback / hidden / multiple args tests (Redis-internal options)
+//!
+//! (Issue 19 follow-up: upstream `unit/introspection.tcl` has no `debug
+//! object` or `object freq`/`idletime`/`refcount` tests — that coverage lives
+//! in `unit/introspection-2.tcl`, ported in `introspection2_tcl.rs` using
+//! `OBJECT IDLETIME` directly, not `DEBUG OBJECT`.)
 
 use std::time::Duration;
 

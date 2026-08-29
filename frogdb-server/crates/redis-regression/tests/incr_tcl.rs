@@ -1,15 +1,26 @@
 //! Rust port of Redis 8.6.0 `unit/type/incr.tcl` test suite.
 //!
-//! Excludes: `assert_encoding`/`assert_refcount` tests (require DEBUG OBJECT),
-//! `needs:debug` tests.
+//! Excludes: `needs:debug` tests that depend on Redis-internal object identity
+//! (see below) and the raw-vs-int string encoding distinction FrogDB doesn't
+//! have.
+//!
+//! `INCR does not use shared objects` was previously excluded here alongside
+//! the DEBUG OBJECT-dependent tests; it only needs `OBJECT REFCOUNT` (not
+//! DEBUG OBJECT) and is now ported as `tcl_incr_does_not_use_shared_objects`
+//! (issue 19 follow-up: revisit vendored suites that excluded DEBUG OBJECT
+//! tests).
 //!
 //! ## Intentional exclusions
 //!
 //! Redis-internal object representation (FrogDB doesn't have shared objects
 //! or in-place vs copy-on-write distinction):
-//! - `INCR does not use shared objects` — redis-specific — Redis-internal object model
-//! - `INCR can modify objects in-place` — redis-specific — Redis-internal object model
-//! - `$cmd operation should update encoding from raw to int` — intentional-incompatibility:encoding — internal-encoding
+//! - `INCR can modify objects in-place` — redis-specific — compares the
+//!   heap-pointer identity in DEBUG OBJECT's `at:` token across two calls to
+//!   prove Redis mutated the int object in place rather than reallocating it.
+//!   FrogDB's DEBUG OBJECT deliberately omits `at:` (heap address is an ASLR
+//!   info leak — `frogdb-server/crates/server/src/connection/debug_conn_command.rs`),
+//!   so this test has no truthful field to assert on.
+//! - `$cmd operation should update encoding from raw to int` — intentional-incompatibility:encoding — internal-encoding — FrogDB's `encoding_name()` only reports `int`/`embstr` for strings, never `raw`, so the middle `assert_encoding "raw"` after APPEND can never pass.
 
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::TestServer;
@@ -83,6 +94,26 @@ async fn tcl_incrby_over_32bit_value_with_over_32bit_increment() {
         &client.command(&["INCRBY", "novar", "17179869184"]).await,
         34359738368,
     );
+}
+
+#[tokio::test]
+async fn tcl_incr_does_not_use_shared_objects() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // FrogDB never interns/shares integer values between keys (unlike
+    // Redis's shared 0-9999 int pool), so `OBJECT REFCOUNT` is always 1
+    // regardless of value — `Value::REPORTED_REFCOUNT`, the same source
+    // `DEBUG OBJECT`'s `refcount:` token reads from.
+    client.command(&["SET", "foo", "-1"]).await;
+    client.command(&["INCR", "foo"]).await;
+    assert_integer_eq(&client.command(&["OBJECT", "REFCOUNT", "foo"]).await, 1);
+
+    client.command(&["SET", "foo", "9998"]).await;
+    client.command(&["INCR", "foo"]).await;
+    assert_integer_eq(&client.command(&["OBJECT", "REFCOUNT", "foo"]).await, 1);
+    client.command(&["INCR", "foo"]).await;
+    assert_integer_eq(&client.command(&["OBJECT", "REFCOUNT", "foo"]).await, 1);
 }
 
 // ---------------------------------------------------------------------------
