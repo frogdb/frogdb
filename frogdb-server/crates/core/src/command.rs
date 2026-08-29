@@ -280,7 +280,28 @@ pub trait RoleController: Send + Sync {
     /// both surfaces always agree with each other and with the current
     /// replication stream — never a boot-only snapshot that goes stale after a
     /// runtime role change.
+    ///
+    /// NOTE: this can be `None` while [`Self::is_replica`] is still `true` —
+    /// the stranded-promotion state (issue 16, `TR-REPLICATION-009`): a
+    /// promotion that fails to persist clears the target and drops the stream
+    /// irreversibly *before* the persist that can fail, so a caller that needs
+    /// "is this node a replica at all" (e.g. the stale-read gate,
+    /// `FM-REPLICATION-029`) must ask [`Self::is_replica`], not infer it from
+    /// this being `Some`.
     fn primary_target(&self) -> Option<std::net::SocketAddr>;
+
+    /// Whether this node is currently flagged as a replica on the data path —
+    /// independent of whether it has a [`Self::primary_target`] to point at.
+    ///
+    /// Ordinarily this agrees with `primary_target().is_some()`, but the two
+    /// diverge in exactly one state: a failed promotion (issue 16,
+    /// `TR-REPLICATION-009`) clears `primary_target` and tears down the stream
+    /// before the persist that can fail, and on failure leaves this flag
+    /// unchanged (still `true`) with nothing to point at and no link to one.
+    /// Callers that need to distinguish "a genuine primary/standalone" from
+    /// "a stranded ex-replica with no target" — the stale-read gate chief
+    /// among them — must use this rather than `primary_target().is_some()`.
+    fn is_replica(&self) -> bool;
 
     /// Whether the inbound replication stream from [`Self::primary_target`]
     /// is currently up: connected past PSYNC and streaming WAL frames, not

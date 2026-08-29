@@ -435,8 +435,17 @@ impl PreDispatchView<'_> {
         // Replica *apply* traffic cannot reach this, for the same structural
         // reason as the MISCONF gate above: the replication executor never
         // builds a `PreDispatchView`.
+        //
+        // Gated on `is_replica()`, not `primary_target().is_some()`: they
+        // agree everywhere except the stranded-promotion state (issue 16,
+        // `TR-REPLICATION-009`) — a promotion whose persist failed clears
+        // `primary_target` and drops the stream *before* the persist that can
+        // fail, leaving `is_replica()` true with nothing to point at. That is
+        // exactly the unbounded-staleness case issue 28 named as a forcing
+        // case for this gate, and `primary_target().is_some()` would have
+        // read it as "this is a primary" and skipped the gate entirely.
         if let Some(rc) = self.cluster.role_controller.as_ref()
-            && rc.primary_target().is_some()
+            && rc.is_replica()
             && !rc.master_link_up()
             && let Some(cmd_impl) = self.registry.get_entry(cmd_name)
             && let Some(err) = stale_refusal(
@@ -1324,6 +1333,98 @@ mod tests {
                 scatter_gather_timeout: Duration::from_millis(5000),
             }
         }
+
+        /// Wire a [`RoleController`] into the fixture's `ClusterDeps` for the
+        /// stale-gate tests, which need a live role controller rather than
+        /// the `None` every other fixture leaves it at.
+        fn with_role_controller(mut self, rc: Arc<dyn frogdb_core::RoleController>) -> Self {
+            self.cluster.role_controller = Some(rc);
+            self
+        }
+    }
+
+    /// A [`RoleController`] double for the stale-gate tests: every field is
+    /// fixed at construction, and `is_replica`/`primary_target` can be set
+    /// independently so a test can model the stranded-promotion divergence
+    /// (issue 16, `TR-REPLICATION-009`) — `is_replica: true`,
+    /// `primary_target: None` — that ordinary replicas and primaries never
+    /// produce.
+    struct FixedRoleController {
+        primary_target: Option<std::net::SocketAddr>,
+        is_replica: bool,
+        link_up: bool,
+    }
+
+    impl frogdb_core::RoleController for FixedRoleController {
+        fn request_promote(&self) -> Result<(), frogdb_core::CommandError> {
+            Ok(())
+        }
+        fn request_demote(&self, _primary: std::net::SocketAddr) {}
+        fn primary_target(&self) -> Option<std::net::SocketAddr> {
+            self.primary_target
+        }
+        fn is_replica(&self) -> bool {
+            self.is_replica
+        }
+        fn master_link_up(&self) -> bool {
+            self.link_up
+        }
+        fn sync_refusal(&self) -> Option<String> {
+            None
+        }
+    }
+
+    // FM-REPLICATION-067
+    /// The stranded-promotion state (issue 16, `TR-REPLICATION-009`) trips the
+    /// stale-read gate: a promotion whose persist failed leaves `is_replica()`
+    /// true with `primary_target()` cleared to `None` and no link, which the
+    /// gate must read as "link down" rather than "this is a primary" — the
+    /// unbounded-staleness case issue 28's ruling named as a forcing case.
+    ///
+    /// Regression coverage for the divergence between `is_replica()` and
+    /// `primary_target().is_some()`: gating on the latter (as the code did
+    /// before this fix) reads a stranded node as primary/standalone and never
+    /// calls `stale_refusal` at all, so the node keeps serving unboundedly
+    /// stale reads forever with no operator lever to stop it.
+    #[test]
+    fn stale_gate_trips_on_stranded_promotion_with_no_primary_target() {
+        let mut fx = ViewFixture::new(None).with_role_controller(Arc::new(FixedRoleController {
+            primary_target: None,
+            is_replica: true,
+            link_up: false,
+        }));
+
+        match fx.view().run_pre_checks("GET", &[]) {
+            Some(Response::Error(msg)) => assert!(
+                msg.starts_with(b"MASTERDOWN"),
+                "a stranded-promotion node must refuse reads with MASTERDOWN \
+                 by default, got: {}",
+                String::from_utf8_lossy(&msg)
+            ),
+            other => panic!(
+                "expected MASTERDOWN for a stranded-promotion node with the \
+                 stale gate closed, got: {other:?}"
+            ),
+        }
+    }
+
+    // FM-REPLICATION-067
+    /// A genuine primary/standalone node (`is_replica() == false`) must never
+    /// be stale-gated, however its `primary_target`/link fields read — the
+    /// gate is replica-only. Guards the flip from `primary_target().is_some()`
+    /// to `is_replica()` against gating a real primary.
+    #[test]
+    fn stale_gate_does_not_trip_for_a_primary() {
+        let mut fx = ViewFixture::new(None).with_role_controller(Arc::new(FixedRoleController {
+            primary_target: None,
+            is_replica: false,
+            link_up: false,
+        }));
+
+        assert!(
+            fx.view().run_pre_checks("GET", &[]).is_none(),
+            "a primary/standalone node must never be stale-gated"
+        );
     }
 
     #[test]

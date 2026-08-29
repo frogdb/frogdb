@@ -239,8 +239,9 @@ two admission gates (with the gate reading the resolved row flags, which
 
 ### Handed on
 
-- [replication-correctness issue 28](../../../replication-correctness/issues/open/28-replica-serve-stale-data-knob.md)
-  — its 2026-08-13 ruling of default `yes` is **superseded**. Residue it keeps:
+- [replication-correctness issue 28](../../../replication-correctness/issues/done/28-replica-serve-stale-data-knob.md)
+  — its 2026-08-13 ruling of default `yes` is **superseded**. Residue it kept (closed
+  2026-08-29, including a stranded-promotion gate gap found and fixed in the same pass):
   `FM-REPLICATION-029`'s Invariant still claims no gate and no knob exist, and
   the stranded-promotion forcing case is not yet exercised. Not done here because
   `specs/replication.md` and its generated website mirror were held by another

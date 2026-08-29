@@ -1100,6 +1100,12 @@ mod tests {
         fn primary_target(&self) -> Option<SocketAddr> {
             self.demotes.lock().unwrap().last().copied()
         }
+        fn is_replica(&self) -> bool {
+            // This recorder never models the stranded-promotion divergence;
+            // its tests only care that role-change events reach the data
+            // path, so this agrees with `primary_target().is_some()`.
+            self.primary_target().is_some()
+        }
         fn master_link_up(&self) -> bool {
             false
         }

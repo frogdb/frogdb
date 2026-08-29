@@ -1,6 +1,8 @@
 # 28 — `replica-serve-stale-data` knob
 
-Status: ready-for-agent
+Status: done
+Landed: 2026-08-29 — spec reconciled against the shipped knob/gate, stranded-promotion gap
+found and closed in the same session
 
 ## Parent
 
@@ -115,3 +117,71 @@ Redis behaviour.
    the inverted default
    (`website/src/content/docs/compatibility/overview.mdx`, "Replication"), but
    the spec-side deviations table has not been touched — same locked/WIP reason.
+
+## Resolution (2026-08-29)
+
+Closed the residue listed above.
+
+**Supersession recap.** This issue's 2026-08-13 ruling (`implement now, default yes`) was
+superseded 2026-08-21 by
+[redis-feel issue 17](../../../redis-feel/issues/done/17-unimplemented-admission-gates.md)
+(commits `785fd51a..51f0526e`), which shipped the knob and gate with default **`no`** — the
+CockroachDB/FoundationDB fail-fast precedent this issue's own analysis cited — plus the
+container-`HELP` admission refinement (commit `d74f86c2`). The shipped default is authoritative
+and was not touched by this session.
+
+**Spec-side residue (item 1 and 3 above), closed in `specs/replication.md`:**
+
+- `TR-REPLICATION-025` retitled and rewritten: it described "a replica-side read is served
+  regardless of link health" (claiming no gate existed at all); it now describes the actual
+  gate, its default, and its live-mutability.
+- `FM-REPLICATION-029`'s Invariant and "NOT observable" cells rewritten — they said "FrogDB has
+  no `replica-serve-stale-data` config knob at all", which the shipped code makes false. A scope
+  note was added naming stranded promotion (issue 16, `TR-REPLICATION-009`) as an
+  unbounded-staleness source, and recording `master_link_status` in `INFO replication` as the
+  client-side detection signal, per the original ruling's requirement.
+- A new dedicated row, `FM-REPLICATION-067`, was added for the knob/gate itself (no such row
+  existed — only `TR-REPLICATION-025` and `FM-REPLICATION-029`'s prose touched on it), naming
+  all six forcing tests (four existing integration tests plus two new unit tests, below).
+- The Redis-deviations table row (formerly filed under `FM-REPLICATION-029`, now under
+  `FM-REPLICATION-067`) was rewritten: it read backwards ("no knob... unconditional yes" vs.
+  "defaults to yes but can be set to no" — i.e. it described the *pre-issue-17* state as
+  FrogDB's and Redis's own behaviour as the deviation). It now correctly states FrogDB has the
+  knob/gate/error-shape at parity with Redis, and the sole remaining deviation is the default
+  value (FrogDB `no` vs. Redis `yes`), with the fail-fast rationale.
+
+**Stranded-promotion finding (item 2 above) — a real gap, found and fixed.** Tracing
+`RoleManager::promote()`'s failure path
+(`frogdb-server/crates/server/src/role_manager.rs`) against the shipped gate
+(`PreDispatchView::run_pre_checks`,
+`frogdb-server/crates/server/src/connection/guards.rs`) showed the stranded-promotion case
+**did not trip the gate**: the gate's condition was
+`rc.primary_target().is_some() && !rc.master_link_up()`, but a failed promotion unconditionally
+clears `primary_target` to `None` before the fallible identity-mint step, while leaving
+`is_replica()` at `true`. A stranded node was therefore read as "this is a
+primary/standalone" and the gate never engaged — exactly the unbounded-staleness case this
+issue's ruling named as a forcing case for the gate, left un-gated.
+
+Fixed within the existing seam, touching only the unlocked `frogdb-core`/`frogdb-server`
+crates (no `frogdb-replication`/`frogdb-replication-runtime` change, so no mutation-gate
+run applies):
+
+- Added `RoleController::is_replica()` to the trait (`frogdb-core/src/command.rs`), documented
+  against the `primary_target()` divergence.
+- Switched the gate's condition in `run_pre_checks` from `primary_target().is_some()` to
+  `is_replica()`.
+- Implemented the new method on all four implementors: `RoleManagerHandle` (production,
+  delegating to the pre-existing `RoleManager::is_replica()`), and three test doubles
+  (`frogdb_core::shard::types::FixedRoleController`, `cluster_init::RecordingController`, and a
+  new local `FixedRoleController` in `guards.rs`'s test module).
+- Added two regression unit tests in `guards.rs`:
+  `stale_gate_trips_on_stranded_promotion_with_no_primary_target` (asserts a stranded node now
+  gets MASTERDOWN by default) and `stale_gate_does_not_trip_for_a_primary` (guards against
+  over-correction — a genuine primary must never be gated).
+
+All acceptance criteria are now met, including "the stranded-promotion state is exercised as a
+forcing case for the gate", which was the one criterion issue 17 had not covered. No further
+gap remains that is this issue's to own; issue 16 (making the stranded-promotion state itself
+more observable/retryable) stays open as its own, separately-scoped issue — this closure only
+required that the *existing* stale-read gate correctly treat that state as "link down", which it
+now does.
