@@ -2478,7 +2478,17 @@ async fn test_demoted_primary_stops_serving_psync_to_its_downstream() {
     // `node` boots writable, takes a downstream of its own, and is then demoted
     // under that downstream's feet.
     let node = TestServer::start_primary_with_config(config.clone()).await;
-    let downstream = TestServer::start_primary_with_config(config).await;
+    // The downstream keeps Redis's `replica-serve-stale-data yes` so the
+    // emptiness assertion at the end of this test still reads the keyspace.
+    // FrogDB's default is `no` (redis-feel issue 17), under which *every* read
+    // on a link-down replica answers `-MASTERDOWN` whether or not the relayed
+    // write arrived — which would let "did not receive the write" pass without
+    // ever looking.
+    let downstream = TestServer::start_primary_with_config(TestServerConfig {
+        replication_replica_serve_stale_data: Some(true),
+        ..config
+    })
+    .await;
 
     assert_ok(
         &downstream
@@ -2605,8 +2615,17 @@ async fn test_chained_replication_rejected_sub_replica_never_receives_data(
     );
 
     // node_b: boots standalone-writable, then REPLICAOF at runtime targets
-    // replica_a — the literal scenario from the acceptance criteria.
-    let node_b = TestServer::start_primary_with_config(config).await;
+    // replica_a — the literal scenario from the acceptance criteria. It keeps
+    // Redis's `replica-serve-stale-data yes` (FrogDB defaults to `no`, see
+    // redis-feel issue 17) so the "never receives data" assertions below reach
+    // the keyspace: under the refusal default a link-down replica answers
+    // `-MASTERDOWN` to every read, which is true whether or not data arrived
+    // and would make this test pass vacuously.
+    let node_b = TestServer::start_primary_with_config(TestServerConfig {
+        replication_replica_serve_stale_data: Some(true),
+        ..config
+    })
+    .await;
     let a_port = replica_a.port().to_string();
     assert_ok(&node_b.send("REPLICAOF", &["127.0.0.1", &a_port]).await);
 
@@ -5953,6 +5972,9 @@ async fn test_replica_recovers_offset_from_staged_metadata() {
     // 3. Boot a replica on the parent dir. It installs the staged checkpoint and
     //    must recover the offset from the metadata. The primary port is closed;
     //    background reconnect attempts do not affect recovery (which is sync).
+    //    `replica-serve-stale-data` is turned back on (Redis's default; FrogDB
+    //    defaults to `no` since redis-feel issue 17) because the link is down
+    //    for the whole test and step 5 has to read the installed snapshot.
     let replica = TestServer::start_with_config(
         TestServerConfig {
             persistence: true,
@@ -5960,6 +5982,7 @@ async fn test_replica_recovers_offset_from_staged_metadata() {
             num_shards: Some(1),
             replication_primary_host: Some("127.0.0.1".to_string()),
             replication_primary_port: Some(1),
+            replication_replica_serve_stale_data: Some(true),
             ..Default::default()
         },
         ServerRole::Replica,
@@ -6212,7 +6235,10 @@ async fn test_replica_ignores_corrupt_staged_metadata() {
     )
     .unwrap();
 
-    // Boot as a replica: must not panic.
+    // Boot as a replica: must not panic. `replica-serve-stale-data` is turned
+    // back on (Redis's default; FrogDB defaults to `no` since redis-feel issue
+    // 17) because the link is down for the whole test and the last step has to
+    // read the installed snapshot.
     let replica = TestServer::start_with_config(
         TestServerConfig {
             persistence: true,
@@ -6220,6 +6246,7 @@ async fn test_replica_ignores_corrupt_staged_metadata() {
             num_shards: Some(1),
             replication_primary_host: Some("127.0.0.1".to_string()),
             replication_primary_port: Some(1),
+            replication_replica_serve_stale_data: Some(true),
             ..Default::default()
         },
         ServerRole::Replica,
