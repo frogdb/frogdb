@@ -43,7 +43,7 @@ pub use handoff_barrier::{
 pub use migration_events::{
     MigrationNotice, plan_migration_notice, run_slot_migration_event_dispatcher,
 };
-pub use pubsub::{ClusterPubSubForwarder, ShardRoute, SpublishOutcome};
+pub use pubsub::{ClusterPubSubForwarder, ShardRoute, SpublishOutcome, SpublishRefusal};
 
 #[cfg(not(feature = "turmoil"))]
 pub use bus::BusTlsAcceptor;

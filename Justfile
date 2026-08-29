@@ -939,14 +939,25 @@ lint-redirect-seam:
         echo "$matches" >&2
         status=1
     fi
+    # The slot-scoped CLUSTERDOWN is a redirect too: SSUBSCRIBE, SPUBLISH
+    # (FM-CLUSTER-070), the slot fence and the blocked-client wake-up must all
+    # answer the same bytes for the same slot, or a client cannot tell it is
+    # talking to one cluster. (The quorum-fence CLUSTERDOWN texts are a
+    # different, non-slot-scoped family and live in CommandError.)
+    if matches=$(grep -rEn --include='*.rs' 'Response::error\((format!\()?"CLUSTERDOWN Hash slot' "$crates" \
+            | grep -v "/$owner:"); then
+        echo "ERROR: inline slot CLUSTERDOWN — use redirect::clusterdown_slot():" >&2
+        echo "$matches" >&2
+        status=1
+    fi
     if [ "$status" -ne 0 ]; then
         echo >&2
-        echo "       MOVED/ASK/CROSSSLOT wire formats are owned by" >&2
+        echo "       MOVED/ASK/CROSSSLOT/CLUSTERDOWN-slot wire formats are owned by" >&2
         echo "       frogdb-types/src/redirect.rs; constructing them elsewhere risks" >&2
         echo "       drift and the IPv6 address-bracketing bug." >&2
         exit 1
     fi
-    echo "OK: MOVED/ASK/CROSSSLOT replies come from the redirect seam"
+    echo "OK: MOVED/ASK/CROSSSLOT/CLUSTERDOWN-slot replies come from the redirect seam"
 
 # Run cargo-deny (license/security audit)
 deny:

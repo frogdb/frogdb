@@ -39,12 +39,13 @@ use frogdb_protocol::Response;
 use tokio::sync::oneshot;
 use tracing::debug;
 
+use crate::cluster::pubsub::SpublishOutcome;
 use crate::connection::ConnectionHandler;
 use crate::connection::deps::{ClusterDeps, CoreDeps};
 use crate::connection::permission_guard::PermissionGuard;
 use crate::connection::state::{ConnectionState, SubKind, SubscribeOutcome};
 use crate::scatter::{CountByKey, DedupSorted, SumIntegers};
-use crate::slot_migration::{RouteOutcome, SlotMigrationCoordinator};
+use crate::slot_migration::{RouteOutcome, SlotMigrationCoordinator, redirect};
 
 /// The broadcast pub/sub coordinator shard. Defined in `frogdb-core` because
 /// the cluster bus routes a peer's `PUBLISH` to the same shard; re-exported
@@ -190,6 +191,22 @@ fn group_channels_by_shard(
         per_shard.entry(shard).or_default().push(channel);
     }
     per_shard
+}
+
+/// Project an `SPUBLISH` routing outcome onto the client reply, or `None` when
+/// the caller must still deliver locally (FM-CLUSTER-070).
+///
+/// Pure, so the three-way projection is unit-testable without a connection: the
+/// forwarded count, the refusal, and the "keep going" case are the whole
+/// client-visible contract of the cluster leg. The refusal is built by
+/// [`redirect::clusterdown_slot`] — the same constructor `SSUBSCRIBE`'s routing
+/// seam uses — so the publish and subscribe paths cannot drift on the wire.
+fn spublish_forward_reply(outcome: SpublishOutcome) -> Option<Response> {
+    match outcome {
+        SpublishOutcome::Forwarded(count) => Some(Response::Integer(count as i64)),
+        SpublishOutcome::Refused { slot, .. } => Some(redirect::clusterdown_slot(slot)),
+        SpublishOutcome::Local => None,
+    }
 }
 
 /// Generate PUBSUB command help text.
@@ -549,8 +566,9 @@ impl<'a> PubSubIo<'a> {
 
     /// Handle SPUBLISH (sharded publish).
     ///
-    /// In cluster mode, forwards to the slot-owning node if the channel's slot
-    /// is not local.
+    /// In cluster mode, forwards to the slot-owning node when the channel's slot
+    /// is not local, and refuses when the local view cannot place the slot at
+    /// all (FM-CLUSTER-070).
     async fn handle_spublish(&self, args: &[Bytes]) -> Response {
         if args.len() != 2 {
             return Response::error("ERR wrong number of arguments for 'spublish' command");
@@ -559,14 +577,12 @@ impl<'a> PubSubIo<'a> {
         let channel = &args[0];
         let message = &args[1];
 
-        // In cluster mode, forward to the slot owner if not local.
+        // In cluster mode, forward to the slot owner, or refuse if unplaceable.
         if let Some(forwarder) = &self.cluster.pubsub_forwarder
-            && let Some(count) = forwarder
-                .forward_spublish(channel, message)
-                .await
-                .remote_count()
+            && let Some(reply) =
+                spublish_forward_reply(forwarder.forward_spublish(channel, message).await)
         {
-            return Response::Integer(count as i64);
+            return reply;
         }
 
         // Route to the owning shard locally.
@@ -1157,6 +1173,7 @@ impl ConnectionHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cluster::pubsub::SpublishRefusal;
 
     fn b(s: &str) -> Bytes {
         Bytes::copy_from_slice(s.as_bytes())
@@ -1242,6 +1259,59 @@ mod tests {
             };
             assert_eq!(items[0], Response::bulk(b(unsub_label)));
         }
+    }
+
+    fn error_text(resp: &Response) -> String {
+        match resp {
+            Response::Error(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+            other => panic!("expected an error response, got {other:?}"),
+        }
+    }
+
+    /// Both unplaceable routes refuse with the slot-scoped `CLUSTERDOWN` — the
+    /// byte-exact text `SSUBSCRIBE` already answers for the same slot — and
+    /// nothing is delivered. Pinned literally: a client keys off the code and a
+    /// human operator off the slot number.
+    // FM-CLUSTER-070
+    #[test]
+    fn spublish_refusal_replies_clusterdown_naming_the_slot() {
+        for cause in [
+            SpublishRefusal::Unowned,
+            SpublishRefusal::OwnerUnaddressable { owner: 7 },
+        ] {
+            let reply = spublish_forward_reply(SpublishOutcome::Refused { slot: 1234, cause })
+                .expect("a refusal must produce a reply, never fall through to local delivery");
+            assert_eq!(
+                error_text(&reply),
+                "CLUSTERDOWN Hash slot 1234 not served",
+                "{cause:?} must refuse with the slot-scoped CLUSTERDOWN"
+            );
+        }
+    }
+
+    /// A reachable remote owner still forwards: the count the owner reported is
+    /// the client's reply, unchanged by the refusal work (case 2 stays a
+    /// documented deviation from Redis' `MOVED`).
+    // FM-CLUSTER-070
+    #[test]
+    fn spublish_forwarded_outcome_replies_the_owners_count() {
+        assert_eq!(
+            spublish_forward_reply(SpublishOutcome::Forwarded(9)),
+            Some(Response::Integer(9)),
+        );
+        // A forward that reached nobody is still a forward, not a refusal.
+        assert_eq!(
+            spublish_forward_reply(SpublishOutcome::Forwarded(0)),
+            Some(Response::Integer(0)),
+        );
+    }
+
+    /// Owning the slot is the only outcome that falls through to the local
+    /// shard, which is what makes the local subscriber count the reply.
+    // FM-CLUSTER-070
+    #[test]
+    fn spublish_local_outcome_defers_to_local_delivery() {
+        assert_eq!(spublish_forward_reply(SpublishOutcome::Local), None);
     }
 
     /// Every pub/sub spec is a valid ConnectionLevel(PubSub) command.
