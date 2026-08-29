@@ -660,20 +660,48 @@ async fn tcl_command_docs_get() {
     assert_eq!(outer.len(), 2, "one name/docs pair: {outer:?}");
     assert_bulk_eq(&outer[0], b"get");
 
-    let fields = extract_bulk_strings(&outer[1]);
-    let pairs: Vec<(&str, &str)> = fields
-        .chunks(2)
-        .map(|c| (c[0].as_str(), c[1].as_str()))
-        .collect();
+    // GET's docs map also carries an `arguments` entry (its vendored `key`
+    // argument node) whose value is a nested map, not a bulk string — look
+    // fields up by name rather than assuming every value is a bulk string
+    // at a fixed position (see `response_pairs`).
+    let fields = response_pairs(&outer[1]);
+    let field = |name: &str| {
+        fields
+            .iter()
+            .find(|(k, _)| k == name)
+            .unwrap_or_else(|| panic!("COMMAND DOCS GET missing {name:?} field: {fields:?}"))
+            .1
+            .clone()
+    };
+    let text_field = |name: &str| String::from_utf8(unwrap_bulk(&field(name)).to_vec()).unwrap();
+
+    assert_eq!(text_field("summary"), "Returns the string value of a key.");
+    assert_eq!(text_field("since"), "1.0.0");
+    assert_eq!(text_field("group"), "string");
+    assert_eq!(text_field("complexity"), "O(1)");
+
+    // Real Redis 8 documents GET's sole `key` argument; assert it survives
+    // to the wire rather than merely being present.
+    let arguments = unwrap_array(field("arguments"));
+    assert_eq!(arguments.len(), 1, "GET takes exactly one argument");
+    let key_arg = response_pairs(&arguments[0]);
+    let arg_field = |name: &str| {
+        key_arg
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.clone())
+    };
     assert_eq!(
-        pairs,
-        vec![
-            ("summary", "Returns the string value of a key."),
-            ("since", "1.0.0"),
-            ("group", "string"),
-            ("complexity", "O(1)"),
-        ],
-        "COMMAND DOCS GET should carry real vendored documentation"
+        arg_field("name").map(|v| String::from_utf8(unwrap_bulk(&v).to_vec()).unwrap()),
+        Some("key".to_string())
+    );
+    assert_eq!(
+        arg_field("type").map(|v| String::from_utf8(unwrap_bulk(&v).to_vec()).unwrap()),
+        Some("key".to_string())
+    );
+    assert_eq!(
+        arg_field("key_spec_index").map(|v| unwrap_integer(&v)),
+        Some(0)
     );
 }
 

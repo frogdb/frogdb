@@ -100,3 +100,35 @@ pub fn extract_bulk_strings(response: &Response) -> Vec<String> {
         other => panic!("expected Array, got {other:?}"),
     }
 }
+
+/// Pairs up a RESP2-flattened map reply (`Response::Map`'s wire encoding is
+/// `[k0, v0, k1, v1, ...]`, see `frogdb_protocol::reply`) into `(key, value)`
+/// tuples, keeping each value as a raw `Response` rather than coercing it to
+/// a bulk string.
+///
+/// Use this instead of `extract_bulk_strings` when a map can hold non-bulk
+/// values (nested arrays/maps, e.g. `COMMAND DOCS`'s `arguments`/`history`
+/// entries) — `extract_bulk_strings` silently drops such values while
+/// keeping their key, desynchronizing any positional pairing of what
+/// remains. Looking fields up by name here is robust to that.
+pub fn response_pairs(response: &Response) -> Vec<(String, Response)> {
+    match response {
+        Response::Array(items) => items
+            .chunks(2)
+            .map(|pair| {
+                let key = match &pair[0] {
+                    Response::Bulk(Some(b)) => {
+                        String::from_utf8(b.to_vec()).expect("map key should be valid UTF-8")
+                    }
+                    other => panic!("expected Bulk map key, got {other:?}"),
+                };
+                let value = pair
+                    .get(1)
+                    .unwrap_or_else(|| panic!("map key {key:?} has no paired value"))
+                    .clone();
+                (key, value)
+            })
+            .collect(),
+        other => panic!("expected Array, got {other:?}"),
+    }
+}
