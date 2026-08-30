@@ -319,19 +319,26 @@ impl HealthTable {
     /// or it is not latched as failed AND was last seen within the staleness
     /// window `check_interval * (fail_threshold + 2)`. Nodes never seen, or not
     /// present in the table, are treated as unreachable (conservative).
-    fn reachable_count(&self, nodes: &[NodeInfo], self_node_id: NodeId, now: Instant) -> usize {
+    ///
+    /// Takes ids rather than nodes so the caller can stream them straight out
+    /// of the cluster-state read lock without materializing a node table.
+    fn reachable_count(
+        &self,
+        nodes: impl Iterator<Item = NodeId>,
+        self_node_id: NodeId,
+        now: Instant,
+    ) -> usize {
         // Consider a node unreachable if not seen in N check intervals.
         let stale_threshold = self.stale_threshold();
 
         nodes
-            .iter()
-            .filter(|node| {
-                if node.id == self_node_id {
+            .filter(|node_id| {
+                if *node_id == self_node_id {
                     return true; // Self is always reachable
                 }
 
                 // Check health entry
-                if let Some(entry) = self.health.get(&node.id) {
+                if let Some(entry) = self.health.get(node_id) {
                     // Node is reachable if:
                     // 1. Not marked as failed, AND
                     // 2. Has been seen recently (last_seen is Some and not stale)
@@ -353,8 +360,16 @@ impl HealthTable {
 
     /// Whether `self_node_id` can form a majority quorum among `nodes` at
     /// `now` (reachable >= floor(total / 2) + 1).
-    fn has_quorum(&self, nodes: &[NodeInfo], self_node_id: NodeId, now: Instant) -> bool {
-        let total_nodes = nodes.len();
+    ///
+    /// `total_nodes` is passed alongside the ids because the iterator is
+    /// consumed by the count and is not required to be sized.
+    fn has_quorum(
+        &self,
+        total_nodes: usize,
+        nodes: impl Iterator<Item = NodeId>,
+        self_node_id: NodeId,
+        now: Instant,
+    ) -> bool {
         let reachable = self.reachable_count(nodes, self_node_id, now);
         let quorum = (total_nodes / 2) + 1;
         reachable >= quorum
@@ -475,12 +490,12 @@ impl<R: DetectorRaft> FailureDetector<R> {
         let now = clock::now();
         let verdicts: Vec<(NodeId, LocalVerdict, bool)> = {
             let health = self.health.read().unwrap();
-            self.cluster_state
-                .get_all_nodes()
-                .into_iter()
-                .filter(|node| node.id != self.self_node_id)
-                .map(|node| (node.id, health.verdict(node.id, now), node.flags.fail))
-                .collect()
+            self.cluster_state.with_nodes(|_, nodes| {
+                nodes
+                    .filter(|node| node.id != self.self_node_id)
+                    .map(|node| (node.id, health.verdict(node.id, now), node.flags.fail))
+                    .collect()
+            })
         };
 
         for (node_id, verdict, marked_failed) in verdicts {
@@ -521,12 +536,18 @@ impl<R: DetectorRaft> FailureDetector<R> {
     }
 
     /// Check if this node can form a quorum with reachable nodes.
+    ///
+    /// Runs once per command on a fenced node (FM-CLUSTER-107's read fence
+    /// reads the same verdict as the write rung), so the node table is walked
+    /// in place under the read lock rather than cloned. Health lock first,
+    /// then the cluster-state read lock — the order [`Self::reconcile_topology`]
+    /// takes them in.
     pub fn has_quorum(&self) -> bool {
-        let all_nodes = self.cluster_state.get_all_nodes();
-        self.health
-            .read()
-            .unwrap()
-            .has_quorum(&all_nodes, self.self_node_id, clock::now())
+        let now = clock::now();
+        let health = self.health.read().unwrap();
+        self.cluster_state.with_nodes(|total, nodes| {
+            health.has_quorum(total, nodes.map(|node| node.id), self.self_node_id, now)
+        })
     }
 
     /// Mark a node as failed via Raft consensus.
@@ -1011,20 +1032,17 @@ pub fn spawn_failure_detector_task<R: DetectorRaft>(
                 detector.reconcile_topology();
             }
 
-            // Get all nodes from cluster state
-            let nodes = detector.cluster_state.get_all_nodes();
+            // Continue probing nodes marked as failed - they may recover.
+            // The record_success() method will mark them recovered via Raft.
+            let peers: Vec<(NodeId, SocketAddr)> = detector.cluster_state.with_nodes(|_, nodes| {
+                nodes
+                    .filter(|node| node.id != self_node_id)
+                    .map(|node| (node.id, node.cluster_addr))
+                    .collect()
+            });
 
-            for node in nodes {
-                if node.id == self_node_id {
-                    continue; // Don't check ourselves
-                }
-
-                // Continue checking nodes marked as failed - they may recover.
-                // The record_success() method will mark them recovered via Raft.
-
+            for (node_id, addr) in peers {
                 let detector = detector.clone();
-                let addr = node.cluster_addr;
-                let node_id = node.id;
 
                 // Check each node concurrently
                 tokio::spawn(async move {
@@ -1359,27 +1377,35 @@ mod tests {
         let mut table = HealthTable::new(fail_threshold, check_interval);
         let self_id: NodeId = 1;
         let peer_id: NodeId = 2;
-        let nodes = vec![make_node(self_id, 1), make_node(peer_id, 1)];
+        let nodes = [self_id, peer_id];
 
         table.record_success(peer_id, t0);
 
         // Just inside the window: peer still reachable (self always counts) => 2.
         assert_eq!(
-            table.reachable_count(&nodes, self_id, t0 + stale - Duration::from_millis(1)),
+            table.reachable_count(
+                nodes.iter().copied(),
+                self_id,
+                t0 + stale - Duration::from_millis(1)
+            ),
             2,
             "peer must be reachable just inside the staleness window"
         );
 
         // Exactly at the window boundary: strict `<` means peer is stale => 1 (self only).
         assert_eq!(
-            table.reachable_count(&nodes, self_id, t0 + stale),
+            table.reachable_count(nodes.iter().copied(), self_id, t0 + stale),
             1,
             "peer must be stale exactly at the boundary"
         );
 
         // Past the window: still just self.
         assert_eq!(
-            table.reachable_count(&nodes, self_id, t0 + stale + Duration::from_millis(1)),
+            table.reachable_count(
+                nodes.iter().copied(),
+                self_id,
+                t0 + stale + Duration::from_millis(1)
+            ),
             1
         );
     }
@@ -1394,11 +1420,7 @@ mod tests {
         let self_id: NodeId = 1;
         let never: NodeId = 2;
         let failed: NodeId = 3;
-        let nodes = vec![
-            make_node(self_id, 1),
-            make_node(never, 1),
-            make_node(failed, 1),
-        ];
+        let nodes = [self_id, never, failed];
 
         // `never` has no entry; `failed` gets latched.
         for _ in 0..3 {
@@ -1406,7 +1428,10 @@ mod tests {
         }
 
         // Only self counts.
-        assert_eq!(table.reachable_count(&nodes, self_id, now), 1);
+        assert_eq!(
+            table.reachable_count(nodes.iter().copied(), self_id, now),
+            1
+        );
     }
 
     /// Quorum arithmetic for odd and even cluster sizes.
@@ -1433,17 +1458,17 @@ mod tests {
 
         for (total, reachable_peers, expected) in cases {
             let mut table = HealthTable::new(3, check_interval);
-            let mut nodes = vec![make_node(self_id, 1)];
+            let mut nodes = vec![self_id];
             for peer in 0..(total - 1) {
                 let peer_id = (100 + peer) as NodeId;
-                nodes.push(make_node(peer_id, 1));
+                nodes.push(peer_id);
                 if peer < reachable_peers {
                     table.record_success(peer_id, now);
                 }
             }
 
             assert_eq!(
-                table.has_quorum(&nodes, self_id, now),
+                table.has_quorum(nodes.len(), nodes.iter().copied(), self_id, now),
                 expected,
                 "total={total} reachable_peers={reachable_peers} (+self)"
             );

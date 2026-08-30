@@ -461,7 +461,7 @@ impl Failover {
         sys.nodes[n].view.nodes.contains_key(&NODE_IDS[n])
     }
 
-    /// The peers detector `d` reconciles over: `get_all_nodes()` minus itself.
+    /// The peers detector `d` reconciles over: the node table minus itself.
     fn det_peers(&self, sys: &Sys, d: usize) -> Vec<usize> {
         let n = self.det_node(d);
         (0..NODES)

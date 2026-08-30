@@ -1,6 +1,6 @@
 # 45: `FailureDetector::has_quorum` allocates to answer a boolean
 
-Status: ready-for-agent
+Status: done
 
 ## Origin
 
@@ -70,3 +70,53 @@ edit rather than a drive-by inside a behavior change.
 ## Blocked by
 
 None.
+
+## Resolution
+
+Landed as the ruling described: iterate under lock, both callers converted,
+`get_all_nodes` deleted. No spec rows moved — the quorum arithmetic is
+byte-for-byte what it was, so FM-CLUSTER-055 and FM-CLUSTER-059 keep their
+invariants and their forcing tests changed shape only.
+
+**New reader.** `ClusterState::with_nodes` (`cluster/src/state.rs`):
+
+```rust
+pub fn with_nodes<T>(&self, f: impl FnOnce(usize, &mut dyn Iterator<Item = &NodeInfo>) -> T) -> T
+```
+
+One reader rather than a family of siblings: the closure gets the node count
+and a borrowed iterator under the existing read lock, and each caller projects
+out what it needs (ids for the quorum verdict, `(id, flags.fail)` for
+reconciliation, `(id, cluster_addr)` for the probe loop). Nothing escapes the
+lock and no `NodeInfo` is cloned. The lock is held for the duration of `f`, so
+`f` must not take another cluster-state lock — documented at the method.
+
+**Consumers.** `HealthTable::reachable_count` and `HealthTable::has_quorum`
+(`cluster-runtime/src/failure_detector.rs`) now take `impl Iterator<Item =
+NodeId>`; `has_quorum` takes the total alongside it because the iterator is
+consumed by the count and is not required to be sized. Self is still always
+reachable and quorum is still `floor(total/2)+1`.
+
+`get_all_nodes` had **three** production callers, not two — the issue text and
+ruling named `has_quorum` and `reconcile_topology`, but the probe loop in
+`spawn_failure_detector_task` was cloning the table once per check interval as
+well. All three converted; the probe loop now collects
+`Vec<(NodeId, SocketAddr)>` (it has to escape the lock — it spawns a task per
+peer). Lock order in `has_quorum` is health first, then cluster state, matching
+`reconcile_topology`.
+
+**Verification.**
+
+- `frogdb-cluster` 295 tests pass, `frogdb-cluster-runtime` 103 pass,
+  `frogdb-server` self-fence/quorum selection 17 pass (includes
+  `the_gauntlet_refuses_a_read_on_a_quorum_fenced_node`, the FM-CLUSTER-107
+  read fence that motivated this issue).
+- `just mutants-diff frogdb-cluster`: 1 mutant, 1 unviable, 0 missed. The only
+  mutant is `with_nodes -> Default::default()`, which cannot compile against a
+  generic `T`; the baseline built and its tests passed, so this is the
+  function's shape, not a scratch-directory problem. The reader's node count is
+  asserted by the FM-CLUSTER-078 test `state_readers_report_the_applied_table`.
+- `just mutants-diff frogdb-cluster-runtime`: 12 mutants, 8 caught, 4 unviable,
+  0 missed. The four unviable are `spawn_failure_detector_task`'s
+  `JoinHandle::{new,from,from_iter}` substitutions.
+- `just lint` (including `just lint-spec`) green.
