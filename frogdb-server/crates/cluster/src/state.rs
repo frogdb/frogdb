@@ -296,9 +296,21 @@ impl ClusterState {
         self.read_inner().nodes.get(&node_id).cloned()
     }
 
-    /// Get all nodes.
-    pub fn get_all_nodes(&self) -> Vec<NodeInfo> {
-        self.read_inner().nodes.values().cloned().collect()
+    /// Read the whole node table in place: `f` receives the node count and an
+    /// iterator over the nodes, both borrowed under the read lock.
+    ///
+    /// Callers project out what they need (ids, addresses, flags) instead of
+    /// being handed a cloned table — `FailureDetector::has_quorum` runs this
+    /// once per command on a fenced node, so the quorum read must not
+    /// allocate. The read lock is held for the duration of `f`, so `f` must
+    /// not take another cluster-state lock.
+    pub fn with_nodes<T>(
+        &self,
+        f: impl FnOnce(usize, &mut dyn Iterator<Item = &NodeInfo>) -> T,
+    ) -> T {
+        let inner = self.read_inner();
+        let total = inner.nodes.len();
+        f(total, &mut inner.nodes.values())
     }
 
     /// Get the node owning a slot.
@@ -1252,7 +1264,7 @@ mod tests {
         // published value.
         let _ = state.get_slot_owner(7);
         let _ = state.config_epoch();
-        let _ = state.get_all_nodes();
+        let _ = state.with_nodes(|total, _| total);
         assert!(Arc::ptr_eq(&first, &state.snapshot()));
     }
 
@@ -3894,7 +3906,7 @@ mod tests {
     #[test]
     fn state_readers_report_the_applied_table() {
         let state = ClusterState::new();
-        assert!(state.get_all_nodes().is_empty());
+        assert_eq!(state.with_nodes(|total, _| total), 0);
         assert!(state.get_node_slots(1).is_empty());
         assert!(
             !state.all_slots_assigned(),
@@ -3912,7 +3924,10 @@ mod tests {
                 })
                 .unwrap();
         }
-        let ids: Vec<NodeId> = state.get_all_nodes().iter().map(|n| n.id).collect();
+        let ids: Vec<NodeId> = state.with_nodes(|total, nodes| {
+            assert_eq!(total, 2, "the count must match the ids the reader yields");
+            nodes.map(|n| n.id).collect()
+        });
         assert_eq!(ids, vec![1, 2]);
 
         state
@@ -4001,7 +4016,7 @@ mod tests {
         let restored = ClusterState::from_snapshot(snapshot, original.self_node_id_atomic());
 
         assert_eq!(restored.self_node_id(), Some(4), "identity survives");
-        assert_eq!(restored.get_all_nodes().len(), 1);
+        assert_eq!(restored.with_nodes(|total, _| total), 1);
         assert_eq!(restored.get_slot_owner(5), Some(4));
         assert_eq!(restored.config_epoch(), original.config_epoch());
         assert!(restored.config_epoch() > 0);
@@ -4257,7 +4272,7 @@ mod tests {
 
         let mut builder = sm.get_snapshot_builder().await;
         assert_eq!(
-            builder.state().get_all_nodes().len(),
+            builder.state().with_nodes(|total, _| total),
             1,
             "the builder reads the state machine's own state"
         );
