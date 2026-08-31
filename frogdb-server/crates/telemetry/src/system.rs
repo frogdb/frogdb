@@ -9,7 +9,9 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 use tokio::time::interval;
 use tracing::{debug, warn};
 
+use crate::jemalloc;
 use frogdb_types::metrics::definitions::{
+    AllocatorActiveBytes, AllocatorAllocatedBytes, AllocatorFragRatio, AllocatorResidentBytes,
     CpuSystemSeconds, CpuUserSeconds, MemoryFragmentationRatio, MemoryMaxmemoryBytes,
     MemoryRssBytes, UptimeSeconds,
 };
@@ -117,6 +119,22 @@ impl SystemMetricsCollector {
             );
         } else {
             warn!(pid = ?self.pid, "Failed to get process info");
+        }
+
+        // Allocator gauges, straight from jemalloc's `mallctl` (see
+        // `crate::jemalloc`) — `None` on a build where jemalloc isn't
+        // linked (msvc), in which case these gauges are simply not
+        // emitted rather than reported as a lying zero.
+        if let Some(stats) = jemalloc::read_stats() {
+            AllocatorAllocatedBytes::set(&*self.recorder, stats.allocated as f64);
+            AllocatorActiveBytes::set(&*self.recorder, stats.active as f64);
+            AllocatorResidentBytes::set(&*self.recorder, stats.resident as f64);
+            if stats.allocated > 0 {
+                AllocatorFragRatio::set(
+                    &*self.recorder,
+                    stats.active as f64 / stats.allocated as f64,
+                );
+            }
         }
     }
 

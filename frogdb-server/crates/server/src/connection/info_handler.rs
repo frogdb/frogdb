@@ -9,11 +9,12 @@
 
 use bytes::Bytes;
 use frogdb_protocol::Response;
+use frogdb_telemetry::definitions::MemoryRssBytes;
 
 use crate::connection::ConnectionHandler;
 use crate::info::{
-    BaselineSnapshot, ClientsSnapshot, InfoBuilder, InfoSources, LatencySnapshot,
-    MemoryConfigSnapshot, PersistenceSnapshot, PrimarySnapshot, RateLimitSnapshot,
+    AllocatorSnapshot, BaselineSnapshot, ClientsSnapshot, InfoBuilder, InfoSources,
+    LatencySnapshot, MemoryConfigSnapshot, PersistenceSnapshot, PrimarySnapshot, RateLimitSnapshot,
     ReplicationSnapshot, SectionSelector, gather_shard_snapshot,
 };
 
@@ -241,6 +242,23 @@ impl ConnectionHandler {
                 maxmemory: config.maxmemory(),
                 policy: config.maxmemory_policy().to_string(),
             },
+            // Fresh mallctl read, not the periodic collector's gauge (see
+            // `AllocatorSnapshot`'s doc comment) — cheap enough to read on
+            // every INFO call and never collection-interval-stale.
+            allocator: AllocatorSnapshot {
+                stats: frogdb_telemetry::jemalloc::read_stats(),
+                name: frogdb_telemetry::jemalloc::allocator_name(),
+            },
+            // The same gauge Prometheus scrapes, so INFO's
+            // `used_memory_rss` and `/metrics`' `frogdb_memory_rss_bytes`
+            // never disagree (OS RSS needs a `sysinfo::System` the periodic
+            // `SystemMetricsCollector` already maintains; re-reading it here
+            // is deferred to that same collector rather than duplicated).
+            used_memory_rss: self
+                .observability
+                .metrics_recorder
+                .gauge_value(MemoryRssBytes::NAME)
+                .map(|v| v as u64),
             baseline,
             key_memory_enabled: config.key_memory_histograms_enabled(),
             shards,

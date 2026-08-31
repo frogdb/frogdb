@@ -27,6 +27,7 @@ pub mod config;
 pub mod health;
 pub mod http_handlers;
 mod interned_registry;
+pub mod jemalloc;
 pub mod latency_bands;
 pub mod node_state;
 pub mod otlp;
@@ -49,6 +50,7 @@ pub use health::HealthChecker;
 pub use http_handlers::{
     handle_health_live, handle_health_ready, handle_metrics, handle_status_json,
 };
+pub use jemalloc::AllocatorStats;
 pub use latency_bands::LatencyBandTracker;
 pub use node_state::{NodeStateSnapshot, ShardScatterError, ShardState};
 pub use prometheus_recorder::{

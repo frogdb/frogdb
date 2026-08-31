@@ -400,11 +400,18 @@ fn memory_malloc_size(args: &[Bytes]) -> Response {
     }
 }
 
-/// MEMORY PURGE — force memory release (stub).
+/// MEMORY PURGE — force jemalloc to return unused dirty pages to the OS
+/// (`arena.<all>.purge`, see [`frogdb_telemetry::jemalloc::purge_all`]).
+/// Matches real Redis: `+OK` on success, and — only reachable on a build
+/// where jemalloc is linked at all — `"Error purging dirty pages"` if the
+/// `mallctl` call itself fails. The `msvc` build has no jemalloc to purge,
+/// same as upstream Redis's non-jemalloc fallback, so it's an unconditional
+/// no-op success there too.
 fn memory_purge() -> Response {
-    // Without jemalloc, this is a no-op
-    // In a real implementation this would call jemalloc_purge_arena or similar
-    Response::ok()
+    match frogdb_telemetry::jemalloc::purge_all() {
+        Ok(()) => Response::ok(),
+        Err(_) => Response::error("ERR Error purging dirty pages"),
+    }
 }
 
 /// MEMORY STATS — get detailed memory statistics.
@@ -1116,6 +1123,10 @@ mod tests {
 
     #[tokio::test]
     async fn memory_purge_is_ok() {
+        // Exercises the real `arena.<all>.purge` mallctl (see
+        // `frogdb_telemetry::jemalloc::purge_all`), not a stub — this
+        // asserts the actual allocator call succeeds under test, matching
+        // the `+OK` real Redis returns on a successful purge.
         let fx = Fixture::new();
         let resp = MemoryConnCommand
             .execute(&mut fx.ctx(), &[arg("PURGE")])

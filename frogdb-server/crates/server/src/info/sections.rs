@@ -175,11 +175,48 @@ impl InfoSection for MemorySection {
             100.0
         };
 
+        // Real jemalloc `mallctl` reads (`None` only on the `msvc` build,
+        // which links no jemalloc at all — see
+        // `frogdb_telemetry::jemalloc`). `allocator_resident` doubles as
+        // the `used_memory_rss` fallback when the OS-RSS gauge hasn't been
+        // populated yet (e.g. the periodic collector's first tick hasn't
+        // fired), so every one of these fields is a real read rather than
+        // a placeholder even before that gauge exists.
+        let allocator = src.allocator();
+        let stats = allocator.stats.unwrap_or_default();
+        let allocated = stats.allocated;
+        let active = stats.active;
+        let resident = stats.resident;
+        let rss = src.used_memory_rss().unwrap_or(resident);
+
+        // Same derivations Redis uses: `allocator_frag_ratio` is the
+        // allocator's own active/allocated fragmentation,
+        // `allocator_rss_ratio` is resident/active overhead, and the
+        // top-level `mem_fragmentation_ratio` is OS RSS over allocator
+        // `allocated` (Redis: `zmalloc_get_fragmentation_ratio(rss)` ==
+        // `rss / zmalloc_used_memory()`, and `zmalloc_used_memory()` under
+        // jemalloc tracks the same bytes as `stats.allocated`).
+        let frag_ratio = |num: u64, den: u64| {
+            if den > 0 {
+                num as f64 / den as f64
+            } else {
+                1.0
+            }
+        };
+        let allocator_frag_ratio = frag_ratio(active, allocated);
+        let allocator_frag_bytes = active as i64 - allocated as i64;
+        let allocator_rss_ratio = frag_ratio(resident, active);
+        let allocator_rss_bytes = resident as i64 - active as i64;
+        let rss_overhead_ratio = frag_ratio(rss, resident);
+        let rss_overhead_bytes = rss as i64 - resident as i64;
+        let mem_fragmentation_ratio = frag_ratio(rss, allocated);
+        let mem_fragmentation_bytes = rss as i64 - allocated as i64;
+
         let mut w = SectionWriter::new("Memory");
         w.field("used_memory", used)
             .field("used_memory_human", format!("{}K", used / 1024))
-            .field("used_memory_rss", used)
-            .field("used_memory_rss_human", format!("{}K", used / 1024))
+            .field("used_memory_rss", rss)
+            .field("used_memory_rss_human", format!("{}K", rss / 1024))
             .field("used_memory_peak", peak)
             .field("used_memory_peak_human", format!("{}K", peak / 1024))
             .field("used_memory_peak_perc", format!("{peak_perc:.2}%"))
@@ -187,9 +224,9 @@ impl InfoSection for MemorySection {
             .field("used_memory_startup", 0)
             .field("used_memory_dataset", used)
             .field("used_memory_dataset_perc", "100.00%")
-            .field("allocator_allocated", 0)
-            .field("allocator_active", 0)
-            .field("allocator_resident", 0)
+            .field("allocator_allocated", allocated)
+            .field("allocator_active", active)
+            .field("allocator_resident", resident)
             .field("total_system_memory", 0)
             .field("total_system_memory_human", "0K")
             .field("used_memory_lua", 0)
@@ -207,20 +244,23 @@ impl InfoSection for MemorySection {
                 },
             )
             .field("maxmemory_policy", &cfg.policy)
-            .field("allocator_frag_ratio", "1.00")
-            .field("allocator_frag_bytes", 0)
-            .field("allocator_rss_ratio", "1.00")
-            .field("allocator_rss_bytes", 0)
-            .field("rss_overhead_ratio", "1.00")
-            .field("rss_overhead_bytes", 0)
-            .field("mem_fragmentation_ratio", "1.00")
-            .field("mem_fragmentation_bytes", 0)
+            .field("allocator_frag_ratio", format!("{allocator_frag_ratio:.2}"))
+            .field("allocator_frag_bytes", allocator_frag_bytes)
+            .field("allocator_rss_ratio", format!("{allocator_rss_ratio:.2}"))
+            .field("allocator_rss_bytes", allocator_rss_bytes)
+            .field("rss_overhead_ratio", format!("{rss_overhead_ratio:.2}"))
+            .field("rss_overhead_bytes", rss_overhead_bytes)
+            .field(
+                "mem_fragmentation_ratio",
+                format!("{mem_fragmentation_ratio:.2}"),
+            )
+            .field("mem_fragmentation_bytes", mem_fragmentation_bytes)
             .field("mem_not_counted_for_evict", 0)
             .field("mem_replication_backlog", 0)
             .field("mem_clients_slaves", 0)
             .field("mem_clients_normal", 0)
             .field("mem_aof_buffer", 0)
-            .field("mem_allocator", "rust")
+            .field("mem_allocator", &allocator.name)
             .field("active_defrag_running", 0)
             .field("lazyfree_pending_objects", 0)
             .field("lazyfreed_objects", sh.lazyfreed_objects);
@@ -838,7 +878,8 @@ impl InfoSection for KeysizesSection {
 mod tests {
     use super::super::test_support::sources;
     use super::super::{
-        InfoBuilder, PrimarySnapshot, RateLimitSnapshot, ReplicaLine, ReplicaState, SectionSelector,
+        AllocatorSnapshot, InfoBuilder, PrimarySnapshot, RateLimitSnapshot, ReplicaLine,
+        ReplicaState, SectionSelector,
     };
     use super::*;
     use frogdb_core::{ServerCommandStats, WalLagAggregate};
@@ -1076,6 +1117,65 @@ mod tests {
         assert!(out.contains("used_memory_peak_perc:50.00%\r\n"), "{out}");
         assert!(out.contains("lazyfreed_objects:6\r\n"), "{out}");
         assert!(out.contains("maxmemory_policy:noeviction\r\n"), "{out}");
+    }
+
+    /// Allocator fields come from a real jemalloc `mallctl` read (see
+    /// `frogdb_telemetry::jemalloc`), not a stub: nonzero, and internally
+    /// consistent with the resident >= active >= allocated ordering
+    /// jemalloc guarantees.
+    #[test]
+    #[cfg(not(target_env = "msvc"))]
+    fn memory_renders_real_jemalloc_allocator_fields() {
+        let mut src = sources();
+        // Force an allocation so the numbers can't be a startup fluke.
+        let _keep_alive: Vec<u8> = vec![0u8; 4 * 1024 * 1024];
+        let stats = frogdb_telemetry::jemalloc::read_stats()
+            .expect("jemalloc stats should be readable when linked");
+        src.allocator = AllocatorSnapshot {
+            stats: Some(stats),
+            name: frogdb_telemetry::jemalloc::allocator_name(),
+        };
+        // No OS-RSS gauge wired in this test source — falls back to
+        // jemalloc's own `resident`, itself a real (nonzero) read.
+        src.used_memory_rss = None;
+
+        let out = render(&MemorySection, &src);
+        for field in [
+            "allocator_allocated",
+            "allocator_active",
+            "allocator_resident",
+            "used_memory_rss",
+        ] {
+            let value: u64 = out
+                .lines()
+                .find_map(|l| l.strip_prefix(&format!("{field}:")))
+                .unwrap_or_else(|| panic!("missing {field} in {out}"))
+                .trim_end_matches('\r')
+                .parse()
+                .unwrap_or_else(|_| panic!("{field} not an integer in {out}"));
+            assert!(value > 0, "{field} should be nonzero, got {value} in {out}");
+        }
+        assert!(
+            out.contains(&format!("mem_allocator:{}\r\n", stats_allocator_name(&src))),
+            "{out}"
+        );
+        let frag_ratio: f64 = out
+            .lines()
+            .find_map(|l| l.strip_prefix("allocator_frag_ratio:"))
+            .unwrap()
+            .trim_end_matches('\r')
+            .parse()
+            .unwrap();
+        assert!(
+            frag_ratio >= 0.9,
+            "allocator_frag_ratio should be close to 1.0 (active >= allocated by a small page-rounding margin), got {frag_ratio}"
+        );
+        drop(_keep_alive);
+    }
+
+    #[cfg(not(target_env = "msvc"))]
+    fn stats_allocator_name(src: &InfoSources) -> String {
+        src.allocator().name.clone()
     }
 
     #[test]

@@ -33,7 +33,7 @@ use frogdb_replication::{
     BacklogGeometry, NetByteCountersSnapshot, Phase, ReplicaInfo, SyncCountersSnapshot,
 };
 use frogdb_telemetry::definitions::{CommandsTotal, WalBytes, WalWrites};
-use frogdb_telemetry::{NodeStateSnapshot, ShardScatterError};
+use frogdb_telemetry::{AllocatorStats, NodeStateSnapshot, ShardScatterError};
 use tracing::warn;
 
 // ============================================================================
@@ -720,6 +720,21 @@ pub struct MemoryConfigSnapshot {
     pub policy: String,
 }
 
+/// Allocator introspection for the Memory section, read fresh from
+/// jemalloc's `mallctl` at INFO-render time (see
+/// [`frogdb_telemetry::jemalloc`]) rather than funneled through the
+/// periodic metrics collector — a fresh read is exactly as cheap as a
+/// gauge lookup and every call gets the current number instead of one up
+/// to a collection interval stale.
+#[derive(Debug, Clone, Default)]
+pub struct AllocatorSnapshot {
+    /// `stats.allocated`/`active`/`resident`, or `None` on a build where
+    /// jemalloc isn't linked (msvc).
+    pub stats: Option<AllocatorStats>,
+    /// `"jemalloc-<version>"`, or the msvc build's fallback name.
+    pub name: String,
+}
+
 /// Everything a section can read, gathered once per INFO request.
 ///
 /// The single round of shard messaging happens in
@@ -743,6 +758,13 @@ pub struct InfoSources {
     pub(crate) replication: ReplicationSnapshot,
     pub(crate) persistence: PersistenceSnapshot,
     pub(crate) memory_config: MemoryConfigSnapshot,
+    pub(crate) allocator: AllocatorSnapshot,
+    /// OS-level process RSS, from the same `frogdb_memory_rss_bytes` gauge
+    /// Prometheus scrapes (matches Redis's `used_memory_rss`, an OS read
+    /// rather than an allocator read — see [`AllocatorSnapshot`]). `None`
+    /// when metrics are disabled or the periodic collector hasn't ticked
+    /// yet.
+    pub(crate) used_memory_rss: Option<u64>,
     pub(crate) baseline: Option<BaselineSnapshot>,
     pub(crate) key_memory_enabled: bool,
     pub(crate) shards: NodeStateSnapshot,
@@ -840,6 +862,19 @@ impl InfoSources {
         &self.memory_config
     }
 
+    /// Allocator introspection, read fresh from jemalloc's `mallctl`. See
+    /// [`AllocatorSnapshot`].
+    pub fn allocator(&self) -> &AllocatorSnapshot {
+        &self.allocator
+    }
+
+    /// OS-level process RSS, from the same gauge Prometheus scrapes. `None`
+    /// when metrics are disabled or the periodic collector hasn't ticked
+    /// yet.
+    pub fn used_memory_rss(&self) -> Option<u64> {
+        self.used_memory_rss
+    }
+
     /// Startup latency-baseline results, if the test was run.
     pub fn baseline(&self) -> Option<&BaselineSnapshot> {
         self.baseline.as_ref()
@@ -928,6 +963,8 @@ pub(crate) mod test_support {
                 maxmemory: 0,
                 policy: "noeviction".to_string(),
             },
+            allocator: AllocatorSnapshot::default(),
+            used_memory_rss: None,
             baseline: None,
             key_memory_enabled: true,
             shards: NodeStateSnapshot::default(),

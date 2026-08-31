@@ -49,6 +49,17 @@ sysinfo = "0.38"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# Allocator introspection (mallctl epoch/stats/purge) — same cfg gate as the
+# `tikv-jemallocator` global allocator in `frogdb-server` (not linked on
+# msvc). `tikv-jemalloc-sys` is pulled in transitively by both
+# `tikv-jemallocator` and `tikv-jemalloc-ctl` already; naming it directly
+# lets us issue the raw `mallctl("arena.<N>.purge", ...)` call MEMORY PURGE
+# needs (jemalloc's arena-purge control takes no old/new value at all, which
+# the typed `tikv-jemalloc-ctl` read/write helpers cannot express).
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemalloc-ctl = { version = "0.6", features = ["stats"] }
+tikv-jemalloc-sys = "0.6"
+
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }

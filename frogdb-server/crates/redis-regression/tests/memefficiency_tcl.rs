@@ -9,7 +9,7 @@
 //!    across allocators. The whole `start_server` block is tagged
 //!    `external:skip`, so upstream CI only runs it against a freshly
 //!    launched Redis instance. FrogDB's memory accounting model is
-//!    entirely different (we use mimalloc by default, accounted via
+//!    entirely different (we use jemalloc, accounted via
 //!    `MEMORY STATS` / `MEMORY USAGE`), and we don't emit a
 //!    `used_memory` figure that's comparable to the write workload in
 //!    the same way — porting the assertions would require invention
