@@ -82,8 +82,12 @@ pub struct TrackingTable {
     key_to_clients: HashMap<Bytes, HashSet<ConnId>>,
     /// Reverse index: conn_id → set of tracked keys (for O(1) connection cleanup).
     client_to_keys: HashMap<ConnId, HashSet<Bytes>>,
-    /// LRU eviction order (front = oldest).
+    /// LRU eviction order (front = oldest). May contain stale entries — keys
+    /// already removed from `key_to_clients` by `invalidate_keys` or
+    /// `remove_connection` — until the next compaction.
     lru_order: VecDeque<Bytes>,
+    /// Number of `lru_order` entries known to be stale since the last compaction.
+    stale_count: usize,
     /// Maximum number of tracked keys.
     max_keys: usize,
 }
@@ -95,8 +99,60 @@ impl TrackingTable {
             key_to_clients: HashMap::new(),
             client_to_keys: HashMap::new(),
             lru_order: VecDeque::new(),
+            stale_count: 0,
             max_keys,
         }
+    }
+
+    /// Record that a key was removed from `key_to_clients`, leaving a stale
+    /// entry behind in `lru_order`. Compacts once stale entries outnumber live
+    /// ones, keeping `lru_order` bounded by the live keyspace even under a
+    /// read-then-invalidate workload that never trips `evict_lru`.
+    fn mark_stale(&mut self) {
+        self.stale_count += 1;
+        if self.stale_count > self.key_to_clients.len() {
+            self.compact_lru();
+        }
+    }
+
+    /// Drop every stale (no-longer-live) entry from `lru_order`.
+    fn compact_lru(&mut self) {
+        let key_to_clients = &self.key_to_clients;
+        self.lru_order
+            .retain(|key| key_to_clients.contains_key(key));
+        self.stale_count = 0;
+    }
+
+    /// Number of entries currently in `lru_order`, stale entries included.
+    /// Exposed so tests can assert the LRU stays bounded independent of
+    /// `key_to_clients`.
+    #[cfg(test)]
+    pub(crate) fn lru_len(&self) -> usize {
+        self.lru_order.len()
+    }
+
+    /// Approximate heap footprint of this table, for `MEMORY STATS`/`INFO`
+    /// accounting. Cheap and approximate, not precise allocator accounting —
+    /// but it keeps the table's growth (including stale `lru_order` entries
+    /// pending compaction) from being invisible to the operator.
+    pub(crate) fn memory_usage(&self) -> usize {
+        const ENTRY_OVERHEAD: usize = 64;
+        let key_to_clients: usize = self
+            .key_to_clients
+            .iter()
+            .map(|(k, v)| k.len() + ENTRY_OVERHEAD + v.len() * std::mem::size_of::<ConnId>())
+            .sum();
+        let client_to_keys: usize = self
+            .client_to_keys
+            .values()
+            .map(|keys| ENTRY_OVERHEAD + keys.iter().map(Bytes::len).sum::<usize>())
+            .sum();
+        let lru_order: usize = self
+            .lru_order
+            .iter()
+            .map(|key| key.len() + std::mem::size_of::<Bytes>())
+            .sum();
+        key_to_clients + client_to_keys + lru_order
     }
 
     /// Record that `conn_id` read this key. LRU-evict if over capacity.
@@ -170,9 +226,9 @@ impl TrackingTable {
                         }
                     }
                 }
+
+                self.mark_stale();
             }
-            // Note: We don't remove from lru_order here — stale entries are
-            // cleaned lazily during eviction (the key won't be in key_to_clients).
         }
     }
 
@@ -185,6 +241,7 @@ impl TrackingTable {
         self.key_to_clients.clear();
         self.client_to_keys.clear();
         self.lru_order.clear();
+        self.stale_count = 0;
     }
 
     /// Remove all tracking entries for a disconnected connection.
@@ -196,7 +253,7 @@ impl TrackingTable {
                     clients.remove(&conn_id);
                     if clients.is_empty() {
                         self.key_to_clients.remove(&key);
-                        // Stale lru_order entries cleaned lazily during eviction
+                        self.mark_stale();
                     }
                 }
             }
@@ -227,7 +284,9 @@ impl TrackingTable {
                 }
                 return; // Evicted one real key
             }
-            // If key wasn't in key_to_clients, it was stale — continue to next
+            // Key wasn't in key_to_clients — it was already stale (invalidated
+            // or its owning connection removed). Account for it and continue.
+            self.stale_count = self.stale_count.saturating_sub(1);
         }
     }
 }
@@ -439,6 +498,85 @@ mod tests {
             }
             _ => panic!("Expected Keys message for evicted key"),
         }
+    }
+
+    #[test]
+    fn test_evict_lru_skips_stale_entries() {
+        let (registry, mut rxs) = make_registry_with(vec![(1, false)]);
+        let mut table = TrackingTable::new(3); // Max 3 keys
+
+        table.record_read(b"a", 1, &registry);
+        table.record_read(b"b", 1, &registry);
+        table.record_read(b"c", 1, &registry);
+        assert_eq!(table.key_to_clients.len(), 3);
+
+        // Invalidate "a" — leaves a stale lru_order entry ahead of "b" and
+        // "c". Live count (2) still covers the 1 stale entry, so no
+        // compaction fires and the stale entry lingers, exactly the
+        // situation evict_lru must skip over.
+        table.invalidate_keys(&[b"a"], 2, &registry);
+        let _ = rxs[0].try_recv(); // drain "a"'s invalidation
+        assert_eq!(table.key_to_clients.len(), 2);
+
+        // Grow past capacity with two more distinct keys so evict_lru runs.
+        table.record_read(b"d", 1, &registry);
+        table.record_read(b"e", 1, &registry);
+
+        // evict_lru must have popped the stale "a" entry without evicting
+        // anything for it, then evicted "b" — the oldest *live* key.
+        assert_eq!(table.key_to_clients.len(), 3);
+        assert!(!table.key_to_clients.contains_key(&Bytes::from_static(b"a")));
+        assert!(!table.key_to_clients.contains_key(&Bytes::from_static(b"b")));
+        assert!(table.key_to_clients.contains_key(&Bytes::from_static(b"c")));
+        assert!(table.key_to_clients.contains_key(&Bytes::from_static(b"d")));
+        assert!(table.key_to_clients.contains_key(&Bytes::from_static(b"e")));
+
+        let msg = rxs[0].try_recv().unwrap();
+        match msg {
+            InvalidationMessage::Keys(keys) => {
+                assert_eq!(keys, vec![Bytes::from_static(b"b")]);
+            }
+            _ => panic!("Expected Keys message for evicted key"),
+        }
+    }
+
+    #[test]
+    fn test_lru_order_bounded_after_invalidate() {
+        let (registry, _rxs) = make_registry_with(vec![(1, false)]);
+        let mut table = TrackingTable::new(DEFAULT_TRACKING_TABLE_MAX_KEYS);
+
+        for i in 0..10_000u32 {
+            let key = i.to_be_bytes();
+            table.record_read(&key, 1, &registry);
+            table.invalidate_keys(&[&key], 2, &registry);
+        }
+
+        // A read-then-invalidate workload never touches evict_lru (no key
+        // ever accumulates past max_keys), so lru_order must be bounded by
+        // compaction alone — O(live keys), not O(iterations = 10_000).
+        assert!(
+            table.lru_len() < 100,
+            "lru_order grew unbounded: {} entries after 10_000 read+invalidate cycles",
+            table.lru_len()
+        );
+    }
+
+    #[test]
+    fn test_lru_order_bounded_after_remove_connection() {
+        let (registry, _rxs) = make_registry_with(vec![(1, false)]);
+        let mut table = TrackingTable::new(DEFAULT_TRACKING_TABLE_MAX_KEYS);
+
+        for i in 0..10_000u32 {
+            let key = i.to_be_bytes();
+            table.record_read(&key, 1, &registry);
+            table.remove_connection(1);
+        }
+
+        assert!(
+            table.lru_len() < 100,
+            "lru_order grew unbounded: {} entries after 10_000 read+remove_connection cycles",
+            table.lru_len()
+        );
     }
 
     #[test]

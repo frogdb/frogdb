@@ -42,9 +42,10 @@ impl ShardWorker {
         let data_memory = self.store.memory_used();
         let keys = self.store.len();
 
-        // Estimate overhead: hashmap overhead per key + shard-level structures
+        // Estimate overhead: hashmap overhead per key + shard structures +
+        // the client-side-caching tracking table (key/client indices + LRU order).
         let per_key_overhead = 64; // Rough estimate for HashMap entry overhead
-        let overhead_estimate = keys * per_key_overhead + 1024; // Plus shard structures
+        let overhead_estimate = keys * per_key_overhead + 1024 + self.tracking.memory_usage();
 
         ShardMemoryStats {
             shard_id: self.shard_id(),

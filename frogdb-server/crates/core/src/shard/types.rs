@@ -608,6 +608,12 @@ impl ShardTracking {
     pub(crate) fn flush_all_tracking(&mut self) {
         self.tracking_table.flush_all(&self.invalidation_registry);
     }
+
+    /// Approximate heap footprint of the tracking table (key/client indices +
+    /// LRU order, stale entries included), for memory accounting.
+    pub(crate) fn memory_usage(&self) -> usize {
+        self.tracking_table.memory_usage()
+    }
 }
 
 /// Scripting: Lua script executor, function registry.
