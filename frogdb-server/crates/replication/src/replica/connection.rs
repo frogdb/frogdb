@@ -3,7 +3,7 @@
 use crate::frame::serialize_command_to_resp;
 use crate::fullsync::{
     CheckpointChecksum, CheckpointStager, CheckpointStreamCodec, calculate_bytes_checksum,
-    receive_checkpoint_files,
+    receive_checkpoint_files, receive_dataset_blob,
 };
 use crate::net_bytes::NetByteCounters;
 use crate::state::ReplicationState;
@@ -363,6 +363,12 @@ impl ReplicaConnection {
     /// corrupted or truncated dataset fails the sync instead of being installed
     /// as if it were the primary's keyspace.
     ///
+    /// That verification is the *last* line, not the only one: it can only run
+    /// once every blob is already in memory, so each body is read through
+    /// [`receive_dataset_blob`], which bounds the header's claimed size and
+    /// chunks the read (FM-REPLICATION-068). A header naming more than a
+    /// receiver could hold fails the sync before a byte is allocated.
+    ///
     /// **Durability note.** The offset this sync adopts is in memory until the
     /// next replication-state save. A crash in that window leaves the installed
     /// dataset with a state file that still names the *previous* offset; the
@@ -380,16 +386,7 @@ impl ReplicaConnection {
             let mut combined = CheckpointChecksum::new();
             for _ in 0..blob_count {
                 let header = CheckpointStreamCodec::read_file_header(&mut *reader).await?;
-                let mut blob = vec![
-                    0u8;
-                    usize::try_from(header.size).map_err(|_| {
-                        io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "dataset blob size overflows usize",
-                        )
-                    })?
-                ];
-                reader.read_exact(&mut blob).await?;
+                let blob = receive_dataset_blob(&mut *reader, header.size).await?;
                 combined.update_file(&header.name, &calculate_bytes_checksum(&blob));
                 blobs.push(blob);
             }
@@ -1351,8 +1348,23 @@ mod tests {
         )
         .await;
         body.extend_from_slice(tail);
+        dataset_fixture_from_bytes(tmp, body, blobs.len(), installer).await
+    }
 
-        let (mut client, server) = tokio::io::duplex(64 * 1024);
+    /// As [`dataset_fixture`], over an already-encoded body — for the
+    /// hand-framed shapes the encoder cannot produce (a header that overstates
+    /// its blob).
+    ///
+    /// The duplex is sized to hold the whole body, because the fixture writes it
+    /// before anything reads it: a body larger than the pipe would deadlock the
+    /// write instead of exercising the receive.
+    async fn dataset_fixture_from_bytes(
+        tmp: &std::path::Path,
+        body: Vec<u8>,
+        blob_count: usize,
+        installer: Option<SnapshotInstaller>,
+    ) -> CheckpointFixture {
+        let (mut client, server) = tokio::io::duplex(body.len().max(64 * 1024) + 1024);
         let state = Arc::new(RwLock::new(ReplicationState::new()));
         let offsets = ReplicaOffset::new(
             state.clone(),
@@ -1381,7 +1393,7 @@ mod tests {
 
         CheckpointFixture {
             conn,
-            file_count: blobs.len(),
+            file_count: blob_count,
             state,
             offsets,
             link_up,
@@ -1504,6 +1516,86 @@ mod tests {
         );
         assert_eq!(f.offsets.current(), 0);
         assert_ne!(f.conn.connection_state, ConnectionState::Streaming);
+    }
+
+    /// A blob header naming a size no receiver could hold fails the sync on the
+    /// header, in the same lane a bad checksum fails it: the connection errors,
+    /// nothing is installed, and the reconnect asks for a fresh full resync.
+    ///
+    /// Before the bound the size was a `vec![0u8; header.size]` straight off the
+    /// wire, so a primary that was hostile, buggy or mid-crash could name a
+    /// terabyte and have the replica try to reserve it — a remote OOM, decided
+    /// before the checksum that would have caught the lie ever ran.
+    // FM-REPLICATION-068
+    #[tokio::test]
+    async fn receive_snapshot_refuses_a_blob_header_beyond_the_ceiling() {
+        let tmp = tempfile::tempdir().unwrap();
+        let installed = Arc::new(AtomicBool::new(false));
+        let installer = {
+            let installed = installed.clone();
+            Arc::new(move |_payload: FullSyncPayload| {
+                installed.store(true, Ordering::Release);
+                Box::pin(async { Ok(()) })
+                    as Pin<Box<dyn Future<Output = Result<(), InstallError>> + Send>>
+            }) as SnapshotInstaller
+        };
+
+        // Hand-framed: the encoder derives the size from the payload, so only a
+        // header written by hand can overstate it.
+        let name = "shard-0.dataset";
+        let body = format!("${}\r\n{name}\r\n${}\r\n", name.len(), 1u64 << 40).into_bytes();
+
+        let mut f = dataset_fixture_from_bytes(tmp.path(), body, 1, Some(installer)).await;
+        let err = f.conn.receive_snapshot(f.file_count).await.unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("exceeds maximum"), "got: {err}");
+        assert!(
+            !installed.load(Ordering::Acquire),
+            "a refused header never reaches the shards"
+        );
+        assert_eq!(f.offsets.current(), 0, "rewound so PSYNC asks ? -1");
+        assert_ne!(f.conn.connection_state, ConnectionState::Streaming);
+        assert!(!f.link_up.load(Ordering::Acquire));
+    }
+
+    /// The bound does not cost the honest case its bytes: a dataset whose blobs
+    /// span several read chunks still verifies and installs byte-for-byte.
+    // FM-REPLICATION-068
+    #[tokio::test]
+    async fn receive_snapshot_installs_a_dataset_larger_than_one_chunk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let seen: InstalledDatasets = Arc::default();
+        // Spans several 64 KiB read passes, with a partial pass at the end.
+        let blobs = vec![
+            (0u8..=255).cycle().take(200_007).collect::<Vec<u8>>(),
+            b"shard-one".to_vec(),
+        ];
+
+        let recorder = {
+            let seen = seen.clone();
+            Arc::new(move |payload: FullSyncPayload| {
+                let seen = seen.clone();
+                Box::pin(async move {
+                    let FullSyncPayload::LiveDataset(blobs) = payload else {
+                        panic!("a dataset sync must hand the installer blobs")
+                    };
+                    seen.lock().unwrap().push((blobs, 0));
+                    Ok(())
+                }) as Pin<Box<dyn Future<Output = Result<(), InstallError>> + Send>>
+            }) as SnapshotInstaller
+        };
+
+        let mut f = dataset_fixture(tmp.path(), blobs.clone(), 4242, false, Some(recorder)).await;
+        f.conn.receive_snapshot(f.file_count).await.unwrap();
+
+        assert_eq!(
+            seen.lock().unwrap().clone(),
+            vec![(blobs, 0)],
+            "a multi-chunk dataset is reassembled exactly"
+        );
+        assert_eq!(f.offsets.current(), 4242);
+        assert_eq!(f.conn.connection_state, ConnectionState::Streaming);
     }
 
     /// Issue 67: the data-less minimal RDB an older primary sent when

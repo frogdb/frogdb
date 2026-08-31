@@ -250,6 +250,25 @@ const MAX_CHECKPOINT_FILE_COUNT: usize = 1_000_000;
 const MAX_CHECKPOINT_NAME_LEN: usize = 64 * 1024;
 const MAX_CHECKPOINT_METADATA_LEN: usize = 64 * 1024;
 
+/// Ceiling on one live-dataset blob body, the only envelope body a receiver
+/// holds *whole in memory*.
+///
+/// The checkpoint path needs no such bound: its bodies stream straight to disk
+/// through [`receive_to_file`], a chunk at a time, so a file header's `size` is
+/// never anything but a loop bound. A dataset blob has nowhere to stream to —
+/// there is no RocksDB on either side of that sync — so its size is the size of
+/// an allocation, and an unbounded one is a remote OOM from a peer that has
+/// authenticated nothing beyond reaching the port.
+///
+/// The number is a sanity bound on the *claim*, not a memory budget: with
+/// [`receive_dataset_blob`] reading in [`CHUNK_SIZE`] passes, the bytes actually
+/// held track the bytes actually delivered, so a header that lies costs one
+/// header read. 16 GiB is far above any single shard's share of a keyspace that
+/// has to fit in the primary's memory (this payload shape exists only for
+/// `persistence.enabled = false`) and far below the absurd values a `u64` header
+/// field can name.
+const MAX_DATASET_BLOB_LEN: u64 = 16 * 1024 * 1024 * 1024;
+
 /// One checkpoint file on the wire: `$<name_len>\r\n<name>\r\n$<size>\r\n<size bytes>`.
 ///
 /// The codec owns the *header* (name + size); the `size` payload bytes still
@@ -629,11 +648,115 @@ pub async fn receive_to_file<R: AsyncReadExt + Unpin>(
     Ok(checksum)
 }
 
+/// Receive `expected_size` bytes from `reader` into memory — the live-dataset
+/// counterpart of [`receive_to_file`], for the payload shape that has no disk to
+/// stage into.
+///
+/// Two rules the plain `vec![0u8; size]; read_exact` it replaces did not have:
+///
+/// * `expected_size` is bounded by [`MAX_DATASET_BLOB_LEN`] **before** anything
+///   is allocated, so a header claiming more than a receiver could hold fails
+///   the sync on the header rather than on the allocator.
+/// * The read is chunked at [`CHUNK_SIZE`], appending only what arrived, so the
+///   memory a blob costs tracks the bytes the primary actually delivered instead
+///   of the number it wrote in the header. A header that overstates its body is
+///   an `UnexpectedEof` when the stream runs out, exactly as on the file path.
+pub async fn receive_dataset_blob<R: AsyncReadExt + Unpin>(
+    reader: &mut R,
+    expected_size: u64,
+) -> io::Result<Vec<u8>> {
+    if expected_size > MAX_DATASET_BLOB_LEN {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "dataset blob size exceeds maximum",
+        ));
+    }
+    let mut blob: Vec<u8> = Vec::with_capacity(expected_size.min(CHUNK_SIZE as u64) as usize);
+    let mut buf = vec![0u8; CHUNK_SIZE];
+    while (blob.len() as u64) < expected_size {
+        let to_read = std::cmp::min(CHUNK_SIZE as u64, expected_size - blob.len() as u64) as usize;
+        let n = reader.read(&mut buf[..to_read]).await?;
+        if n == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "connection closed during dataset transfer",
+            ));
+        }
+        blob.extend_from_slice(&buf[..n]);
+    }
+    Ok(blob)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use proptest::prelude::Strategy;
     use tempfile::tempdir;
+
+    /// A blob body is read a chunk at a time, so a body larger than one chunk
+    /// arrives whole and the read never sizes a buffer from the header.
+    // FM-REPLICATION-068
+    #[tokio::test]
+    async fn dataset_blob_is_received_in_chunks() {
+        for size in [0usize, 1, CHUNK_SIZE - 1, CHUNK_SIZE, CHUNK_SIZE * 3 + 7] {
+            let payload: Vec<u8> = (0u8..=255).cycle().take(size).collect();
+            let mut cursor = std::io::Cursor::new(payload.clone());
+            let blob = receive_dataset_blob(&mut cursor, size as u64)
+                .await
+                .unwrap();
+            assert_eq!(blob, payload, "size {size}");
+        }
+    }
+
+    /// A header claiming more than a receiver could ever hold is refused on the
+    /// header — before a byte of the body is read, and therefore before a byte
+    /// is allocated for it.
+    ///
+    /// The 20 GiB case is written as a literal on purpose. Every other
+    /// assertion here is relative to [`MAX_DATASET_BLOB_LEN`] and so holds for
+    /// *any* ceiling; the pair of literals in this test and in
+    /// [`dataset_blob_at_the_ceiling_fails_on_the_missing_bytes`] is what pins
+    /// the ceiling's actual magnitude, which is the half of the contract an
+    /// operator depends on: too low and a legitimate dataset can never sync.
+    // FM-REPLICATION-068
+    #[tokio::test]
+    async fn dataset_blob_header_beyond_the_ceiling_allocates_nothing() {
+        for size in [MAX_DATASET_BLOB_LEN + 1, 20 * 1024 * 1024 * 1024, u64::MAX] {
+            let mut cursor = std::io::Cursor::new(b"short".to_vec());
+            let err = receive_dataset_blob(&mut cursor, size).await.unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidData, "size {size}");
+            assert!(
+                err.to_string().contains("exceeds maximum"),
+                "size {size}: {err}"
+            );
+            assert_eq!(cursor.position(), 0, "the body is never read at all");
+        }
+    }
+
+    /// The ceiling bounds the claim, not the transfer: a header *at* the ceiling
+    /// is a size the receive attempts, and it fails on the bytes that did not
+    /// arrive rather than on the bound. Pins the comparison as `>`, and pins the
+    /// truncation lane a header that overstates its body lands in.
+    ///
+    /// The 8 GiB case is the lower half of the magnitude contract (see
+    /// [`dataset_blob_header_beyond_the_ceiling_allocates_nothing`]): a dataset
+    /// that size is a plausible in-memory keyspace, so the receive must attempt
+    /// it. Attempting costs nothing — the buffer is one [`CHUNK_SIZE`] pass —
+    /// which is exactly the property that lets the ceiling sit this high.
+    // FM-REPLICATION-068
+    #[tokio::test]
+    async fn dataset_blob_at_the_ceiling_fails_on_the_missing_bytes() {
+        for size in [MAX_DATASET_BLOB_LEN, 8 * 1024 * 1024 * 1024, 32] {
+            let mut cursor = std::io::Cursor::new(b"short".to_vec());
+            let err = receive_dataset_blob(&mut cursor, size).await.unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof, "size {size}");
+            assert_eq!(
+                cursor.position(),
+                5,
+                "size {size}: what did arrive was read before the stream ended"
+            );
+        }
+    }
 
     #[test]
     fn test_metadata_serialization() {

@@ -181,15 +181,11 @@ details firm up); they are the first artifact of implementation kickoff.
 
 ## Known defects this architecture subsumes (fix earlier if implementation is far off)
 
-These three are live today and worth stand-alone fixes if the big build is distant:
+These are live today and worth stand-alone fixes if the big build is distant:
 
-1. `replication/src/replica/connection.rs:383-391` — LiveDataset receive allocates
-   `vec![0u8; header.size]` from the wire with no ceiling, checksum after full read.
-   (Subsumed by R6 streaming fullsync + R8 budgets; interim fix: a ceiling + chunked
-   receive like the checkpoint path.)
-2. `core/src/tracking.rs` — tracking-table `lru_order` unbounded outside accounting
+1. `core/src/tracking.rs` — tracking-table `lru_order` unbounded outside accounting
    (issue 66; subsumed by R8).
-3. `cluster-runtime feed_sequencer.rs` — barrier hold buffer missing its spec-ruled
+2. `cluster-runtime feed_sequencer.rs` — barrier hold buffer missing its spec-ruled
    byte cap (TR-CLUSTER-016 / cluster issue 17; subsumed by R8).
 
 Also worth noting: stale mimalloc comment in

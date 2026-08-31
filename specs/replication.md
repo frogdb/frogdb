@@ -2147,6 +2147,26 @@ actually holds.
 
 ---
 
+## FM-REPLICATION-068 — a live-dataset blob is bounded before it is allocated, and read a chunk at a time
+
+| Field | Value |
+|---|---|
+| Trigger | Reading the per-blob bodies of a `$FROGDB_SNAPSHOT` envelope from a primary that is buggy, mid-crash, or hostile: a blob header whose `$<size>` names more than a receiver could hold (a terabyte, `u64::MAX`), and the ordinary shape it hides behind — a header that merely overstates its body by a few bytes, or an honest body larger than one read pass. This is the live-dataset path only: a `$FROGDB_CHECKPOINT` body streams to disk through `receive_to_file`, where the size is a loop bound and never an allocation. |
+| Observable | A size above the ceiling is a clean `io::ErrorKind::InvalidData` ("dataset blob size exceeds maximum") that fails the sync on the header — the same failure lane a corrupt checksum takes (FM-REPLICATION-001): nothing is installed, no offset or replication id is adopted, the link drops, and the replica retries on its normal reconnect backoff with `PSYNC ? -1`, still serving its previous keyspace. A size at or below the ceiling is attempted, and a body that does not arrive is `UnexpectedEof`, exactly as on the checkpoint path. An honest dataset is unaffected: blobs spanning many read passes are reassembled byte-for-byte and installed. |
+| NOT observable | **A wire-supplied size driving one allocation of that size** — `vec![0u8; header.size]` for a header naming a terabyte, which is a remote OOM from a peer that has authenticated nothing beyond reaching the port, and which the trailer's combined checksum cannot defend against because the checksum can only be verified once every blob is already in memory. **Memory that scales with what the header claimed rather than with what the primary sent**: the read is chunked, so a header that lies costs the bytes that actually arrived plus one chunk, not the number it wrote down. Nor the over-correction: a *legitimate* multi-chunk blob refused, short-read into a partial blob, or reassembled out of order — each of which would fail the checksum and turn an OOM bug into a sync that can never complete. |
+| Invariant | `receive_dataset_blob` (`fullsync.rs`) is the only path from the socket to a dataset blob, and it checks `expected_size > MAX_DATASET_BLOB_LEN` (16 GiB) **before** it allocates or reads anything, so a refused header consumes no body bytes. What it then allocates is `min(expected_size, CHUNK_SIZE)`, growing only as bytes land: the loop reads `min(CHUNK_SIZE, remaining)` per pass and appends what the read returned, so peak memory tracks delivered bytes, and a `read` returning 0 before `expected_size` is `UnexpectedEof` rather than a short blob. The ceiling bounds the *claim*, not the transfer, which is why it can sit far above any real shard's share of a keyspace (this payload shape exists only for `persistence.enabled = false`, so the whole dataset fits in the primary's memory) without weakening the bound. FM-REPLICATION-035 bounds the envelope's other length prefixes at the codec boundary — name and metadata — and deliberately leaves body sizes alone because the checkpoint path has no in-memory body; this row is that rule for the one body that does. |
+| Outcome variant | `io::ErrorKind::{InvalidData, UnexpectedEof}` on the sync |
+| Forced by | `dataset_blob_is_received_in_chunks`, `dataset_blob_header_beyond_the_ceiling_allocates_nothing`, `dataset_blob_at_the_ceiling_fails_on_the_missing_bytes`, `receive_snapshot_refuses_a_blob_header_beyond_the_ceiling`, `receive_snapshot_installs_a_dataset_larger_than_one_chunk` |
+| Bug refs | `.scratch/memory-architecture/PRD.md` "Known defects" item 1 (fixed — this row is its outcome; the streaming full-sync and receive budgets of R6/R8 subsume the interim ceiling) |
+
+**A ceiling is not a budget.** This row bounds one blob header against one absurd claim. It does
+not give the receive path a memory budget: a dataset of many honest blobs is still held whole in
+memory before it is installed, because that is what installing it requires on a node with no
+RocksDB. Sizing that against the node's actual memory is the memory-architecture PRD's R8, not
+this row.
+
+---
+
 ## Redis deviations
 
 Deliberate or known differences from Redis 8.x replication semantics on this path. Each is pinned
