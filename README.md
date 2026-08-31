@@ -203,7 +203,7 @@ Choose whichever fits your use case:
 
 | License        | Best for                                                                                                          |
 | -------------- | ----------------------------------------------------------------------------------------------------------------- |
-| **BSL-1.1**    | Most users — use freely, with a restriction on competing database products. Converts to Apache 2.0 after 2 years. |
+| **BSL-1.1**    | Most users — use freely, with a restriction on competing database products. Converts to Apache 2.0 after 4 years. |
 | **AGPLv3**     | Users who need an OSI-approved copyleft license.                                                                  |
 | **Commercial** | Organizations needing custom terms.                                                                               |
 

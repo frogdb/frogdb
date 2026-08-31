@@ -10,9 +10,9 @@ FrogDB is available under a tri-license model. You may choose whichever license 
 
 The BSL allows you to use, copy, modify, and redistribute FrogDB with one restriction: you may not use it to offer a competing in-memory database product or managed database service.
 
-After **2 years** from each version's release date (following version 1.0.0), that version automatically converts to the permissive **Apache License 2.0**.
+After **4 years** from each version's release date (following version 1.0.0), that version automatically converts to the permissive **Apache License 2.0**.
 
-📄 **Full text:** [licenses/BSL-1.1.md](licenses/BSL-1.1.md)
+📄 **Full text:** [BSL-1.1.md](BSL-1.1.md)
 
 ### 2. GNU Affero General Public License v3.0 (AGPLv3)
 
@@ -25,7 +25,7 @@ The AGPLv3 allows you to use FrogDB freely, including for commercial purposes an
 
 This is a strong copyleft license with no time-based restrictions.
 
-📄 **Full text:** [licenses/AGPL-3.0.md](licenses/AGPL-3.0.md)
+📄 **Full text:** [AGPL-3.0.md](AGPL-3.0.md)
 
 ### 3. Commercial License
 
@@ -38,7 +38,7 @@ Commercial licenses are available for:
 - Organizations requiring proprietary modifications
 - Enterprise support and indemnification
 
-📄 **Details:** [licenses/COMMERCIAL.md](licenses/COMMERCIAL.md)
+📄 **Details:** [COMMERCIAL.md](COMMERCIAL.md)
 
 ---
 
