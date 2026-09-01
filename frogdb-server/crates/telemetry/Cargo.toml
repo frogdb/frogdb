@@ -57,7 +57,10 @@ libc = "0.2"
 # needs (jemalloc's arena-purge control takes no old/new value at all, which
 # the typed `tikv-jemalloc-ctl` read/write helpers cannot express).
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
-tikv-jemalloc-ctl = { version = "0.6", features = ["stats"] }
+# `use_std` gives `tikv_jemalloc_ctl::Error` a `std::error::Error` impl, so a
+# failed `mallctl` can be wrapped in an `io::Error` with its jemalloc message
+# intact instead of being flattened to a string.
+tikv-jemalloc-ctl = { version = "0.6", features = ["stats", "use_std"] }
 tikv-jemalloc-sys = "0.6"
 
 # Serialization
@@ -75,3 +78,10 @@ tokio = { workspace = true, features = ["full", "test-util"] }
 tempfile = "3"
 bytes = { workspace = true }
 frogdb-telemetry = { path = ".", features = ["testing"] }
+
+# The per-arena tests need jemalloc to be the *global* allocator, or a `Vec`
+# would land in the system allocator and every arena figure would read zero.
+# Production declares this in `frogdb-server`'s `main.rs`; this makes the same
+# declaration for this crate's own test binary (see `lib.rs`).
+[target.'cfg(not(target_env = "msvc"))'.dev-dependencies]
+tikv-jemallocator = "0.6"

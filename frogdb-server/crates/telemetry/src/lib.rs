@@ -23,6 +23,19 @@
 //! CommandsTotal::inc(&*recorder, "GET");
 //! ```
 
+/// jemalloc as the global allocator, for this crate's test binary only.
+///
+/// [`jemalloc`]'s per-arena tests assert that a bound thread's *Rust*
+/// allocations are charged to its own arena, which is only true if Rust
+/// allocations go through jemalloc at all. Production declares the same
+/// allocator in `frogdb-server`'s `main.rs`; without this declaration the tests
+/// would allocate from the system allocator and read zero from every arena —
+/// passing or failing for reasons unrelated to what they check.
+#[cfg(test)]
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static TEST_GLOBAL_ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 pub mod config;
 pub mod health;
 pub mod http_handlers;

@@ -2141,6 +2141,7 @@ dependencies = [
  "tempfile",
  "tikv-jemalloc-ctl",
  "tikv-jemalloc-sys",
+ "tikv-jemallocator",
  "tokio",
  "tokio-metrics",
  "tracing",
