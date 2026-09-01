@@ -19,6 +19,9 @@ are encouraged.
   tuning; `INFO memory` allocator fields are hardcoded stubs; `MEMORY MALLOC-SIZE` /
   `PURGE` are no-ops; no active defrag. A stale comment in
   `redis-regression/tests/memefficiency_tcl.rs` claims mimalloc — wrong.
+  *(Partially stale as of 56c9019d, 2026-08-31: real mallctl stats now feed
+  `INFO memory` + Prometheus via `telemetry/src/jemalloc.rs`, `MEMORY PURGE` is real,
+  and the mimalloc comment is fixed. Tuning/arenas still absent — that's this PRD.)*
 - Accounting is hand-maintained per-value `memory_size()` estimates; eviction, OOM
   refusal, and health thresholds all key off the estimate. RSS is measured separately
   (sysinfo) for Prometheus/status but not INFO. RocksDB C++ memory (memtables
