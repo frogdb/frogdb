@@ -277,3 +277,76 @@ Emitted through the typed handles from `RocksMemory::record_metrics`, driven by 
 `frogdb_memory_budget_charged_bytes{subsystem="persistence"}` always describe one instant.
 `website/src/components/MetricsTable.astro` gained the `rocksdb` group token under `Persistence`
 (the Astro build throws on an unmapped token).
+
+## Bug found by the wiring, and fixed here
+
+The first full `frogdb-server` run after the ticker landed failed **28 restart tests** —
+`integration_persistence::*`, every `*_survives_restart`, `test_rolling_restart`,
+`test_cluster_data_survives_full_restart` — all with the same error:
+
+```
+recovery failed during OpenRocks: RocksDB error: IO error: lock hold by current process ... /LOCK: No locks available
+```
+
+The metrics ticker captured `Arc<RocksStore>`, so the store — and its `LOCK` file — outlived
+shutdown and an in-process restart could not reopen the database. Two fixes, both kept:
+
+1. The ticker holds a `Weak` and upgrades per tick, so it can never be the reason the store stays
+   alive; the loop ends on its own when the last real owner drops it. (27 of the 28 fixed.)
+2. The ticker is a tracked `JoinHandle` in `SubsystemHandles`, aborted at the top of
+   `shutdown_subsystems` before the shards drain — it was the only collector nothing owned. The
+   28th failure was the residual race where a tick's upgraded handle overlapped teardown on a
+   loaded machine; it reproduced only under the full parallel suite (10/10 green in isolation)
+   and is gone with the abort in place.
+
+The general lesson for the memory work: **a metrics collector must never be the last owner of the
+resource it samples.** Any future sampler over a subsystem's memory takes a `Weak` and is aborted
+at shutdown.
+
+## Second bug, found by closing a surviving mutant
+
+`just mutants-diff frogdb-persistence` left two mutants alive — both "replace `record_metrics`
+with `()`" — because nothing asserted a gauge value. Writing the forcing test for them
+(`the_store_metrics_tick_publishes_the_engine_gauges`) exposed a *real* defect in this issue's own
+wiring: `frogdb_rocksdb_write_buffer_bytes` was **permanently zero**.
+
+`RocksMemory::install` set the write-buffer manager on `cf_opts`. The manager is a **DB-level**
+option (`DBOptions::write_buffer_manager`), and `open_cf_descriptors` slices each descriptor's
+`Options` down to its column-family half — so the manager was discarded at open. The memtable
+ceiling FM-PERSISTENCE-060 claims was never installed: no accounting, no `allow_stall`
+backpressure, and `WriteBufferManager::get_usage()` flat at `0` for the life of the process.
+
+Fix: `install` now takes `db_opts` and sets the manager there (the block cache stays on
+`block_opts`, which *is* a CF concern — it reaches RocksDB via the table factory). The signature
+lost its `cf_opts` parameter, since nothing else on it was memory-related.
+
+Why the existing tests missed it: every FM-060 assertion was either a config read-back
+(`get_buffer_size`, which reports the manager's own configured ceiling whether or not any DB uses
+it) or an upper bound (`usage <= budget`), and `0 <= budget` holds for an engine nothing is
+accounting for. `memtable_usage_stays_under_the_write_buffer_budget_across_shards` now also asserts
+`write_buffer_bytes > 0`, and the spec row states the DB-level placement as the invariant.
+
+**The general lesson: an upper-bound assertion over a counter is not evidence the counter is
+wired.** Pair every ceiling check with a liveness check that the number moves.
+
+## Verification
+
+Local mode, this worktree.
+
+- `just test frogdb-persistence` — **356 run, 356 passed** (354 before the two metrics forcing
+  tests). (`the_memtable_budget_is_the_write_buffer_product` is flagged LEAK by nextest despite
+  being pure arithmetic — passes, pre-existing harness noise.)
+- `just test frogdb-server` — see the run recorded below.
+- `just lint-spec` — OK: 313 failure modes, 205 transitions, 1735 test references, 1735 tags,
+  1438 spec-id citations. The one warning (`FM-CLUSTER-104` forced by no test) is pre-existing and
+  tracked in the cluster issue tracker.
+- `just lint-gates` — OK. Two WARNINGs are pre-existing named gaps unrelated to this change
+  (`.nested()` config loader; continuation-lock `ExecTransaction`/`FunctionCall`).
+- `lint-budget-growth` — "3 budgeted growth site(s); 99 unconverted site(s) pinned in 35
+  file(s)". Nothing to ratchet: `scripts/budget-growth.py`'s ALLOWLIST never carried a
+  `rocks`/`persistence` entry, so no entry had to leave it.
+- `lint-ship-cmd-full` — OK: 6 distributable builds all pass `--features cmd-full`. Untouched:
+  the jemalloc feature is target-scoped, not a command-family feature.
+- `just check` (workspace, `--all-targets`) — clean.
+- No new system dependency: jemalloc is vendored by `tikv-jemalloc-sys`, so `Brewfile` and
+  `shell.nix` are unchanged.

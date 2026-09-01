@@ -119,15 +119,22 @@ pub struct RocksMemory {
 
 impl RocksMemory {
     /// Build the process-wide cache, manager, and budget from `config`, and
-    /// install them on the options the caller will hand to every column family.
+    /// install them on the options the caller will hand to the DB and to every
+    /// column family.
     ///
-    /// `block_opts` and `cf_opts` are the *single* pair the open path clones
-    /// per CF descriptor, which is what makes "one cache, one manager" true of
-    /// the whole process rather than of one column family.
+    /// `block_opts` is the *single* table-options value the open path installs
+    /// on the one `cf_opts` every CF descriptor clones, which is what makes
+    /// "one cache" true of the whole process rather than of one column family.
+    /// The write-buffer manager goes on `db_opts` instead, and that is not a
+    /// stylistic choice: the manager is a **DB-level** option, and
+    /// `open_cf_descriptors` slices each descriptor's `Options` down to its
+    /// column-family half, so a manager installed on the CF options is dropped
+    /// on the floor — no memtable accounting, no stall, and `get_usage` flat at
+    /// zero forever.
     pub(crate) fn install(
         config: &RocksConfig,
+        db_opts: &mut Options,
         block_opts: &mut BlockBasedOptions,
-        cf_opts: &mut Options,
     ) -> Self {
         let memtable_budget = config.memtable_budget_bytes();
         let total_budget = config.memory_budget_bytes();
@@ -151,7 +158,7 @@ impl RocksMemory {
                 WriteBufferManager::new_write_buffer_manager(memtable_budget, true),
             )
         };
-        cf_opts.set_write_buffer_manager(&write_buffer_manager);
+        db_opts.set_write_buffer_manager(&write_buffer_manager);
 
         // `Backpressure`, and the backpressure is not ours: it is the write
         // stall the manager applies at capacity. The budget's own refusals name
@@ -262,6 +269,66 @@ mod tests {
 
     fn budget(limit: u64) -> Budget {
         Budget::new(Subsystem::Persistence, Disposition::Backpressure, limit)
+    }
+
+    /// Captures gauge writes so a metrics tick can be asserted without a
+    /// Prometheus backend.
+    #[derive(Default)]
+    struct GaugeRecorder {
+        gauges: std::sync::Mutex<std::collections::HashMap<String, f64>>,
+    }
+
+    impl frogdb_types::traits::MetricsRecorder for GaugeRecorder {
+        fn increment_counter(&self, _name: &str, _value: u64, _labels: &[(&str, &str)]) {}
+        fn record_gauge(&self, name: &str, value: f64, _labels: &[(&str, &str)]) {
+            self.gauges.lock().unwrap().insert(name.to_string(), value);
+        }
+        fn record_histogram(&self, _name: &str, _value: f64, _labels: &[(&str, &str)]) {}
+    }
+
+    // FM-PERSISTENCE-060
+    /// The tick publishes all five engine counters, and the two that are pure
+    /// configuration carry the budgeted numbers: the manager's ceiling is the
+    /// write-buffer product, the cache's capacity is the summed budget. A tick
+    /// that emitted nothing would leave an operator watching a flat line while
+    /// the engine filled up.
+    #[test]
+    fn the_metrics_tick_publishes_the_engine_counters() {
+        let config = RocksConfig {
+            block_cache_size: 8 * 1024 * 1024,
+            write_buffer_size: 1024 * 1024,
+            max_write_buffer_number: 2,
+            ..RocksConfig::default()
+        };
+        let mut db_opts = Options::default();
+        let mut block_opts = BlockBasedOptions::default();
+        let memory = RocksMemory::install(&config, &mut db_opts, &mut block_opts);
+
+        let recorder = GaugeRecorder::default();
+        memory.record_metrics(&recorder);
+
+        let gauges = recorder.gauges.lock().unwrap();
+        assert_eq!(
+            gauges
+                .get("frogdb_rocksdb_write_buffer_limit_bytes")
+                .copied(),
+            Some(config.memtable_budget_bytes() as f64),
+            "the published ceiling is the write-buffer product"
+        );
+        assert_eq!(
+            gauges
+                .get("frogdb_rocksdb_block_cache_capacity_bytes")
+                .copied(),
+            Some(config.memory_budget_bytes() as f64),
+            "the published capacity is the summed budget"
+        );
+        for live in [
+            "frogdb_rocksdb_write_buffer_bytes",
+            "frogdb_rocksdb_block_cache_bytes",
+            "frogdb_rocksdb_block_cache_pinned_bytes",
+        ] {
+            assert!(gauges.contains_key(live), "{live} was never published");
+        }
     }
 
     // FM-PERSISTENCE-061

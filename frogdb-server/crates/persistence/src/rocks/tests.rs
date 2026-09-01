@@ -1183,10 +1183,12 @@ fn reserving_a_backup_sequence_is_published_like_every_other_durable_name() {
 // ============================================================================
 
 /// Counting [`frogdb_types::traits::MetricsRecorder`] so reclamation tests can
-/// assert the started/completed counters without a real metrics backend.
+/// assert the started/completed counters — and the memory tick its gauges —
+/// without a real metrics backend.
 #[derive(Default)]
 struct CountingRecorder {
     counters: Mutex<std::collections::HashMap<String, u64>>,
+    gauges: Mutex<std::collections::HashMap<String, f64>>,
 }
 
 impl frogdb_types::traits::MetricsRecorder for CountingRecorder {
@@ -1198,10 +1200,15 @@ impl frogdb_types::traits::MetricsRecorder for CountingRecorder {
             .entry(name.to_string())
             .or_insert(0) += value;
     }
-    fn record_gauge(&self, _name: &str, _value: f64, _labels: &[(&str, &str)]) {}
+    fn record_gauge(&self, name: &str, value: f64, _labels: &[(&str, &str)]) {
+        self.gauges.lock().unwrap().insert(name.to_string(), value);
+    }
     fn record_histogram(&self, _name: &str, _value: f64, _labels: &[(&str, &str)]) {}
     fn counter_value(&self, name: &str) -> Option<u64> {
         self.counters.lock().unwrap().get(name).copied()
+    }
+    fn gauge_value(&self, name: &str) -> Option<f64> {
+        self.gauges.lock().unwrap().get(name).copied()
     }
 }
 
@@ -2131,6 +2138,54 @@ fn block_cache_capacity_is_the_summed_budget() {
     );
 }
 
+/// The gauges an operator reads come from the store's own tick, not from the
+/// `RocksMemory` handle directly: `record_memory_metrics` is what the server's
+/// collector calls, and a tick that published nothing would leave
+/// `frogdb_rocksdb_*` flat at zero while the engine filled up.
+// FM-PERSISTENCE-061
+#[test]
+fn the_store_metrics_tick_publishes_the_engine_gauges() {
+    let t = TempDir::new().unwrap();
+    let config = small_memory_config();
+    let recorder = Arc::new(CountingRecorder::default());
+    let s =
+        RocksStore::open_with_warm_metrics(t.path(), 1, &config, false, recorder.clone()).unwrap();
+    // Enough bytes that the manager has charged at least one arena block.
+    let value = vec![b'x'; 8 * 1024];
+    for i in 0..128u32 {
+        s.put(0, format!("key{i:04}").as_bytes(), &value).unwrap();
+    }
+
+    s.record_memory_metrics();
+
+    assert_eq!(
+        recorder.gauge_value("frogdb_rocksdb_block_cache_capacity_bytes"),
+        Some(config.memory_budget_bytes() as f64),
+        "the tick publishes the capacity the cache was actually built with"
+    );
+    assert_eq!(
+        recorder.gauge_value("frogdb_rocksdb_write_buffer_limit_bytes"),
+        Some(config.memtable_budget_bytes() as f64),
+        "and the memtable ceiling the manager was built with"
+    );
+    assert!(
+        recorder
+            .gauge_value("frogdb_rocksdb_write_buffer_bytes")
+            .unwrap()
+            > 0.0,
+        "1 MB of unflushed writes are memtable bytes the tick must report"
+    );
+    for live in [
+        "frogdb_rocksdb_block_cache_bytes",
+        "frogdb_rocksdb_block_cache_pinned_bytes",
+    ] {
+        assert!(
+            recorder.gauge_value(live).is_some(),
+            "{live} was never published"
+        );
+    }
+}
+
 /// `0` has to mean "leave RocksDB's own default alone" rather than "a cache
 /// that holds nothing" — a zero-capacity cache would re-read a block from the
 /// SST on every lookup.
@@ -2230,6 +2285,14 @@ fn memtable_usage_stays_under_the_write_buffer_budget_across_shards() {
 
     let usage = s.memory().usage();
     assert_eq!(usage.write_buffer_limit_bytes, budget);
+    // Non-zero, not merely bounded: the manager is a *DB-level* option, and one
+    // installed on the CF options is silently discarded at open. That failure
+    // reads as "usage 0 <= budget" — a bound satisfied by an engine nothing is
+    // accounting for.
+    assert!(
+        usage.write_buffer_bytes > 0,
+        "the manager must actually be attached to the DB, not accounted nowhere"
+    );
     assert!(
         usage.write_buffer_bytes <= budget * 2,
         "live memtable bytes ({}) must stay near the {budget}-byte manager \

@@ -242,13 +242,15 @@ impl RocksStore {
         cf_opts.set_write_buffer_size(config.write_buffer_size);
         cf_opts.set_max_write_buffer_number(config.max_write_buffer_number);
         // One block cache, one write-buffer manager, one persistence budget for
-        // the whole process. Installed on *this* `block_opts`/`cf_opts` pair,
-        // which every column-family descriptor below clones — a per-descriptor
-        // cache would put each CF on its own ceiling and re-multiply the very
-        // product this replaces. `memory` is moved onto the store at the end of
-        // this function: `OptionsMustOutliveDB` means the cache and manager
-        // must outlive every CF pointing at them.
-        let memory = memory::RocksMemory::install(config, &mut block_opts, &mut cf_opts);
+        // the whole process. The cache lands on *this* `block_opts`, which the
+        // one `cf_opts` below carries into every column-family descriptor — a
+        // per-descriptor cache would put each CF on its own ceiling and
+        // re-multiply the very product this replaces. The manager lands on
+        // `db_opts`, where RocksDB actually reads it (see `RocksMemory::install`).
+        // `memory` is moved onto the store at the end of this function:
+        // `OptionsMustOutliveDB` means the cache and manager must outlive every
+        // CF pointing at them.
+        let memory = memory::RocksMemory::install(config, &mut db_opts, &mut block_opts);
         cf_opts.set_block_based_table_factory(&block_opts);
         // Honor the configured compression preset (proposal 19). Each
         // `CompressionType` maps to a curated 7-level schedule; the default
