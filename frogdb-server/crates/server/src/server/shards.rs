@@ -422,9 +422,8 @@ fn report_arena_binding(arenas: &ShardArenaRegistry, num_shards: usize) {
              arena and absent from the per-shard gauges"
         );
     }
-    let expected = num_shards as u32 + 1;
-    match total {
-        Some(total) if total > expected => warn!(
+    match arena_layout(num_shards, total) {
+        ArenaLayout::Excess { total, expected } => warn!(
             arenas = total,
             expected,
             malloc_conf = crate::malloc_conf::requested(),
@@ -433,13 +432,40 @@ fn report_arena_binding(arenas: &ShardArenaRegistry, num_shards: usize) {
              arena-count setting did not take effect, so non-shard allocations \
              are spread over unattributed arenas"
         ),
-        _ => info!(
+        ArenaLayout::AsIntended | ArenaLayout::Unknown => info!(
             bound,
             num_shards,
             arenas = ?total,
             malloc_conf = crate::malloc_conf::requested(),
             "Per-shard arenas bound"
         ),
+    }
+}
+
+/// What the live arena count says about the intended layout.
+#[derive(Debug, PartialEq, Eq)]
+enum ArenaLayout {
+    /// No more arenas exist than the intended `1 + num_shards`.
+    AsIntended,
+    /// jemalloc has arenas nobody is reading: `narenas:1` did not take effect,
+    /// so non-shard allocations are spread over its automatic pool
+    /// (`4 × ncpu` arenas by default) instead of landing in one.
+    Excess { total: u32, expected: u32 },
+    /// No allocator to ask (`msvc`, or any build without jemalloc).
+    Unknown,
+}
+
+/// Judge the live arena count against the intended `1 + num_shards`.
+///
+/// Split out from the logging so the arithmetic has a test: the whole point of
+/// `narenas:1` is that this number is exact, and an off-by-one here would let
+/// the pool silently come back.
+fn arena_layout(num_shards: usize, total: Option<u32>) -> ArenaLayout {
+    let expected = num_shards as u32 + 1;
+    match total {
+        None => ArenaLayout::Unknown,
+        Some(total) if total > expected => ArenaLayout::Excess { total, expected },
+        Some(_) => ArenaLayout::AsIntended,
     }
 }
 
@@ -498,6 +524,8 @@ fn spawn_shard_tick_pump(shard_id: usize, senders: Arc<Vec<ShardSender>>) {
 
 #[cfg(test)]
 mod tests {
+    use super::{ArenaLayout, arena_layout};
+
     /// The wiring this issue delivers: which [`crate::net::ShardExecutor`] the
     /// server actually gets.
     ///
@@ -536,5 +564,41 @@ mod tests {
         for shard_id in 0..16 {
             assert_eq!(executor.arena_of(shard_id), None);
         }
+    }
+
+    /// The intended arena layout is exactly `1 + num_shards`: one automatic
+    /// arena for every non-shard thread, plus one per shard. That equality is
+    /// the whole return on `narenas:1`, so it is pinned here rather than left
+    /// to a log line nobody reads.
+    ///
+    /// Pinned on the arithmetic, not on a live count: a library test binary
+    /// does not define the `malloc_conf` override (see `crate::malloc_conf`),
+    /// so `narenas` in-test is jemalloc's own `4 × ncpu` default. The live
+    /// count is checked where the override exists — the binary's
+    /// `jemalloc_applies_the_requested_arena_count`, plus this verdict on the
+    /// running server at startup.
+    #[test]
+    fn the_intended_arena_count_is_one_per_shard_plus_one() {
+        assert_eq!(arena_layout(8, Some(9)), ArenaLayout::AsIntended);
+        // Fewer than intended is not this function's complaint: an unbound
+        // shard is already reported, loudly, as a partial bind.
+        assert_eq!(arena_layout(8, Some(1)), ArenaLayout::AsIntended);
+        assert_eq!(
+            arena_layout(8, Some(10)),
+            ArenaLayout::Excess {
+                total: 10,
+                expected: 9
+            },
+            "one arena past the shard count means the automatic pool came back"
+        );
+        // jemalloc's default on a 10-core machine, i.e. `narenas:1` ignored.
+        assert_eq!(
+            arena_layout(8, Some(40)),
+            ArenaLayout::Excess {
+                total: 40,
+                expected: 9
+            }
+        );
+        assert_eq!(arena_layout(8, None), ArenaLayout::Unknown);
     }
 }

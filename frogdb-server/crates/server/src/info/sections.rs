@@ -212,6 +212,13 @@ impl InfoSection for MemorySection {
         let mem_fragmentation_ratio = frag_ratio(rss, allocated);
         let mem_fragmentation_bytes = rss as i64 - allocated as i64;
 
+        // Per-shard arena figures deliberately do not appear here. Redis's
+        // Memory section is a fixed field set that clients parse by known key,
+        // and per-shard numbers would make it a family whose size varies with
+        // `server.shards` — a deviation with no Redis counterpart to be
+        // compatible with. They ship as the `frogdb_allocator_shard_*` gauges,
+        // labelled by shard, where a varying series count is the native shape.
+        // The process-wide fields below stay exactly as they were.
         let mut w = SectionWriter::new("Memory");
         w.field("used_memory", used)
             .field("used_memory_human", format!("{}K", used / 1024))

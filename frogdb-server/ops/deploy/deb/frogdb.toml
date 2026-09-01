@@ -9,6 +9,7 @@
 bind = "127.0.0.1"
 port = 6379
 num-shards = 1
+colocate-connections = true
 allow-cross-slot-standalone = false
 scatter-gather-timeout-ms = 5000
 sorted-set-index = "skiplist"
@@ -92,6 +93,7 @@ doctor-big-key-threshold = 1048576
 doctor-max-big-keys = 100
 doctor-imbalance-threshold = 25.0
 maxmemory-clients = "0"
+arena-sample-hz = 20
 
 [security]
 requirepass = ""
@@ -125,6 +127,7 @@ backlog-size = 10000
 backlog-max-mb = 64
 self-fence-on-replica-loss = true
 replica-freshness-timeout-ms = 3000
+replica-serve-stale-data = false
 backlog-ttl-secs = 3600
 replica-write-timeout-ms = 5000
 replica-txn-max-commands = 1000000
@@ -154,6 +157,7 @@ auto-failover = false
 fail-threshold = 5
 self-fence-on-quorum-loss = true
 replica-priority = 100
+promotion-max-lag-bytes = 0
 
 [status]
 memory-warning-percent = 90

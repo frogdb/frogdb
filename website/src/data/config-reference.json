@@ -425,6 +425,12 @@
       "description": "Memory management configuration.",
       "fields": [
         {
+          "name": "arena-sample-hz",
+          "type": "integer",
+          "default": 20,
+          "description": "How often (Hz) the per-shard jemalloc arena figures are refreshed.\n\nOne epoch advance per tick refreshes every shard's arena at once. ADR-0006\n§3 fixes the band at 10-100 Hz and values outside it are clamped, not\nhonoured: slower makes the bound a memory budget refuses against too\nstale, faster makes the all-arena epoch merge (~2.5 us per arena) a\nmeasurable cost."
+        },
+        {
           "name": "doctor-big-key-threshold",
           "type": "integer",
           "default": 1048576,

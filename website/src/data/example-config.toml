@@ -94,6 +94,7 @@ doctor-big-key-threshold = 1048576
 doctor-max-big-keys = 100
 doctor-imbalance-threshold = 25.0
 maxmemory-clients = "0"
+arena-sample-hz = 20
 
 [security]
 requirepass = ""

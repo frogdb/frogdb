@@ -4,7 +4,7 @@
     "source": "frogdb-server/crates/telemetry/src/definitions.rs",
     "regenerate": "just docs-gen"
   },
-  "count": 106,
+  "count": 104,
   "metrics": [
     {
       "name": "frogdb_active_version",
@@ -45,6 +45,42 @@
       "help": "jemalloc `stats.resident`: bytes physically resident (metadata + active pages + unused dirty pages)",
       "group": "allocator",
       "labels": []
+    },
+    {
+      "name": "frogdb_allocator_shard_allocated_bytes",
+      "type": "gauge",
+      "help": "Upper bound on the bytes one shard has allocated, from the jemalloc arena bound to that shard's thread (`stats.arenas.<i>.{small,large}`). An upper bound, not a live figure: freed bytes stay charged until the thread cache flushes them. Absent — not zero — for a shard with no arena of its own.",
+      "group": "allocator",
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_allocator_shard_frag_ratio",
+      "type": "gauge",
+      "help": "Per-shard fragmentation ratio (arena resident / arena allocated)",
+      "group": "allocator",
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_allocator_shard_resident_bytes",
+      "type": "gauge",
+      "help": "Bytes physically resident in one shard's jemalloc arena (`stats.arenas.<i>.resident`)",
+      "group": "allocator",
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "frogdb_binary_version",
@@ -485,54 +521,6 @@
       ]
     },
     {
-      "name": "frogdb_memory_budget_charged_bytes",
-      "type": "gauge",
-      "help": "Bytes a subsystem's `Budget` currently authorizes on a core. This is what the broker charged, not an allocator reading.",
-      "group": "memory",
-      "labels": [
-        {
-          "name": "shard",
-          "type": "string"
-        },
-        {
-          "name": "subsystem",
-          "type": "string"
-        }
-      ]
-    },
-    {
-      "name": "frogdb_memory_budget_limit_bytes",
-      "type": "gauge",
-      "help": "A subsystem `Budget`'s limit on a core. Zero for a subsystem that has not been converted to charge yet.",
-      "group": "memory",
-      "labels": [
-        {
-          "name": "shard",
-          "type": "string"
-        },
-        {
-          "name": "subsystem",
-          "type": "string"
-        }
-      ]
-    },
-    {
-      "name": "frogdb_memory_budget_refusals_total",
-      "type": "counter",
-      "help": "Charges a subsystem's `Budget` refused. Every refusal is handled at that subsystem's seam by shedding or backpressuring.",
-      "group": "memory",
-      "labels": [
-        {
-          "name": "shard",
-          "type": "string"
-        },
-        {
-          "name": "subsystem",
-          "type": "string"
-        }
-      ]
-    },
-    {
       "name": "frogdb_memory_fragmentation_ratio",
       "type": "gauge",
       "help": "Memory fragmentation ratio (RSS / used)",
@@ -961,30 +949,6 @@
             "handshake_error",
             "timeout"
           ]
-        }
-      ]
-    },
-    {
-      "name": "frogdb_tracking_table_budget_declines_total",
-      "type": "counter",
-      "help": "Reads the client-tracking table declined to record because even an empty table could not fit them (a budget smaller than one entry).",
-      "group": "tracking",
-      "labels": [
-        {
-          "name": "shard",
-          "type": "string"
-        }
-      ]
-    },
-    {
-      "name": "frogdb_tracking_table_budget_shed_keys_total",
-      "type": "counter",
-      "help": "Tracked keys the client-tracking table shed (evicted and invalidated) because its `Budget` refused a charge — the declared `shed` disposition, made observable.",
-      "group": "tracking",
-      "labels": [
-        {
-          "name": "shard",
-          "type": "string"
         }
       ]
     },
