@@ -762,284 +762,14 @@
       "type": "timeseries"
     },
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "description": "Upper bound on the bytes one shard has allocated, from the jemalloc arena bound to that shard's thread (`stats.arenas.<i>.{small,large}`). An upper bound, not a live figure: freed bytes stay charged until the thread cache flushes them. Absent — not zero — for a shard with no arena of its own.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "bytes"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 29
-      },
-      "id": 12,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "editorMode": "code",
-          "expr": "sum by (shard) (frogdb_allocator_shard_allocated_bytes{instance=~\"$instance\", job=~\"$job\"})",
-          "legendFormat": "{{__name__}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Frogdb Allocator Shard Allocated Bytes",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "description": "Bytes physically resident in one shard's jemalloc arena (`stats.arenas.<i>.resident`)",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "bytes"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 29
-      },
-      "id": 13,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "editorMode": "code",
-          "expr": "sum by (shard) (frogdb_allocator_shard_resident_bytes{instance=~\"$instance\", job=~\"$job\"})",
-          "legendFormat": "{{__name__}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Frogdb Allocator Shard Resident Bytes",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "description": "Per-shard fragmentation ratio (arena resident / arena allocated)",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 37
-      },
-      "id": 14,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "editorMode": "code",
-          "expr": "sum by (shard) (frogdb_allocator_shard_frag_ratio{instance=~\"$instance\", job=~\"$job\"})",
-          "legendFormat": "{{__name__}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Frogdb Allocator Shard Frag Ratio",
-      "type": "timeseries"
-    },
-    {
       "collapsed": true,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 45
+        "y": 29
       },
-      "id": 15,
+      "id": 12,
       "panels": [],
       "title": "Binary",
       "type": "row"
@@ -1103,9 +833,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 46
+        "y": 30
       },
-      "id": 16,
+      "id": 13,
       "options": {
         "legend": {
           "calcs": [],
@@ -1140,9 +870,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 54
+        "y": 38
       },
-      "id": 17,
+      "id": 14,
       "panels": [],
       "title": "Blocked",
       "type": "row"
@@ -1206,9 +936,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 55
+        "y": 39
       },
-      "id": 18,
+      "id": 15,
       "options": {
         "legend": {
           "calcs": [],
@@ -1296,9 +1026,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 55
+        "y": 39
       },
-      "id": 19,
+      "id": 16,
       "options": {
         "legend": {
           "calcs": [],
@@ -1386,9 +1116,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 63
+        "y": 47
       },
-      "id": 20,
+      "id": 17,
       "options": {
         "legend": {
           "calcs": [],
@@ -1476,9 +1206,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 63
+        "y": 47
       },
-      "id": 21,
+      "id": 18,
       "options": {
         "legend": {
           "calcs": [],
@@ -1566,9 +1296,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 71
+        "y": 55
       },
-      "id": 22,
+      "id": 19,
       "options": {
         "legend": {
           "calcs": [],
@@ -1603,9 +1333,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 79
+        "y": 63
       },
-      "id": 23,
+      "id": 20,
       "panels": [],
       "title": "Cluster",
       "type": "row"
@@ -1669,9 +1399,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 80
+        "y": 64
       },
-      "id": 24,
+      "id": 21,
       "options": {
         "legend": {
           "calcs": [],
@@ -1706,9 +1436,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 88
+        "y": 72
       },
-      "id": 25,
+      "id": 22,
       "panels": [],
       "title": "Commands",
       "type": "row"
@@ -1772,9 +1502,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 89
+        "y": 73
       },
-      "id": 26,
+      "id": 23,
       "options": {
         "legend": {
           "calcs": [],
@@ -1862,9 +1592,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 89
+        "y": 73
       },
-      "id": 27,
+      "id": 24,
       "options": {
         "legend": {
           "calcs": [],
@@ -1974,9 +1704,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 97
+        "y": 81
       },
-      "id": 28,
+      "id": 25,
       "options": {
         "legend": {
           "calcs": [],
@@ -2011,9 +1741,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 105
+        "y": 89
       },
-      "id": 29,
+      "id": 26,
       "panels": [],
       "title": "Connections",
       "type": "row"
@@ -2077,9 +1807,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 106
+        "y": 90
       },
-      "id": 30,
+      "id": 27,
       "options": {
         "legend": {
           "calcs": [],
@@ -2167,9 +1897,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 106
+        "y": 90
       },
-      "id": 31,
+      "id": 28,
       "options": {
         "legend": {
           "calcs": [],
@@ -2257,9 +1987,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 114
+        "y": 98
       },
-      "id": 32,
+      "id": 29,
       "options": {
         "legend": {
           "calcs": [],
@@ -2347,9 +2077,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 114
+        "y": 98
       },
-      "id": 33,
+      "id": 30,
       "options": {
         "legend": {
           "calcs": [],
@@ -2384,9 +2114,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 122
+        "y": 106
       },
-      "id": 34,
+      "id": 31,
       "panels": [],
       "title": "Cpu",
       "type": "row"
@@ -2450,9 +2180,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 123
+        "y": 107
       },
-      "id": 35,
+      "id": 32,
       "options": {
         "legend": {
           "calcs": [],
@@ -2540,9 +2270,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 123
+        "y": 107
       },
-      "id": 36,
+      "id": 33,
       "options": {
         "legend": {
           "calcs": [],
@@ -2577,9 +2307,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 131
+        "y": 115
       },
-      "id": 37,
+      "id": 34,
       "panels": [],
       "title": "Eviction",
       "type": "row"
@@ -2643,9 +2373,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 132
+        "y": 116
       },
-      "id": 38,
+      "id": 35,
       "options": {
         "legend": {
           "calcs": [],
@@ -2733,9 +2463,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 132
+        "y": 116
       },
-      "id": 39,
+      "id": 36,
       "options": {
         "legend": {
           "calcs": [],
@@ -2823,9 +2553,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 140
+        "y": 124
       },
-      "id": 40,
+      "id": 37,
       "options": {
         "legend": {
           "calcs": [],
@@ -2913,9 +2643,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 140
+        "y": 124
       },
-      "id": 41,
+      "id": 38,
       "options": {
         "legend": {
           "calcs": [],
@@ -2950,9 +2680,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 148
+        "y": 132
       },
-      "id": 42,
+      "id": 39,
       "panels": [],
       "title": "Fields",
       "type": "row"
@@ -3016,9 +2746,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 149
+        "y": 133
       },
-      "id": 43,
+      "id": 40,
       "options": {
         "legend": {
           "calcs": [],
@@ -3053,9 +2783,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 157
+        "y": 141
       },
-      "id": 44,
+      "id": 41,
       "panels": [],
       "title": "Flush",
       "type": "row"
@@ -3119,9 +2849,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 158
+        "y": 142
       },
-      "id": 45,
+      "id": 42,
       "options": {
         "legend": {
           "calcs": [],
@@ -3209,9 +2939,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 158
+        "y": 142
       },
-      "id": 46,
+      "id": 43,
       "options": {
         "legend": {
           "calcs": [],
@@ -3246,9 +2976,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 166
+        "y": 150
       },
-      "id": 47,
+      "id": 44,
       "panels": [],
       "title": "Info",
       "type": "row"
@@ -3312,9 +3042,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 167
+        "y": 151
       },
-      "id": 48,
+      "id": 45,
       "options": {
         "legend": {
           "calcs": [],
@@ -3349,9 +3079,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 175
+        "y": 159
       },
-      "id": 49,
+      "id": 46,
       "panels": [],
       "title": "Keys",
       "type": "row"
@@ -3415,9 +3145,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 176
+        "y": 160
       },
-      "id": 50,
+      "id": 47,
       "options": {
         "legend": {
           "calcs": [],
@@ -3505,9 +3235,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 176
+        "y": 160
       },
-      "id": 51,
+      "id": 48,
       "options": {
         "legend": {
           "calcs": [],
@@ -3595,9 +3325,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 184
+        "y": 168
       },
-      "id": 52,
+      "id": 49,
       "options": {
         "legend": {
           "calcs": [],
@@ -3632,9 +3362,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 192
+        "y": 176
       },
-      "id": 53,
+      "id": 50,
       "panels": [],
       "title": "Keyspace",
       "type": "row"
@@ -3698,9 +3428,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 193
+        "y": 177
       },
-      "id": 54,
+      "id": 51,
       "options": {
         "legend": {
           "calcs": [],
@@ -3788,9 +3518,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 193
+        "y": 177
       },
-      "id": 55,
+      "id": 52,
       "options": {
         "legend": {
           "calcs": [],
@@ -3878,9 +3608,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 201
+        "y": 185
       },
-      "id": 56,
+      "id": 53,
       "options": {
         "legend": {
           "calcs": [],
@@ -3915,9 +3645,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 209
+        "y": 193
       },
-      "id": 57,
+      "id": 54,
       "panels": [],
       "title": "Latency",
       "type": "row"
@@ -3981,9 +3711,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 210
+        "y": 194
       },
-      "id": 58,
+      "id": 55,
       "options": {
         "legend": {
           "calcs": [],
@@ -4018,9 +3748,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 218
+        "y": 202
       },
-      "id": 59,
+      "id": 56,
       "panels": [],
       "title": "Lua",
       "type": "row"
@@ -4084,9 +3814,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 219
+        "y": 203
       },
-      "id": 60,
+      "id": 57,
       "options": {
         "legend": {
           "calcs": [],
@@ -4174,9 +3904,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 219
+        "y": 203
       },
-      "id": 61,
+      "id": 58,
       "options": {
         "legend": {
           "calcs": [],
@@ -4286,9 +4016,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 227
+        "y": 211
       },
-      "id": 62,
+      "id": 59,
       "options": {
         "legend": {
           "calcs": [],
@@ -4376,9 +4106,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 227
+        "y": 211
       },
-      "id": 63,
+      "id": 60,
       "options": {
         "legend": {
           "calcs": [],
@@ -4466,9 +4196,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 235
+        "y": 219
       },
-      "id": 64,
+      "id": 61,
       "options": {
         "legend": {
           "calcs": [],
@@ -4503,9 +4233,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 243
+        "y": 227
       },
-      "id": 65,
+      "id": 62,
       "panels": [],
       "title": "Memory",
       "type": "row"
@@ -4569,9 +4299,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 244
+        "y": 228
       },
-      "id": 66,
+      "id": 63,
       "options": {
         "legend": {
           "calcs": [],
@@ -4659,9 +4389,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 244
+        "y": 228
       },
-      "id": 67,
+      "id": 64,
       "options": {
         "legend": {
           "calcs": [],
@@ -4749,9 +4479,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 252
+        "y": 236
       },
-      "id": 68,
+      "id": 65,
       "options": {
         "legend": {
           "calcs": [],
@@ -4839,9 +4569,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 252
+        "y": 236
       },
-      "id": 69,
+      "id": 66,
       "options": {
         "legend": {
           "calcs": [],
@@ -4929,9 +4659,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 260
+        "y": 244
       },
-      "id": 70,
+      "id": 67,
       "options": {
         "legend": {
           "calcs": [],
@@ -5019,9 +4749,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 260
+        "y": 244
       },
-      "id": 71,
+      "id": 68,
       "options": {
         "legend": {
           "calcs": [],
@@ -5109,9 +4839,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 268
+        "y": 252
       },
-      "id": 72,
+      "id": 69,
       "options": {
         "legend": {
           "calcs": [],
@@ -5199,9 +4929,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 268
+        "y": 252
       },
-      "id": 73,
+      "id": 70,
       "options": {
         "legend": {
           "calcs": [],
@@ -5236,9 +4966,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 276
+        "y": 260
       },
-      "id": 74,
+      "id": 71,
       "panels": [],
       "title": "Persistence",
       "type": "row"
@@ -5302,9 +5032,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 277
+        "y": 261
       },
-      "id": 75,
+      "id": 72,
       "options": {
         "legend": {
           "calcs": [],
@@ -5339,9 +5069,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 285
+        "y": 269
       },
-      "id": 76,
+      "id": 73,
       "panels": [],
       "title": "Pubsub",
       "type": "row"
@@ -5405,9 +5135,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 286
+        "y": 270
       },
-      "id": 77,
+      "id": 74,
       "options": {
         "legend": {
           "calcs": [],
@@ -5495,9 +5225,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 286
+        "y": 270
       },
-      "id": 78,
+      "id": 75,
       "options": {
         "legend": {
           "calcs": [],
@@ -5585,9 +5315,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 294
+        "y": 278
       },
-      "id": 79,
+      "id": 76,
       "options": {
         "legend": {
           "calcs": [],
@@ -5675,9 +5405,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 294
+        "y": 278
       },
-      "id": 80,
+      "id": 77,
       "options": {
         "legend": {
           "calcs": [],
@@ -5765,9 +5495,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 302
+        "y": 286
       },
-      "id": 81,
+      "id": 78,
       "options": {
         "legend": {
           "calcs": [],
@@ -5855,9 +5585,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 302
+        "y": 286
       },
-      "id": 82,
+      "id": 79,
       "options": {
         "legend": {
           "calcs": [],
@@ -5892,9 +5622,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 310
+        "y": 294
       },
-      "id": 83,
+      "id": 80,
       "panels": [],
       "title": "Recovery",
       "type": "row"
@@ -5958,9 +5688,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 311
+        "y": 295
       },
-      "id": 84,
+      "id": 81,
       "options": {
         "legend": {
           "calcs": [],
@@ -6048,9 +5778,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 311
+        "y": 295
       },
-      "id": 85,
+      "id": 82,
       "options": {
         "legend": {
           "calcs": [],
@@ -6085,9 +5815,472 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 319
+        "y": 303
+      },
+      "id": 83,
+      "panels": [],
+      "title": "Rocksdb",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Bytes RocksDB's process-wide `WriteBufferManager` currently accounts for across every column family's memtables.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 304
+      },
+      "id": 84,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "frogdb_rocksdb_write_buffer_bytes{instance=~\"$instance\", job=~\"$job\"}",
+          "legendFormat": "{{__name__}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Frogdb Rocksdb Write Buffer Bytes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "The `WriteBufferManager`'s ceiling: `write_buffer_size * max_write_buffer_number`. Writes stall above it rather than allocating past it.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 304
+      },
+      "id": 85,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "frogdb_rocksdb_write_buffer_limit_bytes{instance=~\"$instance\", job=~\"$job\"}",
+          "legendFormat": "{{__name__}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Frogdb Rocksdb Write Buffer Limit Bytes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Bytes charged to RocksDB's process-wide block cache. With the write-buffer manager built against the cache, this covers memtables too, so it is the engine's whole tracked footprint.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 312
       },
       "id": 86,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "frogdb_rocksdb_block_cache_bytes{instance=~\"$instance\", job=~\"$job\"}",
+          "legendFormat": "{{__name__}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Frogdb Rocksdb Block Cache Bytes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "The block cache's capacity: `block_cache_size + write_buffer_size * max_write_buffer_number`. Zero when the operator left `block_cache_size` at 0 and RocksDB's own default cache is in use.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 312
+      },
+      "id": 87,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "frogdb_rocksdb_block_cache_capacity_bytes{instance=~\"$instance\", job=~\"$job\"}",
+          "legendFormat": "{{__name__}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Frogdb Rocksdb Block Cache Capacity Bytes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Block-cache bytes pinned by live iterators and table readers — unevictable, so the gap to the capacity is the cache's real headroom.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 320
+      },
+      "id": 88,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "frogdb_rocksdb_block_cache_pinned_bytes{instance=~\"$instance\", job=~\"$job\"}",
+          "legendFormat": "{{__name__}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Frogdb Rocksdb Block Cache Pinned Bytes",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 328
+      },
+      "id": 89,
       "panels": [],
       "title": "Scatter",
       "type": "row"
@@ -6151,9 +6344,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 320
+        "y": 329
       },
-      "id": 87,
+      "id": 90,
       "options": {
         "legend": {
           "calcs": [],
@@ -6241,9 +6434,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 320
+        "y": 329
       },
-      "id": 88,
+      "id": 91,
       "options": {
         "legend": {
           "calcs": [],
@@ -6353,9 +6546,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 328
+        "y": 337
       },
-      "id": 89,
+      "id": 92,
       "options": {
         "legend": {
           "calcs": [],
@@ -6412,9 +6605,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 336
+        "y": 345
       },
-      "id": 90,
+      "id": 93,
       "panels": [],
       "title": "Shard",
       "type": "row"
@@ -6478,9 +6671,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 337
+        "y": 346
       },
-      "id": 91,
+      "id": 94,
       "options": {
         "legend": {
           "calcs": [],
@@ -6568,9 +6761,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 337
+        "y": 346
       },
-      "id": 92,
+      "id": 95,
       "options": {
         "legend": {
           "calcs": [],
@@ -6658,9 +6851,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 345
+        "y": 354
       },
-      "id": 93,
+      "id": 96,
       "options": {
         "legend": {
           "calcs": [],
@@ -6748,9 +6941,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 345
+        "y": 354
       },
-      "id": 94,
+      "id": 97,
       "options": {
         "legend": {
           "calcs": [],
@@ -6860,9 +7053,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 353
+        "y": 362
       },
-      "id": 95,
+      "id": 98,
       "options": {
         "legend": {
           "calcs": [],
@@ -6897,9 +7090,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 361
+        "y": 370
       },
-      "id": 96,
+      "id": 99,
       "panels": [],
       "title": "Snapshot",
       "type": "row"
@@ -6963,9 +7156,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 362
+        "y": 371
       },
-      "id": 97,
+      "id": 100,
       "options": {
         "legend": {
           "calcs": [],
@@ -7053,9 +7246,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 362
+        "y": 371
       },
-      "id": 98,
+      "id": 101,
       "options": {
         "legend": {
           "calcs": [],
@@ -7143,9 +7336,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 370
+        "y": 379
       },
-      "id": 99,
+      "id": 102,
       "options": {
         "legend": {
           "calcs": [],
@@ -7233,9 +7426,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 370
+        "y": 379
       },
-      "id": 100,
+      "id": 103,
       "options": {
         "legend": {
           "calcs": [],
@@ -7345,9 +7538,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 378
+        "y": 387
       },
-      "id": 101,
+      "id": 104,
       "options": {
         "legend": {
           "calcs": [],
@@ -7382,9 +7575,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 386
+        "y": 395
       },
-      "id": 102,
+      "id": 105,
       "panels": [],
       "title": "Split",
       "type": "row"
@@ -7448,9 +7641,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 387
+        "y": 396
       },
-      "id": 103,
+      "id": 106,
       "options": {
         "legend": {
           "calcs": [],
@@ -7538,9 +7731,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 387
+        "y": 396
       },
-      "id": 104,
+      "id": 107,
       "options": {
         "legend": {
           "calcs": [],
@@ -7628,9 +7821,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 395
+        "y": 404
       },
-      "id": 105,
+      "id": 108,
       "options": {
         "legend": {
           "calcs": [],
@@ -7718,9 +7911,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 395
+        "y": 404
       },
-      "id": 106,
+      "id": 109,
       "options": {
         "legend": {
           "calcs": [],
@@ -7755,9 +7948,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 403
+        "y": 412
       },
-      "id": 107,
+      "id": 110,
       "panels": [],
       "title": "Task",
       "type": "row"
@@ -7821,9 +8014,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 404
+        "y": 413
       },
-      "id": 108,
+      "id": 111,
       "options": {
         "legend": {
           "calcs": [],
@@ -7911,9 +8104,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 404
+        "y": 413
       },
-      "id": 109,
+      "id": 112,
       "options": {
         "legend": {
           "calcs": [],
@@ -8001,9 +8194,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 412
+        "y": 421
       },
-      "id": 110,
+      "id": 113,
       "options": {
         "legend": {
           "calcs": [],
@@ -8091,9 +8284,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 412
+        "y": 421
       },
-      "id": 111,
+      "id": 114,
       "options": {
         "legend": {
           "calcs": [],
@@ -8181,9 +8374,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 420
+        "y": 429
       },
-      "id": 112,
+      "id": 115,
       "options": {
         "legend": {
           "calcs": [],
@@ -8271,9 +8464,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 420
+        "y": 429
       },
-      "id": 113,
+      "id": 116,
       "options": {
         "legend": {
           "calcs": [],
@@ -8308,9 +8501,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 428
+        "y": 437
       },
-      "id": 114,
+      "id": 117,
       "panels": [],
       "title": "Tiered",
       "type": "row"
@@ -8374,9 +8567,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 429
+        "y": 438
       },
-      "id": 115,
+      "id": 118,
       "options": {
         "legend": {
           "calcs": [],
@@ -8464,9 +8657,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 429
+        "y": 438
       },
-      "id": 116,
+      "id": 119,
       "options": {
         "legend": {
           "calcs": [],
@@ -8501,9 +8694,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 437
+        "y": 446
       },
-      "id": 117,
+      "id": 120,
       "panels": [],
       "title": "Tls",
       "type": "row"
@@ -8567,9 +8760,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 438
+        "y": 447
       },
-      "id": 118,
+      "id": 121,
       "options": {
         "legend": {
           "calcs": [],
@@ -8604,9 +8797,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 446
+        "y": 455
       },
-      "id": 119,
+      "id": 122,
       "panels": [],
       "title": "Tracking",
       "type": "row"
@@ -8670,9 +8863,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 447
+        "y": 456
       },
-      "id": 120,
+      "id": 123,
       "options": {
         "legend": {
           "calcs": [],
@@ -8760,9 +8953,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 447
+        "y": 456
       },
-      "id": 121,
+      "id": 124,
       "options": {
         "legend": {
           "calcs": [],
@@ -8797,9 +8990,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 455
+        "y": 464
       },
-      "id": 122,
+      "id": 125,
       "panels": [],
       "title": "Transactions",
       "type": "row"
@@ -8863,9 +9056,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 456
+        "y": 465
       },
-      "id": 123,
+      "id": 126,
       "options": {
         "legend": {
           "calcs": [],
@@ -8953,9 +9146,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 456
+        "y": 465
       },
-      "id": 124,
+      "id": 127,
       "options": {
         "legend": {
           "calcs": [],
@@ -9065,9 +9258,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 464
+        "y": 473
       },
-      "id": 125,
+      "id": 128,
       "options": {
         "legend": {
           "calcs": [],
@@ -9177,9 +9370,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 464
+        "y": 473
       },
-      "id": 126,
+      "id": 129,
       "options": {
         "legend": {
           "calcs": [],
@@ -9214,9 +9407,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 472
+        "y": 481
       },
-      "id": 127,
+      "id": 130,
       "panels": [],
       "title": "Uptime",
       "type": "row"
@@ -9280,9 +9473,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 473
+        "y": 482
       },
-      "id": 128,
+      "id": 131,
       "options": {
         "legend": {
           "calcs": [],
@@ -9317,9 +9510,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 481
+        "y": 490
       },
-      "id": 129,
+      "id": 132,
       "panels": [],
       "title": "Version",
       "type": "row"
@@ -9383,9 +9576,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 482
+        "y": 491
       },
-      "id": 130,
+      "id": 133,
       "options": {
         "legend": {
           "calcs": [],
@@ -9420,9 +9613,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 490
+        "y": 499
       },
-      "id": 131,
+      "id": 134,
       "panels": [],
       "title": "Wal",
       "type": "row"
@@ -9486,9 +9679,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 491
+        "y": 500
       },
-      "id": 132,
+      "id": 135,
       "options": {
         "legend": {
           "calcs": [],
@@ -9576,9 +9769,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 491
+        "y": 500
       },
-      "id": 133,
+      "id": 136,
       "options": {
         "legend": {
           "calcs": [],
@@ -9666,9 +9859,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 499
+        "y": 508
       },
-      "id": 134,
+      "id": 137,
       "options": {
         "legend": {
           "calcs": [],
@@ -9778,9 +9971,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 499
+        "y": 508
       },
-      "id": 135,
+      "id": 138,
       "options": {
         "legend": {
           "calcs": [],
@@ -9868,9 +10061,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 507
+        "y": 516
       },
-      "id": 136,
+      "id": 139,
       "options": {
         "legend": {
           "calcs": [],
@@ -9958,9 +10151,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 507
+        "y": 516
       },
-      "id": 137,
+      "id": 140,
       "options": {
         "legend": {
           "calcs": [],
@@ -10048,9 +10241,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 515
+        "y": 524
       },
-      "id": 138,
+      "id": 141,
       "options": {
         "legend": {
           "calcs": [],
@@ -10138,9 +10331,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 515
+        "y": 524
       },
-      "id": 139,
+      "id": 142,
       "options": {
         "legend": {
           "calcs": [],
@@ -10228,9 +10421,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 523
+        "y": 532
       },
-      "id": 140,
+      "id": 143,
       "options": {
         "legend": {
           "calcs": [],
@@ -10318,9 +10511,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 523
+        "y": 532
       },
-      "id": 141,
+      "id": 144,
       "options": {
         "legend": {
           "calcs": [],
@@ -10408,9 +10601,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 531
+        "y": 540
       },
-      "id": 142,
+      "id": 145,
       "options": {
         "legend": {
           "calcs": [],
@@ -10498,9 +10691,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 531
+        "y": 540
       },
-      "id": 143,
+      "id": 146,
       "options": {
         "legend": {
           "calcs": [],
@@ -10588,9 +10781,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 539
+        "y": 548
       },
-      "id": 144,
+      "id": 147,
       "options": {
         "legend": {
           "calcs": [],
@@ -10678,9 +10871,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 539
+        "y": 548
       },
-      "id": 145,
+      "id": 148,
       "options": {
         "legend": {
           "calcs": [],

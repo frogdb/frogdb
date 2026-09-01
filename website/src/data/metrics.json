@@ -4,7 +4,7 @@
     "source": "frogdb-server/crates/telemetry/src/definitions.rs",
     "regenerate": "just docs-gen"
   },
-  "count": 109,
+  "count": 111,
   "metrics": [
     {
       "name": "frogdb_active_version",
@@ -45,42 +45,6 @@
       "help": "jemalloc `stats.resident`: bytes physically resident (metadata + active pages + unused dirty pages)",
       "group": "allocator",
       "labels": []
-    },
-    {
-      "name": "frogdb_allocator_shard_allocated_bytes",
-      "type": "gauge",
-      "help": "Upper bound on the bytes one shard has allocated, from the jemalloc arena bound to that shard's thread (`stats.arenas.<i>.{small,large}`). An upper bound, not a live figure: freed bytes stay charged until the thread cache flushes them. Absent — not zero — for a shard with no arena of its own.",
-      "group": "allocator",
-      "labels": [
-        {
-          "name": "shard",
-          "type": "string"
-        }
-      ]
-    },
-    {
-      "name": "frogdb_allocator_shard_frag_ratio",
-      "type": "gauge",
-      "help": "Per-shard fragmentation ratio (arena resident / arena allocated)",
-      "group": "allocator",
-      "labels": [
-        {
-          "name": "shard",
-          "type": "string"
-        }
-      ]
-    },
-    {
-      "name": "frogdb_allocator_shard_resident_bytes",
-      "type": "gauge",
-      "help": "Bytes physically resident in one shard's jemalloc arena (`stats.arenas.<i>.resident`)",
-      "group": "allocator",
-      "labels": [
-        {
-          "name": "shard",
-          "type": "string"
-        }
-      ]
     },
     {
       "name": "frogdb_binary_version",
@@ -715,6 +679,41 @@
       "type": "counter",
       "help": "Total keys skipped at startup because their stored value failed to deserialize",
       "group": "recovery",
+      "labels": []
+    },
+    {
+      "name": "frogdb_rocksdb_block_cache_bytes",
+      "type": "gauge",
+      "help": "Bytes charged to RocksDB's process-wide block cache. With the write-buffer manager built against the cache, this covers memtables too, so it is the engine's whole tracked footprint.",
+      "group": "rocksdb",
+      "labels": []
+    },
+    {
+      "name": "frogdb_rocksdb_block_cache_capacity_bytes",
+      "type": "gauge",
+      "help": "The block cache's capacity: `block_cache_size + write_buffer_size * max_write_buffer_number`. Zero when the operator left `block_cache_size` at 0 and RocksDB's own default cache is in use.",
+      "group": "rocksdb",
+      "labels": []
+    },
+    {
+      "name": "frogdb_rocksdb_block_cache_pinned_bytes",
+      "type": "gauge",
+      "help": "Block-cache bytes pinned by live iterators and table readers — unevictable, so the gap to the capacity is the cache's real headroom.",
+      "group": "rocksdb",
+      "labels": []
+    },
+    {
+      "name": "frogdb_rocksdb_write_buffer_bytes",
+      "type": "gauge",
+      "help": "Bytes RocksDB's process-wide `WriteBufferManager` currently accounts for across every column family's memtables.",
+      "group": "rocksdb",
+      "labels": []
+    },
+    {
+      "name": "frogdb_rocksdb_write_buffer_limit_bytes",
+      "type": "gauge",
+      "help": "The `WriteBufferManager`'s ceiling: `write_buffer_size * max_write_buffer_number`. Writes stall above it rather than allocating past it.",
+      "group": "rocksdb",
       "labels": []
     },
     {
