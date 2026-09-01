@@ -18,4 +18,10 @@ turmoil = ["dep:turmoil"]
 [dependencies]
 tokio.workspace = true
 socket2.workspace = true
+tracing.workspace = true
 turmoil = { workspace = true, optional = true }
+
+# Shard-thread CPU pinning (`sched_setaffinity`). Linux-only on purpose: macOS
+# exposes no strict affinity API, so there is nothing to link against there.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
