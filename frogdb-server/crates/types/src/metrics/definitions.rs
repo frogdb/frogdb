@@ -381,6 +381,37 @@ define_metrics! {
         labels: [shard: &str, subsystem: &str],
     }
 
+    // ------------------------------------------------------------------
+    // RocksDB's own memory accounting (memory-architecture R10). These are
+    // read from the engine — the block cache and write-buffer manager it
+    // was given — not from the broker, so they are what a `Budget` charge
+    // is checked *against*. One process-wide cache and one write-buffer
+    // manager, hence no `shard` label.
+    // ------------------------------------------------------------------
+
+    /// Bytes RocksDB's process-wide `WriteBufferManager` currently accounts
+    /// for across every column family's memtables.
+    gauge RocksdbWriteBufferBytes("frogdb_rocksdb_write_buffer_bytes") {}
+
+    /// The `WriteBufferManager`'s ceiling: `write_buffer_size *
+    /// max_write_buffer_number`. Writes stall above it rather than
+    /// allocating past it.
+    gauge RocksdbWriteBufferLimitBytes("frogdb_rocksdb_write_buffer_limit_bytes") {}
+
+    /// Bytes charged to RocksDB's process-wide block cache. With the
+    /// write-buffer manager built against the cache, this covers memtables
+    /// too, so it is the engine's whole tracked footprint.
+    gauge RocksdbBlockCacheBytes("frogdb_rocksdb_block_cache_bytes") {}
+
+    /// The block cache's capacity: `block_cache_size + write_buffer_size *
+    /// max_write_buffer_number`. Zero when the operator left
+    /// `block_cache_size` at 0 and RocksDB's own default cache is in use.
+    gauge RocksdbBlockCacheCapacityBytes("frogdb_rocksdb_block_cache_capacity_bytes") {}
+
+    /// Block-cache bytes pinned by live iterators and table readers —
+    /// unevictable, so the gap to the capacity is the cache's real headroom.
+    gauge RocksdbBlockCachePinnedBytes("frogdb_rocksdb_block_cache_pinned_bytes") {}
+
     /// Tracked keys the client-tracking table shed (evicted and invalidated)
     /// because its `Budget` refused a charge — the declared `shed`
     /// disposition, made observable.

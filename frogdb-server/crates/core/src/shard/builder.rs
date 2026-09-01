@@ -479,6 +479,17 @@ impl ShardWorkerBuilder {
         // simulated shard has no arena of its own.
         let mut memory =
             frogdb_memory::MemoryBroker::new(shard_id, Arc::new(frogdb_memory::NoArenaReading));
+        // RocksDB's block cache and write-buffer manager are one allocation
+        // for the *process*, not one per core, so their `Budget` is opened
+        // once — at `RocksStore::open` — and adopted here rather than opened
+        // per shard. Shard 0 adopts it so exactly one core reports it; the
+        // other cores leave the `Persistence` slot closed, and their gauges
+        // read zero, which is the truth for them.
+        if shard_id == 0
+            && let Some(rocks) = self.rocks_store.as_ref()
+        {
+            memory.adopt(rocks.memory().budget());
+        }
         // The tracking table sheds (it evicts its oldest tracked key and
         // invalidates that key's clients) rather than backpressuring: a client
         // read must not be made to wait on a cache-invalidation bookkeeping

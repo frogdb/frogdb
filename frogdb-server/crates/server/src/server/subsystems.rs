@@ -339,6 +339,23 @@ impl Server {
             None
         };
 
+        // Start the RocksDB memory collector. This ticks the *engine's* own
+        // counters (block cache, write-buffer manager) and, in the same pass,
+        // reconciles the persistence `Budget` charge against them — the store
+        // has no thread of its own, so this ticker is what keeps the charge
+        // tracking reality. Same 5s cadence as the system collector.
+        if self.prometheus_recorder.is_some()
+            && let Some(rocks) = self.rocks_store.clone()
+        {
+            tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(Duration::from_secs(5));
+                loop {
+                    ticker.tick().await;
+                    rocks.record_memory_metrics();
+                }
+            });
+        }
+
         // Start version metrics collector (records active_version, mixed_version, gate status)
         if self.prometheus_recorder.is_some() {
             let recorder = self.metrics_recorder.clone();

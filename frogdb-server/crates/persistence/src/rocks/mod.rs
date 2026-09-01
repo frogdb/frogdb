@@ -364,6 +364,13 @@ impl RocksStore {
         &self.memory
     }
 
+    /// Publish the engine's memory counters and reconcile the persistence
+    /// charge, through the store's own recorder. Driven by the server's
+    /// metrics ticker.
+    pub fn record_memory_metrics(&self) {
+        self.memory.record_metrics(&*self.metrics);
+    }
+
     /// Register a WAL writer's durability watermark for [`Self::durable_sync`].
     pub(crate) fn register_sync_target(&self, target: &Arc<dyn DurableSyncTarget>) {
         let mut targets = self.sync_targets.lock().unwrap();

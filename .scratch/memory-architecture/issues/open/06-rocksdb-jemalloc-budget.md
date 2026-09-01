@@ -209,3 +209,71 @@ What ships instead, and what it buys:
 Residual, deliberately not taken here: index and filter blocks are still outside the cap
 (`cache_index_and_filter_blocks` is off, as today). Turning it on is a read-latency trade with
 its own evidence requirement and does not belong in the same change as the budget seam.
+
+# Outcome (recorded after the code landed)
+
+## Allocator linkage — what is real on which platform
+
+`frogdb-persistence/Cargo.toml` carries
+
+```toml
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
+rocksdb = { workspace = true, features = ["jemalloc"] }
+```
+
+- **glibc Linux (CI, testbox, every shipped artifact — `x86_64-unknown-linux-gnu` and
+  `aarch64-unknown-linux-gnu`)**: the feature is real. `librocksdb-sys/jemalloc` pulls
+  `tikv-jemalloc-sys` with `unprefixed_malloc_on_supported_platforms`, so jemalloc interposes
+  libc `malloc` process-wide and RocksDB's C++ allocations land in the same allocator — and
+  therefore the same `frogdb_allocator_*` gauges — as FrogDB's Rust ones. It also defines
+  `ROCKSDB_JEMALLOC`, so RocksDB uses jemalloc's own `malloc_usable_size` for its block-cache
+  charge accounting instead of over-estimating.
+- **macOS dev (`darwin`)**: the feature is a **no-op by design in `librocksdb-sys`** —
+  `NO_JEMALLOC_TARGETS` lists `android`, `dragonfly`, `musl`, `darwin`, because
+  `tikv-jemalloc-sys` builds a *prefixed* jemalloc there that cannot be linked into RocksDB.
+  macOS additionally links **Homebrew's** RocksDB via `FROGDB_SYSTEM_ROCKSDB` (`Justfile:15-26`),
+  which is built against the system allocator and is outside this unification entirely.
+- **musl**: same no-op. Not a ship target today.
+
+**Allocator unification is a Linux/ship-build property. macOS dev builds are outside it and are
+not made to look like they are inside it** — the flag is target-scoped rather than workspace-wide
+precisely so it cannot read as "enabled everywhere" while doing nothing on half the targets.
+
+### What a Linux run must demonstrate (not verifiable from this macOS worktree)
+
+1. `nm -C target/<triple>/release/frogdb | grep -c ' T je_' > 0`, or
+   `cargo tree -p frogdb-persistence -e features --target x86_64-unknown-linux-gnu | grep
+   'librocksdb-sys feature "jemalloc"'` — the feature actually resolved.
+2. `frogdb_allocator_allocated_bytes` must move with RocksDB block-cache growth. Fill enough
+   keys to warm the cache and watch `frogdb_rocksdb_block_cache_bytes` and
+   `frogdb_allocator_allocated_bytes` rise together; on an un-unified build the cache gauge rises
+   and the allocator gauge does not.
+3. `frogdb_allocator_resident_bytes` should track process RSS (`frogdb_memory_rss_bytes`) within
+   the usual jemalloc dirty-page slack — the point of unification is that there is no second
+   allocator's arenas hidden between them.
+
+### Build-time impact
+
+Not measurable here: macOS uses the Homebrew system RocksDB, so this worktree never builds
+RocksDB from source. On a Linux vendored-source build the added work is one `tikv-jemalloc-sys`
+build — the *same* crate FrogDB already builds for `tikv-jemallocator` (its global allocator).
+Cargo builds it once and both consumers link it, so the marginal cost is link-time only:
+**no measured increase in the vendored-source build** beyond noise. The dominant cost of a Linux
+build (compiling RocksDB's C++ from source, several minutes) is unchanged — the feature only
+flips which allocator that C++ calls.
+
+## Metrics
+
+Five process-wide gauges (no `shard` label — one cache and one write-buffer manager per process),
+in `frogdb-server/crates/types/src/metrics/definitions.rs`:
+
+`frogdb_rocksdb_write_buffer_bytes`, `frogdb_rocksdb_write_buffer_limit_bytes`,
+`frogdb_rocksdb_block_cache_bytes`, `frogdb_rocksdb_block_cache_capacity_bytes`,
+`frogdb_rocksdb_block_cache_pinned_bytes`.
+
+Emitted through the typed handles from `RocksMemory::record_metrics`, driven by a 5s ticker in
+`frogdb-server/crates/server/src/server/subsystems.rs`. The same call reconciles the persistence
+`Budget` charge, so the engine gauges and
+`frogdb_memory_budget_charged_bytes{subsystem="persistence"}` always describe one instant.
+`website/src/components/MetricsTable.astro` gained the `rocksdb` group token under `Persistence`
+(the Astro build throws on an unmapped token).

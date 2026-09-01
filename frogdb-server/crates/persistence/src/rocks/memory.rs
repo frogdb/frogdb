@@ -38,6 +38,10 @@
 //! `frogdb_memory_budget_refusals_total{subsystem="persistence"}`.
 
 use frogdb_memory::{Budget, Charge, Disposition, Refused, Subsystem};
+use frogdb_types::metrics::definitions::{
+    RocksdbBlockCacheBytes, RocksdbBlockCacheCapacityBytes, RocksdbBlockCachePinnedBytes,
+    RocksdbWriteBufferBytes, RocksdbWriteBufferLimitBytes,
+};
 use rocksdb::{BlockBasedOptions, Cache, Options, WriteBufferManager};
 
 use super::config::RocksConfig;
@@ -214,6 +218,22 @@ impl RocksMemory {
         // reaches `frogdb_memory_budget_refusals_total`.
         let _ = reconcile(&mut charge, usage.charged_footprint_bytes());
         usage
+    }
+
+    /// Reconcile the charge and publish the engine's counters as gauges.
+    ///
+    /// The two happen together on purpose: the gauges and the persistence
+    /// `Budget` must describe the same instant, or an operator reading
+    /// `frogdb_rocksdb_block_cache_bytes` next to
+    /// `frogdb_memory_budget_charged_bytes{subsystem="persistence"}` sees a
+    /// disagreement that is an artifact of two separate reads.
+    pub fn record_metrics(&self, recorder: &dyn frogdb_types::traits::MetricsRecorder) {
+        let usage = self.refresh();
+        RocksdbWriteBufferBytes::set(recorder, usage.write_buffer_bytes as f64);
+        RocksdbWriteBufferLimitBytes::set(recorder, usage.write_buffer_limit_bytes as f64);
+        RocksdbBlockCacheBytes::set(recorder, usage.block_cache_bytes as f64);
+        RocksdbBlockCacheCapacityBytes::set(recorder, usage.block_cache_capacity_bytes as f64);
+        RocksdbBlockCachePinnedBytes::set(recorder, usage.block_cache_pinned_bytes as f64);
     }
 }
 
