@@ -17,7 +17,7 @@ temp dir. Several files here are load-bearing — `scripts/coverage-depth.py` wr
 | [testing-improvements-round2](testing-improvements-round2/) | active | 70 | 6 | round-2 testing-gap audit; 249 findings → 95 issues. Re-triaged 2026-08-06: **18 confirmed live defects** |
 | [arch-deepening](arch-deepening/) | active | 15 | 1 | architecture deepening rounds; proposals backlog empty, issues backlog is not |
 | [hardening-2](hardening-2/) | active | 9 | 1 | second hardening campaign, detection-first; running |
-| [concurrency-testing](concurrency-testing/) | active | 5 | 6 | concurrency invariant testing; phases 1–5 shipped. Issue 11's findings re-verified 2026-08-02 and split into issues 12–16 — one real product bug (12), the rest harness/checker defects. Issue 18: two pre-existing turmoil sim failures on `main`, needs-triage |
+| [concurrency-testing](concurrency-testing/) | active | 5 | 6 | concurrency invariant testing; phases 1–5 shipped. Issue 11's findings re-verified 2026-08-02 and split into issues 12–16 — one real product bug (12), the rest harness/checker defects. Issue 18: both turmoil reds root-caused as stale test assertions, fixed; a LOCKED-spec wording residual is ready-for-human |
 | [replication-cluster-rework](replication-cluster-rework/) | active | 1 | 10 | four rework PRDs, all merged 2026-07-30; one follow-up outstanding |
 | [spec-gaps](spec-gaps/) | active | 10 | 0 | 2026-08-13 anti-pattern review follow-through: persistence + txn/vll/blocking spec gaps, all rulings settled |
 | [hardening](hardening/) | active | 2 | 37 | foundation-hardening campaign, **exited 2026-08-05** — all four areas locked; specs remain the contract |
