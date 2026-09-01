@@ -59,10 +59,9 @@ impl MemoryBroker {
     /// A broker for `core`, reading its arena figure through `arena`.
     ///
     /// Pass [`NoArenaReading`] where no arena is bound — the simulation
-    /// executor, and every real shard until [issue 03] lands. See
-    /// [`crate::arena`] for how that swap works.
-    ///
-    /// [issue 03]: ../../../../../.scratch/memory-architecture/issues/
+    /// executor, and any shard whose reading is installed later through
+    /// [`set_arena_sampler`](Self::set_arena_sampler). See [`crate::arena`] for
+    /// how that swap works.
     pub fn new(core: usize, arena: Arc<dyn ArenaSampler>) -> Self {
         let slots = Subsystem::ALL
             .iter()
@@ -83,6 +82,20 @@ impl MemoryBroker {
     /// executor.
     pub fn detached(core: usize) -> Self {
         Self::new(core, Arc::new(NoArenaReading))
+    }
+
+    /// Install this core's arena reading, replacing the one the broker was
+    /// constructed with.
+    ///
+    /// Boot-time wiring, not a runtime knob. The broker is built where the
+    /// shard worker is assembled (`frogdb-core`), which sits *below* the crate
+    /// that owns the arena registry and so cannot name it; the server installs
+    /// the real reading on the worker it just built, before that worker runs.
+    /// `&mut self` keeps that to construction time: once a shard is running,
+    /// its broker is owned by the shard's own thread and nobody else holds a
+    /// mutable handle to swap this out underneath it.
+    pub fn set_arena_sampler(&mut self, arena: Arc<dyn ArenaSampler>) {
+        self.arena = arena;
     }
 
     /// Which core this broker belongs to.
@@ -379,6 +392,30 @@ mod tests {
         assert_eq!(
             broker.breakdown().arena_sampled_upper_bound_bytes,
             Some(8_192)
+        );
+    }
+
+    /// The wiring path the server takes: a broker built with the stub (because
+    /// the crate that builds it cannot name the arena registry) has the real
+    /// reading installed before the shard runs.
+    #[test]
+    fn an_installed_sampler_replaces_the_construction_time_reading() {
+        #[derive(Debug)]
+        struct Fixed(u64);
+        impl ArenaSampler for Fixed {
+            fn sampled_upper_bound_bytes(&self) -> Option<u64> {
+                Some(self.0)
+            }
+        }
+        let mut broker = MemoryBroker::detached(2);
+        assert_eq!(broker.arena_sampled_upper_bound_bytes(), None);
+
+        broker.set_arena_sampler(Arc::new(Fixed(16_384)));
+        assert_eq!(broker.arena_sampled_upper_bound_bytes(), Some(16_384));
+        assert_eq!(
+            broker.breakdown().arena_sampled_upper_bound_bytes,
+            Some(16_384),
+            "the installed reading must reach the operator-facing breakdown too"
         );
     }
 }

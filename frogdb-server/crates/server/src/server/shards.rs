@@ -100,6 +100,13 @@ pub(super) fn spawn_shard_workers(ctx: ShardSpawnContext) -> anyhow::Result<Spaw
     let mut executor = crate::net::shard_executor_with_arenas(crate::net::shard_arena_source());
     info!(executor = executor.kind(), "Shard executor selected");
 
+    // Each shard's broker reads its own arena through this. The slot it points
+    // at is filled below, once every shard has launched and its arena is known
+    // — see `crate::shard_arena_reading` for why the reading has to be
+    // late-bound and why an unfilled slot reads as "no figure" rather than
+    // zero.
+    let arena_readings = crate::shard_arena_reading::ShardArenaReadings::new();
+
     let mut shard_handles = Vec::with_capacity(ctx.num_shards);
     let mut recovered_iter = ctx.recovered_stores.into_iter();
 
@@ -267,6 +274,12 @@ pub(super) fn spawn_shard_workers(ctx: ShardSpawnContext) -> anyhow::Result<Spaw
         // Share per-shard memory usage vec for fragmentation ratio
         worker.set_shard_memory_used(ctx.shard_memory_used.clone());
 
+        // Give this shard's memory broker its own arena figure. Under
+        // simulation — and on any shard whose bind fails — the registry
+        // published below simply has no entry for it, and the broker keeps
+        // reporting no reading, which is what it did before this wiring.
+        worker.set_arena_sampler(arena_readings.sampler_for(shard_id));
+
         // Set scripting config with shared lua-time-limit override
         {
             use frogdb_core::ScriptingConfig;
@@ -356,6 +369,11 @@ pub(super) fn spawn_shard_workers(ctx: ShardSpawnContext) -> anyhow::Result<Spaw
         (0..ctx.num_shards).filter_map(|shard_id| Some((shard_id, executor.arena_of(shard_id)?))),
     ));
     report_arena_binding(arenas.as_ref(), ctx.num_shards);
+
+    // Every shard's broker has been holding a reading that points here; this is
+    // the one publish that makes those readings live. After it, a broker reads
+    // whatever its own arena reported on the sampler's last tick.
+    arena_readings.publish(arenas.clone());
 
     // A shard that has a runtime of its own has a thread of its own. Declare it
     // once, here, where the executor that decided it is still in scope: a

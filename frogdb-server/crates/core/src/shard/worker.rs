@@ -491,6 +491,19 @@ impl ShardWorker {
         self.observability.set_shard_memory_used(shared);
     }
 
+    /// Install this shard's arena reading on its memory broker.
+    ///
+    /// The broker is built here (see [`ShardWorkerBuilder`]) but the figure it
+    /// reads comes from `frogdb_telemetry`'s per-shard arena registry, which
+    /// depends on this crate and so cannot be named from it. The server owns
+    /// both sides and installs the reading on the worker before the shard
+    /// starts running; a worker nobody calls this on keeps
+    /// `frogdb_memory::NoArenaReading`, which is the correct answer for a
+    /// simulated shard and for any shard whose arena bind failed.
+    pub fn set_arena_sampler(&mut self, sampler: Arc<dyn frogdb_memory::ArenaSampler>) {
+        self.memory.set_arena_sampler(sampler);
+    }
+
     /// Share the process-wide keyspace hit/miss accumulator with this worker.
     ///
     /// The same `Arc` is held by the server so `INFO stats` reads it and
@@ -1359,6 +1372,34 @@ mod command_context_tests {
         assert!(
             ctx.is_replica_flag.is_some(),
             "shared replica flag must be wired"
+        );
+    }
+
+    /// A worker nobody wires an arena into keeps the "no reading" default, and
+    /// the one the server wires reads through to the shard's memory broker.
+    /// Both halves matter: the default is what a simulated shard keeps, and the
+    /// forwarding is the only path the real figure has into the broker.
+    #[test]
+    fn an_installed_arena_sampler_reaches_the_shards_broker() {
+        #[derive(Debug)]
+        struct Fixed(u64);
+        impl frogdb_memory::ArenaSampler for Fixed {
+            fn sampled_upper_bound_bytes(&self) -> Option<u64> {
+                Some(self.0)
+            }
+        }
+
+        let mut worker = minimal_worker();
+        assert_eq!(
+            worker.memory.arena_sampled_upper_bound_bytes(),
+            None,
+            "an unwired worker must report no reading, not zero bytes"
+        );
+
+        worker.set_arena_sampler(Arc::new(Fixed(65_536)));
+        assert_eq!(
+            worker.memory.arena_sampled_upper_bound_bytes(),
+            Some(65_536)
         );
     }
 

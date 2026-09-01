@@ -472,11 +472,13 @@ impl ShardWorkerBuilder {
         );
         persistence.set_recovery_stats(recovery_stats);
 
-        // This core's memory broker. `NoArenaReading` is the arena figure
-        // until issue 03 binds a jemalloc arena per shard thread; swapping it
-        // is a one-site change here (see `frogdb_memory::arena`), and the
-        // simulation executor keeps `NoArenaReading` permanently because a
-        // simulated shard has no arena of its own.
+        // This core's memory broker. It is built with `NoArenaReading` because
+        // this crate cannot name the arena registry — that lives above it, in
+        // `frogdb-telemetry` — and because the shard's arena is not bound until
+        // its thread starts, after this worker exists. The server installs the
+        // real reading through `ShardWorker::set_arena_sampler` before the
+        // shard runs; the simulation executor leaves the default in place
+        // permanently, because a simulated shard has no arena of its own.
         let mut memory =
             frogdb_memory::MemoryBroker::new(shard_id, Arc::new(frogdb_memory::NoArenaReading));
         // RocksDB's block cache and write-buffer manager are one allocation

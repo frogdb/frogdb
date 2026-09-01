@@ -2045,6 +2045,7 @@ dependencies = [
  "frogdb-config",
  "frogdb-core",
  "frogdb-debug",
+ "frogdb-memory",
  "frogdb-net",
  "frogdb-persistence",
  "frogdb-protocol",

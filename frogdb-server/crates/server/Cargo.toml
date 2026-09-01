@@ -123,6 +123,7 @@ frogdb-replication-runtime.workspace = true
 frogdb-commands.workspace = true
 frogdb-search.workspace = true
 frogdb-telemetry.workspace = true
+frogdb-memory.workspace = true
 frogdb-net.workspace = true
 async-trait.workspace = true
 bytes.workspace = true

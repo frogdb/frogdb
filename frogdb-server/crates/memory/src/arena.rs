@@ -18,21 +18,21 @@
 //! [`ArenaSampler::sampled_upper_bound_bytes`], and a caller that wants a
 //! different word has to change the contract to get it.
 //!
-//! # Plugging in issue 03
+//! # Who implements this
 //!
-//! Arena binding is [issue 03]'s work, not this crate's. Until it lands the
-//! broker is constructed with [`NoArenaReading`], which reports `None` — "this
-//! core has no arena figure", the same answer the simulation executor gives
-//! and will keep giving, since a simulated shard is a task on the sim host's
-//! one thread and has no arena of its own (adr/0006 §1).
+//! Arena binding is not this crate's work. The real implementation lives in
+//! `frogdb-server`, over `frogdb_telemetry::ShardArenaRegistry`: the registry
+//! is the only crate that knows which arena a shard bound, and it sits above
+//! both this crate and the one that builds the broker, so the adapter belongs
+//! in the one crate that already depends on both. It is installed on the
+//! broker through [`crate::MemoryBroker::set_arena_sampler`] once the shard's
+//! arena is known.
 //!
-//! Landing issue 03 is a **one-site change**: implement this trait over that
-//! issue's per-arena stats sampler and pass it to
-//! [`crate::MemoryBroker::new`] at the shard-thread closure in
-//! `RealShardExecutor::launch`, where the arena is bound. Nothing else in this
-//! crate, and no charge site anywhere, moves.
-//!
-//! [issue 03]: ../../../../../.scratch/memory-architecture/issues/
+//! [`NoArenaReading`] stays the answer everywhere no arena is bound: the
+//! simulation executor (a simulated shard is a task on the sim host's one
+//! thread and has no arena of its own — adr/0006 §1), a build without an
+//! arena-capable allocator, and any shard whose bind failed. It reports `None`
+//! — "this core has no arena figure", never zero.
 
 /// The broker's read of its core's allocator state.
 ///
@@ -48,10 +48,8 @@ pub trait ArenaSampler: Send + Sync + std::fmt::Debug {
     fn sampled_upper_bound_bytes(&self) -> Option<u64>;
 }
 
-/// The stub in place until [issue 03] binds an arena per shard thread, and the
-/// permanent answer under simulation.
-///
-/// [issue 03]: ../../../../../.scratch/memory-architecture/issues/
+/// The reading for a core with no arena of its own: the default a broker is
+/// built with, and the permanent answer under simulation.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoArenaReading;
 
