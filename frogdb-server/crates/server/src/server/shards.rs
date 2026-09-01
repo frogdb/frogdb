@@ -341,19 +341,33 @@ pub(super) fn spawn_shard_workers(ctx: ShardSpawnContext) -> anyhow::Result<Spaw
     // Asked once, now that every shard has been launched: the acceptor needs a
     // plain answer per shard, not a trait object it would have to consult on
     // every accepted socket.
-    let placement = ShardPlacement::collect(&*executor, ctx.num_shards);
+    let launched = ShardPlacement::collect(&*executor, ctx.num_shards);
+    let shards_own_threads = launched.is_pinned();
 
     // A shard that has a runtime of its own has a thread of its own. Declare it
     // once, here, where the executor that decided it is still in scope: a
     // synchronous cross-shard wait inside a script has to know which of the two
-    // blocking strategies is legal (see `frogdb_core::shard::placement`).
-    if placement.is_pinned() {
+    // blocking strategies is legal (see `frogdb_core::shard::placement`). This
+    // is a property of the *threads*, so it holds whether or not connections are
+    // colocated onto them.
+    if shards_own_threads {
         frogdb_core::shard::declare_shards_own_threads();
     }
 
+    // Colocation is a deployment decision, not an executor one: it pays when the
+    // process owns the machine's cores, and costs when it does not (see
+    // `server.colocate-connections`). Dropping the runtimes here is all it takes
+    // — the acceptor spawns onto the ambient runtime when it has none.
+    let placement = if ctx.config.server.colocate_connections {
+        launched
+    } else {
+        ShardPlacement::unpinned()
+    };
+
     info!(
         executor = executor.kind(),
-        connections_pinned = placement.is_pinned(),
+        shards_own_threads,
+        connections_colocated = placement.is_pinned(),
         "Shard connection placement resolved"
     );
 

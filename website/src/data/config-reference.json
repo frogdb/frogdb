@@ -173,7 +173,7 @@
           "name": "self-fence-on-quorum-loss",
           "type": "boolean",
           "default": true,
-          "description": "Reject write commands when this node cannot form a quorum with reachable nodes.\nWhen enabled, writes return CLUSTERDOWN if quorum is lost, preventing\nsplit-brain data divergence. Reads remain available.",
+          "description": "Fence this node when it cannot form a quorum with reachable nodes.\nWhen enabled, writes return CLUSTERDOWN if quorum is lost, preventing\nsplit-brain data divergence. Reads are fenced too — a node that cannot\nreach the quorum cannot learn its slots were reassigned, so its keyspace\nis of unbounded age — unless `replica-serve-stale-data` is on, which\nreopens reads (never writes). Commands flagged `stale` (PING, INFO,\nCONFIG, …) are always answered, so a fenced node stays diagnosable.",
           "config_param": "cluster-self-fence-on-quorum-loss",
           "mutable": true
         }
@@ -894,6 +894,12 @@
           "description": "Bind address.",
           "config_param": "bind",
           "mutable": false
+        },
+        {
+          "name": "colocate-connections",
+          "type": "boolean",
+          "default": true,
+          "description": "Run each client connection on the OS thread that owns its shard.\n\nThis is the second half of thread-per-core: the shard executor gives every\nshard its own thread and runtime, and this setting decides whether the\nconnections assigned to a shard are served *from* that runtime. When they\nare, a command for the connection's own shard is a same-thread handoff\ninstead of a cross-core wakeup.\n\nThe win assumes the process owns the machine's cores and `num-shards` is\nthe core count, because colocation also caps a node's client-side CPU at\n`num-shards` cores. Turn it off where that assumption does not hold — most\nnotably when several servers share one process, as the multi-node test\nharness does — and connections go back to the ambient runtime."
         },
         {
           "name": "enable-debug-command",

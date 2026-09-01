@@ -44,6 +44,15 @@ pub struct TestServerConfig {
     // --- Server core ---
     /// Number of shards (default: 4).
     pub num_shards: Option<usize>,
+    /// Serve each connection from its shard's own thread (default: the config
+    /// default, which is on).
+    ///
+    /// Set this to `false` for a harness that puts several servers in one
+    /// process: colocation assumes the process owns the machine's cores, and a
+    /// three-node in-process cluster on a laptop does not — every node would cap
+    /// its client work at `num_shards` threads while the other nodes' shard
+    /// threads sit idle. See `server.colocate-connections`.
+    pub colocate_connections: Option<bool>,
 
     // --- Persistence ---
     /// Enable RocksDB persistence (default: false).
@@ -233,6 +242,7 @@ impl Clone for TestServerConfig {
     fn clone(&self) -> Self {
         Self {
             num_shards: self.num_shards,
+            colocate_connections: self.colocate_connections,
             persistence: self.persistence,
             data_dir: self.data_dir.clone(),
             snapshot_dir: self.snapshot_dir.clone(),
@@ -448,6 +458,9 @@ impl TestServer {
         config.server.bind = "127.0.0.1".to_string();
         config.server.port = 0; // OS assigns
         config.server.num_shards = test_config.num_shards.unwrap_or(4);
+        if let Some(colocate) = test_config.colocate_connections {
+            config.server.colocate_connections = colocate;
+        }
         config.logging.level = test_config.log_level.unwrap_or_else(|| "warn".to_string());
         config.persistence.enabled = test_config.persistence;
         config.persistence.data_dir = data_dir;

@@ -172,6 +172,14 @@ impl ClusterTestNode {
 
         let mut test_config = TestServerConfig {
             num_shards: config.num_shards,
+            // Every node of this cluster lives in *this* process, so no node can
+            // own the machine's cores. Colocating each node's connections onto
+            // its own `num_shards` shard threads would hand a loaded node a
+            // fraction of the box while the other nodes' shard threads idle —
+            // measured as ~2x the client round trip in
+            // `cluster_finalization_window`. Production runs one server per box
+            // with `num-shards` = cores, where the trade goes the other way.
+            colocate_connections: Some(false),
             persistence: config.persistence,
             data_dir: Some(data_dir.to_path_buf()),
             log_level: config.log_level.clone(),

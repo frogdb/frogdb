@@ -4,7 +4,7 @@
     "source": "frogdb-server/crates/telemetry/src/definitions.rs",
     "regenerate": "just docs-gen"
   },
-  "count": 97,
+  "count": 101,
   "metrics": [
     {
       "name": "frogdb_active_version",
@@ -17,6 +17,34 @@
           "type": "string"
         }
       ]
+    },
+    {
+      "name": "frogdb_allocator_active_bytes",
+      "type": "gauge",
+      "help": "jemalloc `stats.active`: bytes in active pages allocated by the application",
+      "group": "allocator",
+      "labels": []
+    },
+    {
+      "name": "frogdb_allocator_allocated_bytes",
+      "type": "gauge",
+      "help": "jemalloc `stats.allocated`: bytes allocated by the application",
+      "group": "allocator",
+      "labels": []
+    },
+    {
+      "name": "frogdb_allocator_frag_ratio",
+      "type": "gauge",
+      "help": "Allocator fragmentation ratio (allocator active / allocator allocated)",
+      "group": "allocator",
+      "labels": []
+    },
+    {
+      "name": "frogdb_allocator_resident_bytes",
+      "type": "gauge",
+      "help": "jemalloc `stats.resident`: bytes physically resident (metadata + active pages + unused dirty pages)",
+      "group": "allocator",
+      "labels": []
     },
     {
       "name": "frogdb_binary_version",

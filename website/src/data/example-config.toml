@@ -16,6 +16,7 @@
 bind = "127.0.0.1"
 port = 6379
 num-shards = 1
+colocate-connections = true
 allow-cross-slot-standalone = false
 scatter-gather-timeout-ms = 5000
 sorted-set-index = "skiplist"

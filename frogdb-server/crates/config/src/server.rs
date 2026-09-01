@@ -32,6 +32,24 @@ pub struct ServerConfig {
     #[param]
     pub num_shards: usize,
 
+    /// Run each client connection on the OS thread that owns its shard.
+    ///
+    /// This is the second half of thread-per-core: the shard executor gives every
+    /// shard its own thread and runtime, and this setting decides whether the
+    /// connections assigned to a shard are served *from* that runtime. When they
+    /// are, a command for the connection's own shard is a same-thread handoff
+    /// instead of a cross-core wakeup.
+    ///
+    /// The win assumes the process owns the machine's cores and `num-shards` is
+    /// the core count, because colocation also caps a node's client-side CPU at
+    /// `num-shards` cores. Turn it off where that assumption does not hold — most
+    /// notably when several servers share one process, as the multi-node test
+    /// harness does — and connections go back to the ambient runtime.
+    #[serde(default = "default_colocate_connections")]
+    #[param(skip)]
+    // skip: startup-fixed execution-shape flag (threads are already running), no Redis analogue
+    pub colocate_connections: bool,
+
     /// Allow cross-slot operations in standalone mode.
     /// When enabled, multi-key commands like MGET/MSET can operate across different
     /// hash slots using scatter-gather. MSETNX always requires same-slot.
@@ -105,6 +123,10 @@ fn default_num_shards() -> usize {
     DEFAULT_NUM_SHARDS
 }
 
+fn default_colocate_connections() -> bool {
+    true
+}
+
 fn default_allow_cross_slot_standalone() -> bool {
     false
 }
@@ -135,6 +157,7 @@ impl Default for ServerConfig {
             bind: default_bind(),
             port: default_port(),
             num_shards: default_num_shards(),
+            colocate_connections: default_colocate_connections(),
             allow_cross_slot_standalone: default_allow_cross_slot_standalone(),
             scatter_gather_timeout_ms: default_scatter_gather_timeout_ms(),
             sorted_set_index: default_sorted_set_index(),
