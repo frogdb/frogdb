@@ -329,6 +329,30 @@ accounting for. `memtable_usage_stays_under_the_write_buffer_budget_across_shard
 **The general lesson: an upper-bound assertion over a counter is not evidence the counter is
 wired.** Pair every ceiling check with a liveness check that the number moves.
 
+## Mutation testing
+
+`just mutants-diff frogdb-persistence`, run twice.
+
+- **First run** (before the two metrics forcing tests): 25 mutants, **2 missed**, 19 caught,
+  4 unviable. Both survivors were "replace `record_metrics` with `()`" — nothing asserted a gauge
+  value. Closing them is what surfaced the DB-level write-buffer-manager defect above.
+- **Final run**: 25 mutants in 5m — **20 caught, 4 unviable, 1 timeout, 0 missed.**
+
+The one timeout is `RocksConfig::memtable_budget_bytes -> usize with 1`
+(`rocks/config.rs:120`). It is **not** an uncaught mutant: re-run alone with a longer budget
+(`just mutants frogdb-persistence --re memtable_budget_bytes --timeout 300`) the whole family comes
+back **9 mutants tested in 5m: 9 caught**. The default budget is what fails, and for a reason that
+is itself the feature working: a 1-byte process-wide memtable ceiling with `allow_stall = true`
+stalls every writing test until nextest's 15s hard kill, so the *package* run legitimately needs
+more than the 60s cargo-mutants allows it (baseline test time 9s × `timeout_multiplier = 4.0` = 36s,
+floored to `minimum_test_timeout = 60.0`). Flagged for the orchestrator rather than fixed here:
+raising `minimum_test_timeout` in `.cargo/mutants.toml` would remove the false timeout, but that
+knob is shared by all four locked areas and is not this issue's to move.
+
+Caveat on scope: this branch is based on `mem-arch-integration`, not `origin/main`, and
+`mutants-diff` diffs against `git merge-base origin/main HEAD` — so the 25 mutants span issue 05's
+commits as well as this issue's.
+
 ## Verification
 
 Local mode, this worktree.
@@ -336,7 +360,9 @@ Local mode, this worktree.
 - `just test frogdb-persistence` — **356 run, 356 passed** (354 before the two metrics forcing
   tests). (`the_memtable_budget_is_the_write_buffer_product` is flagged LEAK by nextest despite
   being pure arithmetic — passes, pre-existing harness noise.)
-- `just test frogdb-server` — see the run recorded below.
+- `just test frogdb-server` — **2106 run, 2106 passed** (1 slow, 1 flaky), 5 skipped, 217.6s. The
+  flaky one is `cluster_failover::test_simultaneous_node_restarts` (FLAKY 2/3, passed on retry) —
+  a known-flaky cluster test, untouched by this change.
 - `just lint-spec` — OK: 313 failure modes, 205 transitions, 1735 test references, 1735 tags,
   1438 spec-id citations. The one warning (`FM-CLUSTER-104` forced by no test) is pre-existing and
   tracked in the cluster issue tracker.
