@@ -1,6 +1,6 @@
 # 02: thread-per-core shards with connections pinned to their owning core
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Origin: memory-architecture phase-1 spike, 2026-08-31
 Area: frogdb-server / net + server::shards + connection accept path
@@ -91,3 +91,36 @@ encodings, the keyspace table, eviction.
 
 [Issue 01](../) — the `ShardExecutor` seam. This issue only changes the real implementation
 behind it and the accept path; if it also has to move call sites, 01 was incomplete.
+
+## Resolution
+
+Landed on main (5 commits, reviewed and cherry-picked from the implementing agent's branch):
+`RealShardExecutor` now spawns one named OS thread per shard, each driving a
+`new_current_thread` runtime with `block_on`; Linux pinning via `sched_setaffinity` with
+kernel read-back (`FROGDB_SHARD_PIN=0` opt-out), macOS reports `achieved_cpu = None`.
+`ShardHandle` stays `JoinHandle<()>` via a oneshot panic bridge, so the supervisor and
+fail-stop handler are untouched. Connection pinning: the accept-time round-robin shard also
+picks the core; the acceptor detaches the socket (`into_std`) and the connection task
+re-registers it on the shard runtime (`PendingSocket`), placement snapshotted once in
+`ShardPlacement`. Turmoil path byte-identical; `SimShardExecutor` untouched.
+
+Two recorded deviations:
+
+- `frogdb_core::shard::placement` (`declare_shards_own_threads`): the scripting gate's
+  synchronous cross-shard wait blocks its own thread instead of `block_in_place` (which
+  panics on current-thread runtimes). Simulation never declares it and keeps the old error.
+- `server.colocate-connections` (default true): colocation caps a node's client-side CPU at
+  `num-shards` cores — wrong when several servers share one process. `ClusterTestHarness`
+  sets it false (measured ~2x client RTT regression in `cluster_finalization_window`
+  otherwise); production shape unchanged.
+
+Verification: `just test frogdb-server` 2106/2106; turmoil sims 157/159 (only the two
+pre-existing failures tracked in `.scratch/concurrency-testing/issues/18`); concurrency
+workload 13/13 incl. determinism; `just lint-gates` clean. macOS memtier (unpinned lower
+bound): p50 ~33% better, throughput +9% mean, p99 worse in 2/3 runs — the tail verdict
+waits on the Linux pinned run (issue 04).
+
+For issue 03: the arena-binding hook point is the shard-thread closure in
+`RealShardExecutor::launch`, right at `pin_current_thread`, before `block_on` — with
+colocation on, everything the shard runs (worker + its connections) allocates on that
+thread. Arena-attribution tests must run with colocation on (not via `ClusterTestHarness`).
