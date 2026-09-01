@@ -2,9 +2,9 @@
 
 State: active
 
-Phases 1–5 (incl. 4a/4b/4c) merged 2026-07-22; nightly CI live. Four issues remain open,
+Phases 1–5 (incl. 4a/4b/4c) merged 2026-07-22; nightly CI live. Five issues remain open,
 including a harness defect that makes every seed-indexed finding a sample rather than a
-fact (14).
+fact (14), and two pre-existing turmoil sim failures on `main` awaiting triage (18).
 
 ## Layout
 
@@ -12,10 +12,10 @@ fact (14).
 |---|---|
 | `proposals/` | design proposals |
 | `audit/` | determinism audit backing issue 14 |
-| `issues/open/` | 4 open |
+| `issues/open/` | 5 open |
 | `issues/done/` | closed issues; unreferenced ones pruned (git history) |
 
-## Still open (4)
+## Still open (5)
 
 | # | issue | note |
 |---|---|---|
@@ -23,6 +23,7 @@ fact (14).
 | 06 | durability txn framing abort-on-recovery | the fix deferred by 05 |
 | 10 | notify-capture broader scenario rollout | |
 | 14 | workload harness not reproducible | same seed → different history and different verdict; seed pins, repro files and nightly triage all rest on a contract that does not hold |
+| 18 | two turmoil sims pre-existing red on main | expiry-suppression realpath + cluster WAIT-across-failover; product bug vs. harness/checker defect undetermined per test |
 
 Issue 11 (the nightly smoke findings) is closed: Finding A was the harness drain race, Finding C the
 ZSet model artifact, and Finding B split into 12 (product bug, fixed), 13 and 16 (checker
