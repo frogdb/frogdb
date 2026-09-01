@@ -1,6 +1,6 @@
 # 06: link RocksDB against jemalloc and size it from the persistence Budget
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Origin: memory-architecture PRD ruling R10
 Area: frogdb-persistence (**LOCKED**) + build configuration
@@ -376,3 +376,33 @@ Local mode, this worktree.
 - `just check` (workspace, `--all-targets`) — clean.
 - No new system dependency: jemalloc is vendored by `tikv-jemalloc-sys`, so `Brewfile` and
   `shell.nix` are unchanged.
+
+## Resolution
+
+Landed on main (8 commits, reviewed and cherry-picked from the implementing agent's branch;
+merge conflicts were confined to the `SubsystemHandles` struct — union with issue 03's
+`arena_sampler` — and the regenerated dashboards/metrics data, regenerated once from the
+merged definitions). One post-review fixup: the spec rows said `RocksMemory::new`; the
+function is `RocksMemory::install` — renamed in `specs/persistence.md`.
+
+Spec-first on the locked area: FM-PERSISTENCE-060 (one process-wide `WriteBufferManager`,
+`allow_stall = true`, budget = `write_buffer_size x max_write_buffer_number`, independent of
+the CF count) and FM-PERSISTENCE-061 (one process-wide block cache sized
+`block_cache_size + memtable budget` because memtables are costed to it; `0` still means
+"RocksDB default"). Budget shape is **one process-global persistence budget** (D2), adopted
+by shard 0's broker via the new `MemoryBroker::adopt` so the breakdown reports it once, not
+N times. Strict-capacity cache is unreachable through `rocksdb 0.24` (D3) — documented, not
+faked; the cache bounds by eviction, the budget's `Refused` is the over-ceiling signal.
+Allocator unification is target-scoped to linux/gnu (jemalloc feature is a no-op on
+darwin/musl); no new system deps.
+
+Two real bugs fixed en route: the metrics ticker owned the store (kept the DB and its LOCK
+file alive past shutdown — now a `Weak`, aborted before shards drain), and the write-buffer
+manager was installed on the CF options, which `open_cf_descriptors` silently discards — no
+accounting, no stall, `get_usage` flat at zero. **FM-060's memtable ceiling and stall
+backpressure are live for the first time as of the final fix commit** — flagged for human
+review, since it changes write-path behavior under memory pressure.
+
+Mutation: final pass 20 caught / 4 unviable / 1 timeout / 0 missed; the timeout
+(`memtable_budget_bytes -> 1`) is a harness-budget artifact — 9/9 caught re-run alone with
+`--timeout 300`. Verification details in the section above.
