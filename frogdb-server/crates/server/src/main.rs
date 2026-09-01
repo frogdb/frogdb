@@ -119,9 +119,29 @@ fn main() -> Result<()> {
 
     info!(config = %config.to_json(), "Starting FrogDB server");
 
-    // Build runtime with hooks when profiling
+    // Build runtime with hooks when profiling.
+    //
+    // This runtime is no longer the data path: shard workers and the client
+    // connections pinned to them run on their own OS threads with their own
+    // current-thread runtimes (see `frogdb_net::RealShardExecutor`). What is
+    // left here is the acceptor, observability, replication, cluster and
+    // background tasks. Size it so it does not fight the shard cores for CPU:
+    // reserve one core per shard, with a floor of two workers so a blocking
+    // background task can never starve the acceptor.
     let mut builder = tokio::runtime::Builder::new_multi_thread();
+    let ambient_workers = std::thread::available_parallelism()
+        .map(|p| p.get())
+        .unwrap_or(1)
+        .saturating_sub(config.server.num_shards)
+        .max(2);
+    builder.worker_threads(ambient_workers);
+    builder.thread_name("frogdb-ambient");
     builder.enable_all();
+    info!(
+        worker_threads = ambient_workers,
+        shard_threads = config.server.num_shards,
+        "Ambient runtime sized around the shard threads"
+    );
 
     #[cfg(all(tokio_unstable, feature = "causal-profile"))]
     {

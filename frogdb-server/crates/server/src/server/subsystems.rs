@@ -578,6 +578,7 @@ impl Server {
             max_clients: self.config_manager.max_clients_flag(),
             is_replica: self.is_replica_flag.clone(),
             conn_monitor: self.conn_monitor.clone(),
+            shard_placement: self.shard_placement.clone(),
             #[cfg(feature = "turmoil")]
             chaos_config: std::sync::Arc::new(self.config.chaos.clone()),
             #[cfg(not(feature = "turmoil"))]

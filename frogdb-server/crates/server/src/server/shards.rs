@@ -13,7 +13,7 @@ use tracing::{info, warn};
 
 use crate::cluster::failure_detector::FailureDetector;
 use crate::config::{Config, JsonConfigExt};
-use crate::net::{ShardHandle, shard_executor};
+use crate::net::{ShardHandle, ShardPlacement, shard_executor};
 use crate::runtime_config::ConfigManager;
 
 /// Context for spawning shard workers.
@@ -55,17 +55,27 @@ pub(super) struct ShardSpawnContext {
     pub shard_monitor: tokio_metrics::TaskMonitor,
 }
 
-/// Spawn all shard workers and return their join handles, each paired with its
-/// shard id so the supervisor can attribute a failure to the dead shard.
+/// Everything `spawn_shard_workers` hands back: the supervisor's handles and
+/// where connections for each shard belong.
+pub(super) struct SpawnedShards {
+    /// Join handles, each paired with its shard id so the supervisor can
+    /// attribute a failure to the dead shard.
+    pub handles: Vec<(usize, ShardHandle)>,
+    /// Which runtime a connection assigned to each shard must run on — the
+    /// connection→core half of PRD R3/R4, without which the thread-per-core
+    /// shape is a 3.7× regression rather than a 2.3× win (spike-report §(b)).
+    pub placement: ShardPlacement,
+}
+
+/// Spawn all shard workers and return their join handles plus the connection
+/// placement they imply.
 ///
 /// Fails if the number of recovered per-shard stores does not match the
 /// configured shard count. Such a mismatch means the data directory was written
 /// with a different shard count than the server is now configured for; starting
 /// anyway would silently drop or misroute recovered data, so recovery is aborted
 /// loudly instead (see also the earlier guard in `RocksStore::open`).
-pub(super) fn spawn_shard_workers(
-    ctx: ShardSpawnContext,
-) -> anyhow::Result<Vec<(usize, ShardHandle)>> {
+pub(super) fn spawn_shard_workers(ctx: ShardSpawnContext) -> anyhow::Result<SpawnedShards> {
     if ctx.recovered_stores.len() != ctx.num_shards {
         anyhow::bail!(
             "recovered {} shard store(s) but the server is configured for {} shard(s); data \
@@ -328,7 +338,20 @@ pub(super) fn spawn_shard_workers(
         shard_handles.push((shard_id, handle));
     }
 
-    Ok(shard_handles)
+    // Asked once, now that every shard has been launched: the acceptor needs a
+    // plain answer per shard, not a trait object it would have to consult on
+    // every accepted socket.
+    let placement = ShardPlacement::collect(&*executor, ctx.num_shards);
+    info!(
+        executor = executor.kind(),
+        connections_pinned = placement.is_pinned(),
+        "Shard connection placement resolved"
+    );
+
+    Ok(SpawnedShards {
+        handles: shard_handles,
+        placement,
+    })
 }
 
 /// Deterministic replacement for a shard's periodic-sweep timer branches

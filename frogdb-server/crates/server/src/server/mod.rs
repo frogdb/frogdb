@@ -104,6 +104,16 @@ pub struct Server {
     /// `.take()` it.
     shard_supervisor_handle: Option<crate::net::JoinHandle<()>>,
 
+    /// Per-shard connection placement (thread-per-core).
+    ///
+    /// Snapshot of each shard worker's runtime handle, taken once after launch.
+    /// The acceptor uses it to spawn a connection's task onto the runtime of the
+    /// core that owns its shard, so same-shard commands never leave the thread.
+    /// Empty (`is_pinned() == false`) under turmoil and for any executor that
+    /// does not own dedicated runtimes; the acceptor then falls back to the
+    /// ambient runtime.
+    shard_placement: crate::net::ShardPlacement,
+
     /// Optional RocksDB store for persistence.
     rocks_store: Option<Arc<RocksStore>>,
 
@@ -375,7 +385,10 @@ impl Server {
         let shared_replication_offset = cluster.shared_replication_offset.clone();
 
         // Phase 4: Spawn shard workers
-        let shard_handles = shards::spawn_shard_workers(shards::ShardSpawnContext {
+        let shards::SpawnedShards {
+            handles: shard_handles,
+            placement: shard_placement,
+        } = shards::spawn_shard_workers(shards::ShardSpawnContext {
             config: config.clone(),
             num_shards: infra.num_shards,
             shard_receivers: infra.shard_receivers,
@@ -470,6 +483,7 @@ impl Server {
             shard_senders: infra.shard_senders,
             new_conn_senders: infra.new_conn_senders,
             shard_supervisor_handle,
+            shard_placement,
             rocks_store: infra.rocks_store,
             periodic_sync_handle: infra.periodic_sync_handle,
             periodic_snapshot_handle: infra.periodic_snapshot_handle,

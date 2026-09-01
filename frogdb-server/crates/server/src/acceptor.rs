@@ -22,8 +22,37 @@ use crate::connection::ConnectionHandler;
 use crate::connection::deps::{
     AdminDeps, ClusterDeps, ConnectionConfig, ConnectionDeps, CoreDeps, ObservabilityDeps,
 };
-use crate::net::{TcpListener, spawn};
+use crate::net::{ShardPlacement, TcpListener, spawn};
 use crate::server::next_conn_id;
+
+/// A freshly accepted socket on its way to its connection task.
+///
+/// A tokio `TcpStream` is bound to the IO driver of the runtime it was created
+/// on: polling it from a different runtime silently never wakes. Thread-per-core
+/// placement moves the connection task to the shard's own current-thread
+/// runtime, so the socket must be detached here and re-registered *there*.
+/// Connections that stay on the acceptor's runtime skip the round trip.
+enum PendingSocket {
+    /// Still registered with the acceptor runtime's IO driver.
+    Registered(crate::net::TcpStream),
+
+    /// Detached, awaiting registration on the shard runtime's IO driver.
+    #[cfg(not(feature = "turmoil"))]
+    Unregistered(std::net::TcpStream),
+}
+
+impl PendingSocket {
+    /// Register the socket with the *current* runtime's IO driver.
+    ///
+    /// Must be called from inside the task that will drive the connection.
+    fn register(self) -> std::io::Result<crate::net::TcpStream> {
+        match self {
+            Self::Registered(socket) => Ok(socket),
+            #[cfg(not(feature = "turmoil"))]
+            Self::Unregistered(socket) => crate::net::TcpStream::from_std(socket),
+        }
+    }
+}
 
 /// Round-robin connection assigner.
 struct RoundRobinAssigner {
@@ -52,6 +81,13 @@ pub struct Acceptor {
 
     /// Connection assigner.
     assigner: RoundRobinAssigner,
+
+    /// Per-shard runtime handles for thread-per-core connection placement.
+    ///
+    /// Empty for executors that do not own dedicated runtimes (turmoil, and any
+    /// future in-process executor), in which case connections stay on the
+    /// acceptor's runtime exactly as before.
+    shard_placement: ShardPlacement,
 
     /// Current connection count for this port (shared across every connection
     /// on the port for the maxclients gate and decremented on drop).
@@ -135,6 +171,12 @@ pub struct AcceptorContext {
     /// Optional task monitor for connection handler tasks.
     pub conn_monitor: Option<tokio_metrics::TaskMonitor>,
 
+    /// Per-shard runtime handles for thread-per-core connection placement.
+    ///
+    /// See [`ShardPlacement`]. Default (`unpinned`) leaves every connection on
+    /// the acceptor's runtime.
+    pub shard_placement: ShardPlacement,
+
     /// Chaos testing configuration (turmoil simulation only).
     #[cfg(feature = "turmoil")]
     pub chaos_config: Arc<crate::config::ChaosConfig>,
@@ -188,6 +230,7 @@ impl Acceptor {
         Self {
             listener: spec.listener,
             assigner: RoundRobinAssigner::new(num_shards),
+            shard_placement: ctx.shard_placement,
             current_connections: Arc::new(AtomicI64::new(0)),
             max_clients: ctx.max_clients,
             conn_monitor: ctx.conn_monitor,
@@ -270,7 +313,51 @@ impl Acceptor {
                     let metrics_recorder = observability.metrics_recorder.clone();
                     let current_connections = self.current_connections.clone();
 
+                    // Placement rule: the round-robin shard assigned above also
+                    // decides which core runs this connection, and the
+                    // connection *never moves* for its lifetime. Commands whose
+                    // key hashes to the owning shard are then served without
+                    // leaving the thread; the rest pay the cross-core hop the
+                    // routing channel already implies.
+                    #[cfg(not(feature = "turmoil"))]
+                    let (socket, shard_runtime) =
+                        match self.shard_placement.runtime_for(shard_id).cloned() {
+                            Some(runtime) => match socket.into_std() {
+                                Ok(detached) => {
+                                    (PendingSocket::Unregistered(detached), Some(runtime))
+                                }
+                                Err(e) => {
+                                    error!(
+                                        conn_id,
+                                        shard_id,
+                                        error = %e,
+                                        "Failed to detach socket for shard placement"
+                                    );
+                                    continue;
+                                }
+                            },
+                            None => (PendingSocket::Registered(socket), None),
+                        };
+                    #[cfg(feature = "turmoil")]
+                    let socket = PendingSocket::Registered(socket);
+
                     let conn_future = async move {
+                        // Re-register the socket on whichever runtime ended up
+                        // driving this task (a no-op when it never left the
+                        // acceptor's).
+                        let socket = match socket.register() {
+                            Ok(socket) => socket,
+                            Err(e) => {
+                                error!(
+                                    conn_id,
+                                    shard_id,
+                                    error = %e,
+                                    "Failed to register socket on shard runtime"
+                                );
+                                return;
+                            }
+                        };
+
                         // The TLS handshake is awaited *here*, not in the accept
                         // loop. Awaiting it there stalls the listener for as long
                         // as one peer takes to complete (up to the full handshake
@@ -354,6 +441,22 @@ impl Acceptor {
                         ConnectionsCurrent::set(&*metrics_recorder, current as f64);
                     };
 
+                    #[cfg(not(feature = "turmoil"))]
+                    match (shard_runtime, self.conn_monitor.as_ref()) {
+                        (Some(runtime), Some(monitor)) => {
+                            runtime.spawn(monitor.instrument(conn_future));
+                        }
+                        (Some(runtime), None) => {
+                            runtime.spawn(conn_future);
+                        }
+                        (None, Some(monitor)) => {
+                            spawn(monitor.instrument(conn_future));
+                        }
+                        (None, None) => {
+                            spawn(conn_future);
+                        }
+                    }
+                    #[cfg(feature = "turmoil")]
                     if let Some(ref monitor) = self.conn_monitor {
                         spawn(monitor.instrument(conn_future));
                     } else {
@@ -424,6 +527,7 @@ mod tests {
             is_replica: Arc::new(AtomicBool::new(false)),
             pubsub_output_buffer_hard_limit: frogdb_core::DEFAULT_PUBSUB_OUTPUT_BUFFER_HARD_LIMIT,
             conn_monitor: None,
+            shard_placement: ShardPlacement::unpinned(),
             #[cfg(feature = "turmoil")]
             chaos_config: Arc::new(crate::config::ChaosConfig::default()),
             #[cfg(not(feature = "turmoil"))]
@@ -580,5 +684,55 @@ mod tests {
         );
         assert!(tls.tls_manager.is_some());
         assert!(!tls.deps.config.is_admin);
+    }
+
+    /// Thread-per-core placement must *actually* move the connection task onto
+    /// the shard's runtime — which means detaching the socket from the
+    /// acceptor's IO driver and re-registering it on the shard's. Skipping that
+    /// re-registration is silent: the socket simply never becomes readable and
+    /// the connection hangs with no error anywhere. So this asserts the reply
+    /// comes back, which is only possible if the move succeeded.
+    #[tokio::test]
+    async fn a_pinned_connection_is_served_from_the_shard_runtime() {
+        use crate::net::{RealShardExecutor, ShardExecutor};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        // One shard on its own thread with its own current-thread runtime. The
+        // body parks forever: all this test needs from the shard is a live
+        // runtime to place the connection on.
+        let mut executor = RealShardExecutor::new();
+        let _shard = executor.launch(0, Box::pin(std::future::pending::<()>()));
+        let placement = ShardPlacement::collect(&executor, 1);
+        assert!(
+            placement.is_pinned(),
+            "the real executor must expose a runtime per shard"
+        );
+
+        let mut ctx = test_context();
+        ctx.shard_placement = placement;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let acceptor = Acceptor::bind(
+            ctx,
+            PortSpec {
+                listener,
+                is_admin: false,
+                tls_manager: None,
+            },
+        );
+        tokio::spawn(async move {
+            let _ = acceptor.run().await;
+        });
+
+        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        client.write_all(b"*1\r\n$4\r\nPING\r\n").await.unwrap();
+
+        let mut buf = [0u8; 64];
+        let n = tokio::time::timeout(std::time::Duration::from_secs(10), client.read(&mut buf))
+            .await
+            .expect("pinned connection never answered: socket was not re-registered")
+            .expect("pinned connection read failed");
+        assert!(n > 0, "pinned connection closed without answering");
     }
 }
