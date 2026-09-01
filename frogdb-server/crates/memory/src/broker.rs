@@ -106,6 +106,34 @@ impl MemoryBroker {
         budget
     }
 
+    /// Adopt a budget that already exists, so this broker reports it in its
+    /// breakdown without minting a second pool.
+    ///
+    /// [`open`](Self::open) is the wrong verb for a resource that pre-exists
+    /// every broker. RocksDB's block cache and write-buffer manager are
+    /// created when the store opens — before any shard worker, and *once* per
+    /// process rather than once per core — so the persistence budget is
+    /// created there and handed here. Adopting it on exactly one broker
+    /// (shard 0) is what keeps a sum across shards from being an N-fold
+    /// over-count of one process-wide pool.
+    ///
+    /// The slot is chosen from the budget's *own* subsystem, never from a
+    /// caller-supplied one, so an adopted pool cannot be filed under a
+    /// breakdown row that does not describe it.
+    pub fn adopt(&mut self, budget: Budget) {
+        // Seeded from the adopted budget's own count, not from zero: a budget
+        // may already have refused before any broker took it, and replaying
+        // those into the delta-counter would report pre-adoption refusals as
+        // if they had just happened.
+        let already_refused = budget.refusals();
+        let index = budget.subsystem().index();
+        self.slots[index] = Slot {
+            budget,
+            opened: true,
+            reported_refusals: AtomicU64::new(already_refused),
+        };
+    }
+
     /// Refusals since the last call, per subsystem. Feeds a monotonic counter
     /// with `inc_by`; subsystems with no new refusals are omitted.
     pub fn drain_refusals(&self) -> Vec<(Subsystem, u64)> {

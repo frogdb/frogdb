@@ -19,6 +19,9 @@ test-support = []
 [dependencies]
 frogdb-types.workspace = true
 frogdb-config.workspace = true
+# The persistence `Budget`: RocksDB's block cache and write-buffer manager are
+# sized from it and charged against it (`rocks::memory`).
+frogdb-memory.workspace = true
 async-trait.workspace = true
 rocksdb.workspace = true
 flume.workspace = true
@@ -36,6 +39,26 @@ serde_json.workspace = true
 # a backup artifact, not a security boundary (see `rocks::payload`).
 xxhash-rust.workspace = true
 tokio-metrics = { workspace = true }
+
+# Allocator unification (memory-architecture R10). `librocksdb-sys`'s `jemalloc`
+# feature pulls in `tikv-jemalloc-sys` with
+# `unprefixed_malloc_on_supported_platforms`, which is what makes jemalloc
+# interpose libc's `malloc` process-wide — so RocksDB's C++ allocations land in
+# the same allocator, and therefore the same `frogdb_allocator_*` stats, as
+# FrogDB's Rust ones — and defines `ROCKSDB_JEMALLOC` so RocksDB uses jemalloc's
+# own `malloc_usable_size`.
+#
+# Deliberately target-scoped rather than a workspace-wide feature.
+# `librocksdb-sys`'s build script ignores the feature on `android`, `dragonfly`,
+# `musl` and `darwin` (there `tikv-jemalloc-sys` builds a *prefixed* jemalloc
+# that cannot be linked into RocksDB), so enabling it for every target would be
+# a flag that silently does nothing on half of them. glibc Linux — CI, the
+# testbox, and every shipped artifact — is where it is real. macOS dev builds
+# additionally link Homebrew's RocksDB via `FROGDB_SYSTEM_ROCKSDB`
+# (`Justfile:15-26`), which is built against the system allocator and is outside
+# this unification entirely; see `rocks::memory` for the documented split.
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
+rocksdb = { workspace = true, features = ["jemalloc"] }
 
 [dev-dependencies]
 # `test-util` for the paused clock: `FlushHold`'s deadline rule is exclusive at

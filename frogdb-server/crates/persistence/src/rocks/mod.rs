@@ -3,6 +3,7 @@ mod checkpoint;
 pub mod columns;
 pub mod config;
 mod manifest;
+pub mod memory;
 pub mod payload;
 mod reclaim;
 pub mod staged;
@@ -13,6 +14,7 @@ pub(crate) mod wal_watermark;
 pub use columns::{CfTier, RocksIterator};
 pub use config::{CompressionType, RocksConfig, RocksError};
 use manifest::ColumnFamilyManifest;
+pub use memory::{RocksMemory, RocksMemoryUsage};
 use rocksdb::{
     BlockBasedOptions, BoundColumnFamily, ColumnFamilyDescriptor, DB, DBRecoveryMode,
     DBWithThreadMode, MergeOperands, MultiThreaded, Options, WriteBatch, WriteOptions,
@@ -69,6 +71,12 @@ pub struct RocksStore {
     /// shims; production threads the real recorder through
     /// [`open_with_warm_metrics`](RocksStore::open_with_warm_metrics).
     metrics: Arc<dyn frogdb_types::traits::MetricsRecorder>,
+    /// The process-wide RocksDB memory seam: the one block cache, the one
+    /// write-buffer manager, and the persistence `Budget` they are sized from
+    /// (FM-PERSISTENCE-060, FM-PERSISTENCE-061). Owned here because `rocksdb`'s
+    /// `OptionsMustOutliveDB` rule requires the cache and manager to outlive
+    /// every column family that points at them.
+    memory: memory::RocksMemory,
     /// Per-shard durability watermarks an out-of-band [`Self::durable_sync`]
     /// publishes to. Weak, so registering never keeps a dropped WAL writer
     /// alive; dead entries are pruned on register and on sync.
@@ -224,14 +232,23 @@ impl RocksStore {
         if config.bloom_filter_bits > 0 {
             block_opts.set_bloom_filter(config.bloom_filter_bits as f64, false);
         }
-        if config.block_cache_size > 0 {
-            let cache = rocksdb::Cache::new_lru_cache(config.block_cache_size);
-            block_opts.set_block_cache(&cache);
-        }
         block_opts.set_format_version(5);
         let mut cf_opts = Options::default();
+        // Per-CF *flush trigger*: how large one memtable grows before it rolls,
+        // and how many may be live at once. These are not the process-wide
+        // ceiling — that is the write-buffer manager `RocksMemory::install`
+        // sets below (FM-PERSISTENCE-060), whose budget is their product, paid
+        // once rather than once per column family.
         cf_opts.set_write_buffer_size(config.write_buffer_size);
         cf_opts.set_max_write_buffer_number(config.max_write_buffer_number);
+        // One block cache, one write-buffer manager, one persistence budget for
+        // the whole process. Installed on *this* `block_opts`/`cf_opts` pair,
+        // which every column-family descriptor below clones — a per-descriptor
+        // cache would put each CF on its own ceiling and re-multiply the very
+        // product this replaces. `memory` is moved onto the store at the end of
+        // this function: `OptionsMustOutliveDB` means the cache and manager
+        // must outlive every CF pointing at them.
+        let memory = memory::RocksMemory::install(config, &mut block_opts, &mut cf_opts);
         cf_opts.set_block_based_table_factory(&block_opts);
         // Honor the configured compression preset (proposal 19). Each
         // `CompressionType` maps to a curated 7-level schedule; the default
@@ -335,8 +352,16 @@ impl RocksStore {
             flush_compact_range: config.flush_compact_range,
             reclaim_guard: reclaim::ReclaimGuard::new(),
             metrics,
+            memory,
             sync_targets: std::sync::Mutex::new(Vec::new()),
         })
+    }
+
+    /// The process-wide RocksDB memory seam (FM-PERSISTENCE-060,
+    /// FM-PERSISTENCE-061): the shared cache, the shared write-buffer manager,
+    /// and the persistence budget.
+    pub fn memory(&self) -> &memory::RocksMemory {
+        &self.memory
     }
 
     /// Register a WAL writer's durability watermark for [`Self::durable_sync`].

@@ -2098,41 +2098,219 @@ fn filter_bytes(s: &RocksStore) -> u64 {
         .unwrap()
 }
 
-/// The `block_cache_size` knob has to reach RocksDB, and `0` has to mean "leave
-/// RocksDB's own default alone" rather than "a cache that holds nothing" — a
-/// zero-capacity cache would re-read a block from the SST on every lookup.
+/// A config small enough that a test can open several stores from it without
+/// reserving hundreds of megabytes of cache per store.
+fn small_memory_config() -> RocksConfig {
+    RocksConfig {
+        write_buffer_size: 1024 * 1024,
+        max_write_buffer_number: 2,
+        block_cache_size: 4 * 1024 * 1024,
+        ..RocksConfig::default()
+    }
+}
+
+/// The `block_cache_size` knob has to reach RocksDB, and the capacity it
+/// reaches with is the *sum* of the two memory knobs — memtable bytes are
+/// costed to the same cache, so a capacity of `block_cache_size` alone would
+/// quietly shrink the read cache by the memtable budget as writes arrived.
+// FM-PERSISTENCE-061
 #[test]
-fn block_cache_size_is_honoured_and_zero_leaves_the_rocksdb_default() {
+fn block_cache_capacity_is_the_summed_budget() {
     let t = TempDir::new().unwrap();
-    let sized = RocksStore::open(
+    let config = small_memory_config();
+    let sized = RocksStore::open(t.path(), 1, &config).unwrap();
+    assert_eq!(
+        block_cache_capacity(&sized),
+        config.memory_budget_bytes() as u64,
+        "the shared cache's capacity is block_cache_size + the memtable budget"
+    );
+    assert_eq!(
+        sized.memory().usage().block_cache_capacity_bytes,
+        config.memory_budget_bytes() as u64,
+        "and what the store reports must be what RocksDB was told"
+    );
+}
+
+/// `0` has to mean "leave RocksDB's own default alone" rather than "a cache
+/// that holds nothing" — a zero-capacity cache would re-read a block from the
+/// SST on every lookup.
+// FM-PERSISTENCE-061
+#[test]
+fn block_cache_size_zero_leaves_the_rocksdb_default() {
+    let t = TempDir::new().unwrap();
+    let unset = RocksStore::open(
         t.path(),
         1,
         &RocksConfig {
-            block_cache_size: 4 * 1024 * 1024,
-            ..RocksConfig::default()
-        },
-    )
-    .unwrap();
-    assert_eq!(
-        block_cache_capacity(&sized),
-        4 * 1024 * 1024,
-        "the configured cache size must be the cache's capacity"
-    );
-    drop(sized);
-
-    let t2 = TempDir::new().unwrap();
-    let unset = RocksStore::open(
-        t2.path(),
-        1,
-        &RocksConfig {
             block_cache_size: 0,
-            ..RocksConfig::default()
+            ..small_memory_config()
         },
     )
     .unwrap();
     assert!(
         block_cache_capacity(&unset) > 0,
         "0 means 'no override', never a cache with no room in it"
+    );
+    assert_eq!(
+        unset.memory().usage().block_cache_capacity_bytes,
+        0,
+        "no cache of ours is installed, so we report no capacity of our own \
+         rather than claiming RocksDB's private default as a budget"
+    );
+}
+
+/// One cache for the process, not one per column family: every CF the store
+/// opens must report the same capacity, and it must be the budget — a per-CF
+/// cache would multiply the ceiling by the shard and tier count, which is the
+/// product FM-PERSISTENCE-061 exists to remove.
+// FM-PERSISTENCE-061
+#[test]
+fn every_column_family_shares_one_block_cache() {
+    let t = TempDir::new().unwrap();
+    let config = small_memory_config();
+    let s = RocksStore::open_with_warm(t.path(), 4, &config, true).unwrap();
+    let expected = config.memory_budget_bytes() as u64;
+
+    for shard in 0..4 {
+        for tier in [CfTier::Main, CfTier::Warm] {
+            let cf = s.tier_cf_handle(tier, shard).unwrap();
+            assert_eq!(
+                s.db.property_int_value_cf(&cf, "rocksdb.block-cache-capacity")
+                    .unwrap()
+                    .unwrap(),
+                expected,
+                "shard {shard}'s column families must share the one process cache"
+            );
+        }
+    }
+}
+
+/// The memtable ceiling is one number for the process. Opening the *same*
+/// config against 1 shard and against 8 (with the warm tier on, so 8 shards is
+/// 16+ column families) must produce the same write-buffer budget: that budget
+/// no longer multiplies.
+// FM-PERSISTENCE-060
+#[test]
+fn the_write_buffer_budget_does_not_scale_with_the_column_family_count() {
+    let config = small_memory_config();
+    let one = TempDir::new().unwrap();
+    let many = TempDir::new().unwrap();
+    let small = RocksStore::open(one.path(), 1, &config).unwrap();
+    let big = RocksStore::open_with_warm(many.path(), 8, &config, true).unwrap();
+
+    assert_eq!(
+        small.memory().usage().write_buffer_limit_bytes,
+        big.memory().usage().write_buffer_limit_bytes,
+        "the memtable ceiling must not depend on how many CFs exist"
+    );
+    assert_eq!(
+        big.memory().usage().write_buffer_limit_bytes,
+        config.memtable_budget_bytes() as u64,
+    );
+}
+
+/// The manager is a live bound, not just a number handed to the constructor:
+/// writing several times the budget across every shard must leave the manager's
+/// *usage* near its budget rather than at the total written, because it flushes
+/// (and, past 100%, stalls) instead of letting memtables accumulate.
+// FM-PERSISTENCE-060
+#[test]
+fn memtable_usage_stays_under_the_write_buffer_budget_across_shards() {
+    let t = TempDir::new().unwrap();
+    let config = small_memory_config();
+    let budget = config.memtable_budget_bytes() as u64;
+    let s = RocksStore::open(t.path(), 4, &config).unwrap();
+
+    // ~8 MB across 4 shards, against a 2 MB memtable budget.
+    let value = vec![b'x'; 8 * 1024];
+    for i in 0..1024u32 {
+        let shard = (i % 4) as usize;
+        s.put(shard, format!("k{i}").as_bytes(), &value).unwrap();
+    }
+
+    let usage = s.memory().usage();
+    assert_eq!(usage.write_buffer_limit_bytes, budget);
+    assert!(
+        usage.write_buffer_bytes <= budget * 2,
+        "live memtable bytes ({}) must stay near the {budget}-byte manager \
+         budget after writing 8 MB across 4 shards, not grow with what was written",
+        usage.write_buffer_bytes
+    );
+}
+
+/// The `0`-means-default arm must not lose the memtable bound with it: without
+/// a cache to cost memtables to, the manager is built standalone and still
+/// carries the budget.
+// FM-PERSISTENCE-060
+#[test]
+fn a_zero_block_cache_still_installs_the_write_buffer_manager() {
+    let t = TempDir::new().unwrap();
+    let config = RocksConfig {
+        block_cache_size: 0,
+        ..small_memory_config()
+    };
+    let s = RocksStore::open(t.path(), 2, &config).unwrap();
+    assert_eq!(
+        s.memory().usage().write_buffer_limit_bytes,
+        config.memtable_budget_bytes() as u64,
+        "no cache is not a reason for unbounded memtables"
+    );
+}
+
+/// The budget the whole seam is sized from: one manager bound, one cache
+/// capacity, one `Budget` limit, all the same arithmetic.
+// FM-PERSISTENCE-060
+#[test]
+fn one_write_buffer_manager_bounds_memtables_across_shards() {
+    let t = TempDir::new().unwrap();
+    let config = small_memory_config();
+    let s = RocksStore::open_with_warm(t.path(), 3, &config, true).unwrap();
+    let usage = s.memory().usage();
+
+    assert_eq!(
+        usage.write_buffer_limit_bytes,
+        config.memtable_budget_bytes() as u64,
+    );
+    assert_eq!(
+        usage.block_cache_capacity_bytes,
+        config.memory_budget_bytes() as u64,
+    );
+    assert_eq!(
+        s.memory().budget().limit(),
+        config.memory_budget_bytes() as u64,
+        "the persistence budget is the same single number, so a breakdown row \
+         and the engine's own capacity cannot disagree"
+    );
+}
+
+/// The charge follows the engine: after writing, `refresh` must report a
+/// non-zero footprint and leave the persistence budget charged for it.
+// FM-PERSISTENCE-061
+#[test]
+fn the_persistence_charge_tracks_the_reported_engine_footprint() {
+    let t = TempDir::new().unwrap();
+    let s = RocksStore::open(t.path(), 2, &small_memory_config()).unwrap();
+    let budget = s.memory().budget();
+
+    let value = vec![b'y'; 64 * 1024];
+    for i in 0..64u32 {
+        s.put((i % 2) as usize, format!("k{i}").as_bytes(), &value)
+            .unwrap();
+    }
+
+    let usage = s.memory().refresh();
+    assert!(
+        usage.charged_footprint_bytes() > 0,
+        "the engine is holding memory; the reading must say so"
+    );
+    assert_eq!(
+        budget.charged(),
+        usage.charged_footprint_bytes(),
+        "the persistence budget's charge is the engine's reported footprint"
+    );
+    assert!(
+        budget.charged() <= budget.limit(),
+        "and the engine stays inside the budget it was sized from"
     );
 }
 

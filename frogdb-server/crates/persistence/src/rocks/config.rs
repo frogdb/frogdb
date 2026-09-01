@@ -103,6 +103,36 @@ impl RocksConfig {
         self.compaction_rate_limit_mb
             .map(|mb| mb as i64 * 1024 * 1024)
     }
+
+    /// The process-wide memtable ceiling: what the single `WriteBufferManager`
+    /// is created with (FM-PERSISTENCE-060).
+    ///
+    /// `write_buffer_size` is the per-column-family *flush trigger* — how large
+    /// one memtable grows before it rolls — and `max_write_buffer_number` is how
+    /// many of those may be live at once before writes wait. Their product used
+    /// to be paid *per column family*, i.e. multiplied by shards and by tiers;
+    /// as a manager budget it is paid once for the whole process.
+    ///
+    /// Saturating, because the two knobs are operator input and a 64-bit
+    /// overflow here would wrap to a tiny budget — the one arithmetic mistake
+    /// that turns a memory ceiling into a permanent write stall.
+    pub fn memtable_budget_bytes(&self) -> usize {
+        self.write_buffer_size
+            .saturating_mul(self.max_write_buffer_number.max(1) as usize)
+    }
+
+    /// The single number the persistence `Budget` is opened with, and the
+    /// capacity of the shared block cache (FM-PERSISTENCE-061): the *sum* of the
+    /// two operator knobs.
+    ///
+    /// It is a sum rather than `block_cache_size` alone because memtable bytes
+    /// are costed to the same cache (`new_write_buffer_manager_with_cache`), so
+    /// a capacity of `block_cache_size` would quietly shrink the read cache by
+    /// the memtable budget as writes arrived.
+    pub fn memory_budget_bytes(&self) -> usize {
+        self.block_cache_size
+            .saturating_add(self.memtable_budget_bytes())
+    }
 }
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum CompressionType {
@@ -204,6 +234,55 @@ mod tests {
     fn from_persistence_default_equals_rocks_default() {
         let cfg = PersistenceConfig::default();
         assert_eq!(RocksConfig::from_persistence(&cfg), RocksConfig::default());
+    }
+
+    /// The memtable ceiling is the write-buffer *product*: one column family may
+    /// hold `max_write_buffer_number` buffers of `write_buffer_size` before it
+    /// stalls, and that product — not the per-CF size alone, and not anything
+    /// scaled by the column-family count — is what the process-wide
+    /// `WriteBufferManager` is built with.
+    // FM-PERSISTENCE-060
+    #[test]
+    fn the_memtable_budget_is_the_write_buffer_product() {
+        let cfg = RocksConfig {
+            write_buffer_size: 8 * 1024 * 1024,
+            max_write_buffer_number: 3,
+            ..RocksConfig::default()
+        };
+        assert_eq!(cfg.memtable_budget_bytes(), 24 * 1024 * 1024);
+
+        // `max_write_buffer_number: 0` is not a RocksDB-default escape hatch the
+        // way `block_cache_size: 0` is — it would zero the whole budget and stall
+        // every write. Floor it at one buffer.
+        let none = RocksConfig {
+            write_buffer_size: 8 * 1024 * 1024,
+            max_write_buffer_number: 0,
+            ..RocksConfig::default()
+        };
+        assert_eq!(none.memtable_budget_bytes(), 8 * 1024 * 1024);
+    }
+
+    /// The process memory budget is the *sum* of the two operator knobs — the
+    /// block cache plus the memtable product — so that one number bounds both
+    /// halves of the engine's footprint and can be charged to one `Budget`.
+    // FM-PERSISTENCE-061
+    #[test]
+    fn the_memory_budget_is_the_sum_of_the_two_operator_knobs() {
+        let cfg = RocksConfig {
+            block_cache_size: 64 * 1024 * 1024,
+            write_buffer_size: 8 * 1024 * 1024,
+            max_write_buffer_number: 2,
+            ..RocksConfig::default()
+        };
+        assert_eq!(cfg.memory_budget_bytes(), 80 * 1024 * 1024);
+
+        // `block_cache_size: 0` keeps its "leave the RocksDB default alone"
+        // meaning: no cache is installed, so the budget is the memtable half.
+        let no_cache = RocksConfig {
+            block_cache_size: 0,
+            ..cfg.clone()
+        };
+        assert_eq!(no_cache.memory_budget_bytes(), 16 * 1024 * 1024);
     }
 
     /// Non-default operator values map through correctly: MB→bytes conversions,

@@ -1895,6 +1895,7 @@ dependencies = [
  "bytes",
  "flume",
  "frogdb-config",
+ "frogdb-memory",
  "frogdb-types",
  "parking_lot",
  "rand 0.10.0",
@@ -3104,6 +3105,7 @@ dependencies = [
  "libc",
  "libz-sys",
  "lz4-sys",
+ "tikv-jemalloc-sys",
  "zstd-sys",
 ]
 
