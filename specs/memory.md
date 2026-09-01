@@ -17,7 +17,13 @@ happens when there are no more** — everywhere except the value encodings thems
 Concretely, once the architecture lands:
 
 * **The allocation substrate.** One jemalloc arena per shard thread, bound once at thread
-  start; the shard-placement seam that decides whether a shard is an OS thread or a task on
+  start — and a bind the allocator refuses is **fatal at boot**, not a shard that runs
+  unattributed: once the broker takes `maxmemory` verdicts against the arena figure, a shard
+  without one decides with nothing measuring its core, and there is no configuration that
+  lets it serve anyway. A shard legitimately has no arena only where there are no arenas to
+  bind at all — the simulation seam, or a build whose allocator has none — which is a
+  configuration rather than a failure. Also here: the shard-placement seam that decides
+  whether a shard is an OS thread or a task on
   the simulation's one thread; the `mallctl` reads that turn allocator state into numbers
   (`frogdb-server/crates/telemetry/src/jemalloc.rs`, today the single process-wide chokepoint
   for `INFO memory`, `MEMORY PURGE`, and the `frogdb_allocator_*` gauges — the per-arena

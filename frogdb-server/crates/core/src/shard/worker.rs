@@ -499,7 +499,7 @@ impl ShardWorker {
     /// both sides and installs the reading on the worker before the shard
     /// starts running; a worker nobody calls this on keeps
     /// `frogdb_memory::NoArenaReading`, which is the correct answer for a
-    /// simulated shard and for any shard whose arena bind failed.
+    /// simulated shard and for any build whose allocator has no arenas at all.
     pub fn set_arena_sampler(&mut self, sampler: Arc<dyn frogdb_memory::ArenaSampler>) {
         self.memory.set_arena_sampler(sampler);
     }

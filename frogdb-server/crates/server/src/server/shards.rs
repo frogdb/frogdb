@@ -275,9 +275,9 @@ pub(super) fn spawn_shard_workers(ctx: ShardSpawnContext) -> anyhow::Result<Spaw
         worker.set_shard_memory_used(ctx.shard_memory_used.clone());
 
         // Give this shard's memory broker its own arena figure. Under
-        // simulation — and on any shard whose bind fails — the registry
-        // published below simply has no entry for it, and the broker keeps
-        // reporting no reading, which is what it did before this wiring.
+        // simulation — and on any build whose allocator has no arenas — the
+        // registry published below simply has no entry for it, and the broker
+        // keeps reporting no reading, which is what it did before this wiring.
         worker.set_arena_sampler(arena_readings.sampler_for(shard_id));
 
         // Set scripting config with shared lua-time-limit override
@@ -346,12 +346,16 @@ pub(super) fn spawn_shard_workers(ctx: ShardSpawnContext) -> anyhow::Result<Spaw
         spawn_shard_tick_pump(shard_id, ctx.shard_senders.clone());
 
         let monitor = ctx.shard_monitor.clone();
+        // A launch that fails aborts boot. The only failure is an allocator
+        // that has arenas and refused this shard one: the shard's broker would
+        // then take its `maxmemory` verdicts with nothing measuring the core
+        // (`frogdb_net::RealShardExecutor::launch`).
         let handle = executor.launch(
             shard_id,
             Box::pin(monitor.instrument(async move {
                 worker.run().await;
             })),
-        );
+        )?;
 
         shard_handles.push((shard_id, handle));
     }
@@ -413,8 +417,12 @@ pub(super) fn spawn_shard_workers(ctx: ShardSpawnContext) -> anyhow::Result<Spaw
 ///
 /// Two things are worth an operator's attention and neither is an error:
 ///
-/// * A shard that bound no arena is degraded — it still works, but its memory
-///   is folded into the automatic arena and vanishes from the per-shard gauges.
+/// * A build that binds no arenas at all — the simulation seam, or an allocator
+///   with no arenas — has no per-shard memory figures. That is a configuration,
+///   so it is an `info` line rather than a warning. The mixed case does not
+///   exist: a shard that *could* have had an arena and did not get one failed
+///   its launch and boot never reached here
+///   (`frogdb_net::RealShardExecutor::launch`).
 /// * The intended layout is exactly `1 + num_shards` arenas: one automatic
 ///   arena for every non-shard thread plus one per shard, which is what
 ///   `narenas:1` in the allocator configuration buys (see
@@ -431,14 +439,6 @@ fn report_arena_binding(arenas: &ShardArenaRegistry, num_shards: usize) {
             "No per-shard arenas bound; shard memory is not separately attributable"
         );
         return;
-    }
-    if bound < num_shards {
-        warn!(
-            bound,
-            num_shards,
-            "Some shards bound no arena; their memory is folded into the automatic \
-             arena and absent from the per-shard gauges"
-        );
     }
     match arena_layout(num_shards, total) {
         ArenaLayout::Excess { total, expected } => warn!(

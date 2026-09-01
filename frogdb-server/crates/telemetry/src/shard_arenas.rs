@@ -22,9 +22,11 @@
 //!   the safe one for a memory refusal: a budget written against it refuses
 //!   slightly early rather than slightly late.
 //! * **A shard with no arena is absent, not zero.** [`ShardArenaRegistry`] only
-//!   holds shards whose bind succeeded. A shard that failed to bind allocates on
-//!   the automatic arena together with every non-shard thread, and reporting
-//!   that arena's total as "shard N's memory" would be a much worse answer than
+//!   holds shards that bound an arena — on a build that has arenas, that is
+//!   every shard or the server did not boot. Where there are no arenas at all
+//!   (simulation, or an allocator without them) a shard allocates on the
+//!   automatic arena together with every non-shard thread, and reporting that
+//!   arena's total as "shard N's memory" would be a much worse answer than
 //!   reporting nothing.
 
 use crate::jemalloc;
@@ -91,7 +93,8 @@ struct ShardArenaSlot {
 ///
 /// Built once, after the shards are launched, from
 /// `frogdb_net::ShardExecutor::arena_of`. Shards that report no arena — every
-/// shard under simulation, and any shard whose bind failed — are simply absent.
+/// shard under simulation, and every shard on a build whose allocator has no
+/// arenas — are simply absent.
 #[derive(Debug, Default)]
 pub struct ShardArenaRegistry {
     shards: Vec<ShardArenaSlot>,
@@ -299,8 +302,9 @@ mod tests {
 
     #[test]
     fn a_shard_without_an_arena_is_absent_not_zero() {
-        // Shard 1 failed to bind (or is a sim shard): it is simply not here, so
-        // no caller can mistake the automatic arena's bytes for its own.
+        // Shard 1 has no arena (a sim shard, or a build with no arenas): it is
+        // simply not here, so no caller can mistake the automatic arena's bytes
+        // for its own.
         let registry = ShardArenaRegistry::new([(0, 7), (2, 9)]);
         assert_eq!(registry.arena_of(0), Some(7));
         assert_eq!(registry.arena_of(1), None);

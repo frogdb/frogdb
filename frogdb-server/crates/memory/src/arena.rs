@@ -30,9 +30,11 @@
 //!
 //! [`NoArenaReading`] stays the answer everywhere no arena is bound: the
 //! simulation executor (a simulated shard is a task on the sim host's one
-//! thread and has no arena of its own — adr/0006 §1), a build without an
-//! arena-capable allocator, and any shard whose bind failed. It reports `None`
-//! — "this core has no arena figure", never zero.
+//! thread and has no arena of its own — adr/0006 §1) and a build without an
+//! arena-capable allocator. It reports `None` — "this core has no arena
+//! figure", never zero. A shard that *could* have bound an arena and could not
+//! is not one of these cases: it fails boot rather than running blind
+//! (`frogdb_net::RealShardExecutor::launch`).
 
 /// The broker's read of its core's allocator state.
 ///

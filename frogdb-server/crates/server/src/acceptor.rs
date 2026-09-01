@@ -701,7 +701,9 @@ mod tests {
         // body parks forever: all this test needs from the shard is a live
         // runtime to place the connection on.
         let mut executor = RealShardExecutor::new();
-        let _shard = executor.launch(0, Box::pin(std::future::pending::<()>()));
+        let _shard = executor
+            .launch(0, Box::pin(std::future::pending::<()>()))
+            .expect("shard launch");
         let placement = ShardPlacement::collect(&executor, 1);
         assert!(
             placement.is_pinned(),

@@ -55,6 +55,14 @@ path = "tests/cluster_handoff_barrier.rs"
 name = "cluster_finalization_window"
 path = "tests/cluster_finalization_window.rs"
 
+# Real-thread arena reading (memory-architecture issue 09). Its own binary
+# because it declares `#[global_allocator] Jemalloc`: the bytes it asserts on
+# have to reach a real jemalloc arena, and that requirement belongs to these
+# two tests rather than to every unit test in the crate.
+[[test]]
+name = "arena_reading"
+path = "tests/arena_reading.rs"
+
 [[bin]]
 name = "frogdb-server"
 path = "src/main.rs"
