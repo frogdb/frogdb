@@ -89,8 +89,9 @@ down link to its master" *before* the WAIT-specific "replica instances" check
 (`replication.rs`) will short-circuit to `MASTERDOWN` first. Right after a fresh demotion the
 new replica's link to its new master may not have synced yet, which would make this a
 timing/gate-ordering race, not a data-loss bug. This is the same *shape* of bug as `a859e73c`
-("cluster redirect outranks the link-down stale gate"), landed on `main` (not yet in this
-worktree's history, which branched at `41ae1177`) — worth checking whether `WAIT`'s
+("cluster redirect outranks the link-down stale gate") — and that fix is an ancestor of
+`41ae1177`, so the failure reproduces with it in the tree: it did not cover this path. Worth
+checking whether `WAIT`'s
 replica-rejection needs the same admission-order fix (WAIT's own check should outrank the
 generic stale-data gate, or the demoted node's link-down state needs to sync before assertion
 (b) runs). Not confirmed by reading the admission order end-to-end — a triager should trace
@@ -107,7 +108,9 @@ Product bug vs. harness/checker defect, per test:
    helper instead of the frame-aware `RespConn` used elsewhere, e.g. by test 2).
 2. **Cluster WAIT-across-failover** — plausibly a genuine command-admission gate-ordering bug
    (WAIT's replica check vs. the generic link-down stale gate), of the same class as the
-   redirect-vs-stale-gate bug just fixed in `bc89b875`; could also be a test race (asserting
+   redirect-vs-stale-gate bug fixed in `a859e73c` — and that fix is an ancestor of `41ae1177`,
+   so the failure reproduces *with* it present, meaning it did not cover the WAIT path; could
+   also be a test race (asserting
    immediately after demotion, before the new replica's master-link status has synced) rather
    than a product bug.
 
@@ -137,5 +140,6 @@ identically at `41ae1177` with and without the ShardExecutor seam change — see
   to this failure)
 - `.scratch/memory-architecture/issues/done/01-shard-executor-seam.md:136-140` — origin of the
   "pre-existing red, not regressions" finding this issue formalizes
-- Recent related fix on `main` (same bug class as the WAIT lead above, not present in this
-  worktree's history): `a859e73c` ("cluster redirect outranks the link-down stale gate")
+- Recent related fix on `main` (same bug class as the WAIT lead above; ancestor of `41ae1177`,
+  so it does not cover this path): `a859e73c` ("cluster redirect outranks the link-down stale
+  gate")
