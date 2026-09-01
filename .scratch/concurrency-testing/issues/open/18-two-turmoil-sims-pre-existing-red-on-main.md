@@ -129,7 +129,20 @@ Root-cause verification, 2026-09-01, local mode (see "## Root cause"):
 
 1. **Reproduced both**, deterministically, on the unmodified tree — the two assertions and the
    two payloads reported above, verbatim, first try.
-2. **Both pass after the test-only fixes**, and the rest of the turmoil sim suite is unchanged.
+2. **Both pass after the test-only fixes**, and the rest of the turmoil sim suite is unchanged:
+   `-E 'test(/simulation/)'` → **156 passed, 0 assertion failures**, including both formerly-red
+   tests. Three `simulation::scheduler::test_cluster_scheduler_*` tests (`smoke_sweep`,
+   `regression_seeds`, `same_seed_same_run`) hit nextest's 120 s **timeout** in that run — not
+   assertion failures, and not related to this change: they live in a different module and touch
+   neither expiry nor `WAIT`. They timed out because a `just lint-spec` rebuild
+   (`RUSTC_WRAPPER=""`, so no sccache) was compiling on the same laptop concurrently, which is a
+   local-mode CPU-contention artifact rather than a suite regression. Do not run these two things
+   at once.
+3. **The three timeouts confirmed as contention**, re-run alone on a quiet machine: `3 tests run:
+   3 passed (2 slow)` — `same_seed_same_run` 52.8 s, `smoke_sweep` 20.6 s, `regression_seeds`
+   74.9 s, all inside nextest's 120 s budget. `regression_seeds` at 75 s has only ~1.6x headroom,
+   so it is the first to tip over whenever anything else is compiling; worth watching as a
+   flake source independent of this issue.
 
 ## Root cause
 
