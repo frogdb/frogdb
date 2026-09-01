@@ -4146,8 +4146,12 @@ fn client_pause_write_vs_exec() {
 /// raw `OBJECT ENCODING` path (`Store::get`, no expiry check) therefore still
 /// sees the key — the client-visible distinguisher between suppression and a real
 /// expiry. After `CLIENT UNPAUSE`, the next sweep clears suppression and actually
-/// reaps the backdated key, so `OBJECT ENCODING` then reports `no such key`,
-/// confirming the earlier retention was suppression, not a fluke.
+/// reaps the backdated key, so `OBJECT ENCODING` then reports the key absent —
+/// the null bulk `$-1\r\n`, Redis 8.6's reply for a missing key on this
+/// subcommand, *not* an error — confirming the earlier retention was suppression,
+/// not a fluke. Both `OBJECT ENCODING` replies are therefore bulk strings, so the
+/// two are told apart by their full bytes (`$6\r\nembstr\r\n` vs `$-1\r\n`),
+/// never by a leading-type-byte check.
 ///
 /// Clock discipline: the only real-clock dependency (elapsing the TTL) is removed
 /// by backdate; the sweep-tick syncs of `expiry_suppressed` are driven by
@@ -4291,26 +4295,42 @@ fn client_pause_write_expiry_suppression_realpath() {
     );
 
     // OBJECT ENCODING saw the key still physically present -> suppression is
-    // client-visible. A bulk string (`$...`) is the encoding; a `-ERR no such key`
-    // here would mean the key was physically reaped despite suppression.
+    // client-visible. `k` was written by `SET k v`, a non-integer short string,
+    // so the encoding is `embstr` (`Value::encoding_name`, pinned by
+    // `object_tests::encoding_existing_key_still_reports_encoding` in
+    // `frogdb-commands`).
+    //
+    // Asserted as the *whole* reply, not merely a leading `$`: a missing key is
+    // also a bulk reply here — the null bulk `$-1\r\n` — so a first-byte check
+    // cannot tell "retained under suppression" from "already reaped", which is
+    // the only thing this test exists to distinguish.
     let paused_encoding = encoding_while_paused.lock().unwrap().clone();
     assert_eq!(
-        paused_encoding.first().copied(),
-        Some(b'$'),
+        paused_encoding.as_slice(),
+        b"$6\r\nembstr\r\n",
         "S7 expiry sub-assertion: under PAUSE WRITE, the expiry-blind `OBJECT \
          ENCODING` must still see the suppressed-but-elapsed key physically present \
-         (a bulk-string encoding), got {paused_encoding:?}. An error reply here means \
-         passive-expiry suppression did not retain the key."
+         and report its encoding (`embstr`), got {paused_encoding:?}. A null bulk \
+         (`$-1\\r\\n`) here means passive-expiry suppression did not retain the key."
     );
 
-    // After UNPAUSE + a sweep, the key is really reaped -> `no such key` error.
+    // After UNPAUSE + a sweep, the key is really reaped -> the absent-key reply.
+    //
+    // That reply is the null bulk `$-1\r\n`, not an error: `OBJECT ENCODING` on a
+    // missing key matches Redis 8.6's `kvobjCommandLookupOrReply`, which answers
+    // `shared.null` for ENCODING/REFCOUNT/IDLETIME/FREQ alike
+    // (`frogdb-commands` `generic.rs`, pinned by
+    // `object_tests::encoding_missing_key_is_nil_not_error`). This test predates
+    // that fidelity fix and asserted the old `-ERR no such key` shape until
+    // .scratch/concurrency-testing/issues/18.
     let reaped_encoding = encoding_after_reap.lock().unwrap().clone();
-    assert!(
-        reaped_encoding.starts_with(b"-"),
+    assert_eq!(
+        reaped_encoding.as_slice(),
+        b"$-1\r\n",
         "S7 expiry sub-assertion: after UNPAUSE the next sweep must reap the \
-         backdated key, so `OBJECT ENCODING` reports `no such key` (an error), got \
-         {reaped_encoding:?}. Anything else means suppression did not lift or the \
-         key was never really expired."
+         backdated key, so `OBJECT ENCODING` reports it absent (null bulk \
+         `$-1\\r\\n`), got {reaped_encoding:?}. The `embstr` encoding here would \
+         mean suppression did not lift or the key was never really expired."
     );
 }
 
@@ -5758,13 +5778,39 @@ fn run_cluster_wait_across_failover(seed: u64) {
             ),
         }
 
-        // The demoted node now refuses WAIT outright, as any replica does.
+        // The demoted node now refuses WAIT outright, instead of answering with a
+        // count as it did seconds ago. *Which* refusal it is depends on its link
+        // state, and right here the link is still held down by this very test —
+        // the `hold` set at phase 1 is not released until phase 2 below. A
+        // link-down replica with `replica-serve-stale-data no` (FrogDB's default)
+        // answers `-MASTERDOWN` to every command that is not `CommandFlags::STALE`
+        // -flagged and not due a cluster slot redirect (`specs/replication.md`
+        // FM-REPLICATION-067). `WAIT` is neither — it carries no STALE flag and
+        // takes no key, so `defers_to_cluster_redirect` cannot rescue it — so the
+        // stale rung in `run_pre_checks` fires before `waitCommand`'s own replica
+        // check ever runs. Redis orders these the same way: its `-MASTERDOWN` gate
+        // is in `processCommand`, ahead of every command proc.
+        //
+        // So the invariant that actually holds under a held link is "an error, not
+        // a count"; the WAIT-specific string is asserted below, once the link is
+        // healthy and the stale rung stops shadowing it. Asserting the specific
+        // string *here* is what made this test red from `df4c2f4f` (the commit that
+        // shipped the stale gate) onward — see
+        // .scratch/concurrency-testing/issues/18.
         let refused = conn.cmd(&[b"WAIT", b"0", b"0"]).await?;
-        assert!(
-            matches!(&refused, RespValue::Error(e)
-                if e.contains("WAIT cannot be used with replica instances")),
-            "seed {seed}: the demoted node must reject WAIT like any replica, got {refused:?}"
-        );
+        match &refused {
+            RespValue::Error(e) => assert!(
+                e.contains("WAIT cannot be used with replica instances")
+                    || e.starts_with("MASTERDOWN"),
+                "seed {seed}: the demoted node must reject WAIT as a replica \
+                 (WAIT's own role error) or as a stale one (-MASTERDOWN, its link \
+                 to the promoted node is still held down here), got {e:?}"
+            ),
+            other => panic!(
+                "seed {seed}: the demoted node must refuse WAIT, never answer with a \
+                 count describing a shard it no longer heads, got {other:?}"
+            ),
+        }
 
         // ...and the promoted node serves WAIT as the shard's new primary.
         phase_c.store(2, Ordering::Release);
@@ -5779,6 +5825,30 @@ fn run_cluster_wait_across_failover(seed: u64) {
         assert!(
             matches!(served, RespValue::Int(_)),
             "seed {seed}: the promoted cluster primary must serve WAIT, got {served:?}"
+        );
+
+        // Phase 2 released the hold, so the demoted node reattaches to the promoted
+        // one and its link comes back up. With the stale rung no longer shadowing
+        // it, WAIT's own role refusal is the reply — the exact string
+        // FM-REPLICATION-040 names ("every later WAIT on that node is refused with
+        // the replica error"). Polled, not asserted instantly: the reattach is what
+        // clears `-MASTERDOWN`, and it takes a few sim ticks after the release.
+        let mut demoted_refusal = RespValue::Bulk(None);
+        for _ in 0..120 {
+            demoted_refusal = conn.cmd(&[b"WAIT", b"0", b"0"]).await?;
+            if matches!(&demoted_refusal, RespValue::Error(e)
+                if e.contains("WAIT cannot be used with replica instances"))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(
+            matches!(&demoted_refusal, RespValue::Error(e)
+                if e.contains("WAIT cannot be used with replica instances")),
+            "seed {seed}: once its link to the promoted node is healthy again, the \
+             demoted node must reject WAIT with WAIT's own replica error \
+             (FM-REPLICATION-040), got {demoted_refusal:?}"
         );
 
         Ok(())
@@ -5825,8 +5895,10 @@ fn run_cluster_wait_across_failover(seed: u64) {
 // FM-REPLICATION-040
 /// A WAIT parked on a cluster primary across a graceful `CLUSTER FAILOVER`
 /// resolves to the documented `-UNBLOCKED` role-change error; the demoted node
-/// then rejects WAIT as a replica and the promoted node serves it as the shard's
-/// new primary. Deterministic across several seeds.
+/// then rejects WAIT — as a *stale* replica (`-MASTERDOWN`) while the test still
+/// holds its link down, and with WAIT's own replica error once that link heals —
+/// and the promoted node serves WAIT as the shard's new primary. Deterministic
+/// across several seeds.
 #[test]
 fn test_cluster_wait_unblocked_across_failover() {
     for seed in [1u64, 7, 42] {
