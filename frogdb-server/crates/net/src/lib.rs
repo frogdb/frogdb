@@ -595,14 +595,29 @@ impl ShardExecutor for SimShardExecutor {
 /// `arenas` is where shard arenas come from; the simulation arm drops it, since
 /// a sim host is one thread and per-shard arenas cannot exist there.
 #[cfg(feature = "turmoil")]
-pub fn shard_executor(_arenas: std::sync::Arc<dyn ShardArenaSource>) -> Box<dyn ShardExecutor> {
+pub fn shard_executor_with_arenas(
+    _arenas: std::sync::Arc<dyn ShardArenaSource>,
+) -> Box<dyn ShardExecutor> {
     Box::new(SimShardExecutor::new())
 }
 
 /// The shard executor for this build — see the `turmoil` arm above.
 #[cfg(not(feature = "turmoil"))]
-pub fn shard_executor(arenas: std::sync::Arc<dyn ShardArenaSource>) -> Box<dyn ShardExecutor> {
+pub fn shard_executor_with_arenas(
+    arenas: std::sync::Arc<dyn ShardArenaSource>,
+) -> Box<dyn ShardExecutor> {
     Box::new(RealShardExecutor::with_arenas(arenas))
+}
+
+/// The shard executor for this build, binding **no** per-shard arenas.
+///
+/// For callers that launch shards without doing memory accounting — tests, and
+/// anything checking which implementation this build selected. The server's own
+/// startup path uses [`shard_executor_with_arenas`]; a shard launched through
+/// this one reports `arena_of == None`, which every consumer already treats as
+/// "not separately attributable".
+pub fn shard_executor() -> Box<dyn ShardExecutor> {
+    shard_executor_with_arenas(std::sync::Arc::new(NoShardArenas))
 }
 
 /// Creates a TcpListener with SO_REUSEADDR enabled.
@@ -1109,6 +1124,10 @@ mod shard_executor_tests {
         } else {
             "real"
         };
-        assert_eq!(shard_executor(Arc::new(NoShardArenas)).kind(), expected);
+        assert_eq!(shard_executor().kind(), expected);
+        assert_eq!(
+            shard_executor_with_arenas(Arc::new(NoShardArenas)).kind(),
+            expected
+        );
     }
 }

@@ -34,6 +34,10 @@ const BACKLOG_TTL_TICK: Duration = Duration::from_secs(1);
 pub(super) struct SubsystemHandles {
     pub http_server: Option<JoinHandle<()>>,
     pub system_collector: Option<JoinHandle<()>>,
+    /// Refreshes the per-shard jemalloc arena figures. `None` when no shard has
+    /// an arena to read (simulation, or a build with no arena-capable
+    /// allocator).
+    pub arena_sampler: Option<JoinHandle<()>>,
     pub cluster_bus: Option<JoinHandle<()>>,
     pub replica: Option<(JoinHandle<()>, JoinHandle<()>)>,
     pub acceptor: JoinHandle<()>,
@@ -304,6 +308,24 @@ impl Server {
             None
         };
 
+        // Keep the per-shard arena figures current. Independent of the metrics
+        // switch below: the sampled bound is what a memory budget refuses
+        // against, so it has to exist whether or not anyone is scraping. Runs
+        // only where there are arenas to read — under simulation this spawns
+        // nothing at all.
+        let arena_sampler_handle = frogdb_telemetry::ArenaSampler::spawn(
+            self.shard_arenas.clone(),
+            frogdb_telemetry::ArenaSampleRate::new(self.config.memory.arena_sample_hz),
+        );
+        if arena_sampler_handle.is_some() {
+            info!(
+                shards = self.shard_arenas.len(),
+                hz =
+                    frogdb_telemetry::ArenaSampleRate::new(self.config.memory.arena_sample_hz).hz(),
+                "Per-shard arena sampler started"
+            );
+        }
+
         // Start system metrics collector if metrics enabled
         let system_collector_handle = if self.prometheus_recorder.is_some() {
             Some(SystemMetricsCollector::spawn_collector(
@@ -311,6 +333,7 @@ impl Server {
                 Duration::from_secs(5),
                 self.shared_maxmemory.clone(),
                 self.shard_memory_used.clone(),
+                self.shard_arenas.clone(),
             ))
         } else {
             None
@@ -693,6 +716,7 @@ impl Server {
         Ok(SubsystemHandles {
             http_server: http_server_handle,
             system_collector: system_collector_handle,
+            arena_sampler: arena_sampler_handle,
             cluster_bus: cluster_bus_handle,
             replica: replica_handle,
             acceptor: acceptor_handle,
@@ -764,6 +788,9 @@ impl Server {
             handle.abort();
         }
         if let Some(handle) = handles.system_collector {
+            handle.abort();
+        }
+        if let Some(handle) = handles.arena_sampler {
             handle.abort();
         }
         if let Some(handle) = handles.cluster_bus {

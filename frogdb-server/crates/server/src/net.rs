@@ -25,6 +25,37 @@ pub type ConnectionStream = turmoil::net::TcpStream;
 #[cfg(not(feature = "turmoil"))]
 pub type ConnectionStream = crate::tls::MaybeTlsStream;
 
+/// The jemalloc-backed [`ShardArenaSource`] production shards bind through.
+///
+/// This is where the two halves meet: [`frogdb_net`] owns the shard thread and
+/// declares *what* it needs (create an arena, bind this thread to it), and
+/// `frogdb_telemetry::jemalloc` owns the `mallctl` chokepoint that can actually
+/// do it. Neither may depend on the other — telemetry sits above net — so the
+/// adapter lives here, in the one crate that already has both.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct JemallocShardArenas;
+
+impl ShardArenaSource for JemallocShardArenas {
+    fn arenas_available(&self) -> bool {
+        // False on a target without jemalloc, where every call below would fail
+        // once per shard for a facility the build was never going to have.
+        frogdb_telemetry::jemalloc::narenas().is_some()
+    }
+
+    fn create_arena(&self) -> std::io::Result<u32> {
+        frogdb_telemetry::jemalloc::create_arena()
+    }
+
+    fn bind_current_thread(&self, arena: u32) -> std::io::Result<()> {
+        frogdb_telemetry::jemalloc::bind_current_thread_to_arena(arena)
+    }
+}
+
+/// The arena source for this build's shards.
+pub fn shard_arena_source() -> std::sync::Arc<dyn ShardArenaSource> {
+    std::sync::Arc::new(JemallocShardArenas)
+}
+
 /// Compile-time proof that `frogdb-server/turmoil` actually forwards
 /// `frogdb-net/turmoil`. Without the forward, `frogdb_net::TcpStream` would
 /// still be tokio's while this crate's own `turmoil` arm is active — the

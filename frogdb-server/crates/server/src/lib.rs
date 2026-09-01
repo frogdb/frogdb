@@ -16,6 +16,7 @@ pub mod debug_providers;
 pub mod function_store;
 pub mod info;
 pub mod latency_test;
+pub mod malloc_conf;
 pub mod migrate;
 pub mod monitor;
 pub mod net;

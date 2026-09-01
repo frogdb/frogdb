@@ -394,6 +394,27 @@ define_metrics! {
         labels: [shard: &str],
     }
 
+    /// Upper bound on the bytes one shard has allocated, from the jemalloc
+    /// arena bound to that shard's thread (`stats.arenas.<i>.{small,large}`).
+    ///
+    /// An upper bound, not a live figure: freed bytes stay charged until the
+    /// thread cache flushes them. Absent — not zero — for a shard with no
+    /// arena of its own.
+    gauge AllocatorShardAllocatedBytes("frogdb_allocator_shard_allocated_bytes") {
+        labels: [shard: &str],
+    }
+
+    /// Bytes physically resident in one shard's jemalloc arena
+    /// (`stats.arenas.<i>.resident`)
+    gauge AllocatorShardResidentBytes("frogdb_allocator_shard_resident_bytes") {
+        labels: [shard: &str],
+    }
+
+    /// Per-shard fragmentation ratio (arena resident / arena allocated)
+    gauge AllocatorShardFragRatio("frogdb_allocator_shard_frag_ratio") {
+        labels: [shard: &str],
+    }
+
     /// Total keys evicted
     counter EvictionKeysTotal("frogdb_eviction_keys_total") {
         labels: [shard: &str, policy: &str],

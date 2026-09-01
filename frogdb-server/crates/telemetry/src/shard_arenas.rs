@@ -420,6 +420,94 @@ mod tests {
         );
     }
 
+    /// PRD R3's no-cross-arena-bleed rule, in executable form: several
+    /// shard-shaped threads each hold a *different* known volume, and every
+    /// arena must report its own thread's bytes and none of anyone else's.
+    ///
+    /// The volumes are spread far apart on purpose. An arena that had absorbed
+    /// even one neighbour's allocation would land outside its own window, so
+    /// the assertion fails on bleed in either direction rather than merely
+    /// noticing that some plausible number arrived.
+    ///
+    /// Real threads, not turmoil: under simulation every shard allocates from
+    /// one thread's arena and this invariant is vacuously true — which is why
+    /// [`specs/memory.md`] forbids forcing it from a simulated test.
+    #[test]
+    #[cfg(not(target_env = "msvc"))]
+    fn each_arena_reports_its_own_shards_bytes_and_no_others() {
+        const MIB: usize = 1024 * 1024;
+        /// Room for the holding vectors and whatever else the thread touches
+        /// after it binds. Far below the gap between two shards' volumes, so a
+        /// single leaked neighbour allocation still fails the window.
+        const SLACK: u64 = 2 * MIB as u64;
+        let volumes = [4 * MIB, 16 * MIB, 48 * MIB];
+
+        let (report_tx, report_rx) = std::sync::mpsc::channel();
+        let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+        let stop_rx = Arc::new(std::sync::Mutex::new(stop_rx));
+
+        let shards: Vec<_> = volumes
+            .iter()
+            .enumerate()
+            .map(|(shard_id, &volume)| {
+                let report_tx = report_tx.clone();
+                let stop_rx = stop_rx.clone();
+                std::thread::spawn(move || {
+                    let arena = jemalloc::create_arena().expect("arenas.create");
+                    jemalloc::bind_current_thread_to_arena(arena).expect("thread.arena");
+                    let held: Vec<Vec<u8>> = (0..volume / MIB).map(|_| vec![7u8; MIB]).collect();
+                    report_tx.send((shard_id, arena)).expect("report arena");
+                    // Freed-into-cache objects still count against the arena
+                    // (E4), so the thread holds everything live and flushes
+                    // nothing until the reads are done.
+                    let _ = stop_rx.lock().expect("stop channel").recv();
+                    drop(held);
+                })
+            })
+            .collect();
+        drop(report_tx);
+
+        let bindings: Vec<(usize, u32)> = report_rx.iter().take(volumes.len()).collect();
+        assert_eq!(
+            bindings.len(),
+            volumes.len(),
+            "every shard reported an arena"
+        );
+        let registry = ShardArenaRegistry::new(bindings);
+        assert_eq!(registry.refresh(), volumes.len(), "every arena was read");
+
+        let samples: Vec<_> = registry.samples().collect();
+        for _ in &shards {
+            let _ = stop_tx.send(());
+        }
+        for shard in shards {
+            shard.join().expect("shard thread");
+        }
+
+        let arenas: std::collections::HashSet<u32> = samples.iter().map(|s| s.arena).collect();
+        assert_eq!(
+            arenas.len(),
+            volumes.len(),
+            "shards shared an arena: {samples:?}"
+        );
+
+        for sample in &samples {
+            let own = volumes[sample.shard_id] as u64;
+            let allocated = sample.allocated_upper_bound_bytes();
+            assert!(
+                allocated >= own,
+                "shard {} held {own} B but its arena reports only {allocated} B",
+                sample.shard_id
+            );
+            assert!(
+                allocated <= own + SLACK,
+                "shard {} held {own} B and its arena reports {allocated} B — \
+                 another shard's bytes were charged here",
+                sample.shard_id
+            );
+        }
+    }
+
     /// The acceptance criterion "the sampler never runs on a command path",
     /// pinned structurally rather than by inspection.
     ///

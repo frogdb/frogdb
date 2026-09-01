@@ -13,8 +13,9 @@ use tracing::{info, warn};
 
 use crate::cluster::failure_detector::FailureDetector;
 use crate::config::{Config, JsonConfigExt};
-use crate::net::{ShardHandle, ShardPlacement, shard_executor};
+use crate::net::{ShardHandle, ShardPlacement};
 use crate::runtime_config::ConfigManager;
+use frogdb_telemetry::ShardArenaRegistry;
 
 /// Context for spawning shard workers.
 pub(super) struct ShardSpawnContext {
@@ -65,6 +66,10 @@ pub(super) struct SpawnedShards {
     /// connection→core half of PRD R3/R4, without which the thread-per-core
     /// shape is a 3.7× regression rather than a 2.3× win (spike-report §(b)).
     pub placement: ShardPlacement,
+    /// Which jemalloc arena each shard bound, and the sampled figures for it.
+    /// Empty when no shard has an arena (simulation, or a build without an
+    /// arena-capable allocator).
+    pub arenas: Arc<ShardArenaRegistry>,
 }
 
 /// Spawn all shard workers and return their join handles plus the connection
@@ -92,7 +97,7 @@ pub(super) fn spawn_shard_workers(ctx: ShardSpawnContext) -> anyhow::Result<Spaw
     // shard. Today both implementations spawn a task on the ambient runtime;
     // the seam exists so the production shape can become thread-per-core
     // without the simulation following it onto threads it cannot schedule.
-    let mut executor = shard_executor();
+    let mut executor = crate::net::shard_executor_with_arenas(crate::net::shard_arena_source());
     info!(executor = executor.kind(), "Shard executor selected");
 
     let mut shard_handles = Vec::with_capacity(ctx.num_shards);
@@ -344,6 +349,14 @@ pub(super) fn spawn_shard_workers(ctx: ShardSpawnContext) -> anyhow::Result<Spaw
     let launched = ShardPlacement::collect(&*executor, ctx.num_shards);
     let shards_own_threads = launched.is_pinned();
 
+    // Same shape, same reason, for arenas: ask the executor once, here, and hand
+    // the answer on as data. A shard missing from the registry has no arena and
+    // is simply unattributable — never zero.
+    let arenas = Arc::new(ShardArenaRegistry::new(
+        (0..ctx.num_shards).filter_map(|shard_id| Some((shard_id, executor.arena_of(shard_id)?))),
+    ));
+    report_arena_binding(arenas.as_ref(), ctx.num_shards);
+
     // A shard that has a runtime of its own has a thread of its own. Declare it
     // once, here, where the executor that decided it is still in scope: a
     // synchronous cross-shard wait inside a script has to know which of the two
@@ -374,7 +387,60 @@ pub(super) fn spawn_shard_workers(ctx: ShardSpawnContext) -> anyhow::Result<Spaw
     Ok(SpawnedShards {
         handles: shard_handles,
         placement,
+        arenas,
     })
+}
+
+/// Report what the arena layout actually came out as, once, at startup.
+///
+/// Two things are worth an operator's attention and neither is an error:
+///
+/// * A shard that bound no arena is degraded — it still works, but its memory
+///   is folded into the automatic arena and vanishes from the per-shard gauges.
+/// * The intended layout is exactly `1 + num_shards` arenas: one automatic
+///   arena for every non-shard thread plus one per shard, which is what
+///   `narenas:1` in the allocator configuration buys (see
+///   `crate::malloc_conf`). More than that means the setting did not take
+///   effect and jemalloc created its own default pool, so the automatic-arena
+///   figures are spread across arenas nobody is reading.
+fn report_arena_binding(arenas: &ShardArenaRegistry, num_shards: usize) {
+    let bound = arenas.len();
+    let total = frogdb_telemetry::jemalloc::narenas();
+
+    if bound == 0 {
+        info!(
+            num_shards,
+            "No per-shard arenas bound; shard memory is not separately attributable"
+        );
+        return;
+    }
+    if bound < num_shards {
+        warn!(
+            bound,
+            num_shards,
+            "Some shards bound no arena; their memory is folded into the automatic \
+             arena and absent from the per-shard gauges"
+        );
+    }
+    let expected = num_shards as u32 + 1;
+    match total {
+        Some(total) if total > expected => warn!(
+            arenas = total,
+            expected,
+            malloc_conf = crate::malloc_conf::requested(),
+            applied = ?crate::malloc_conf::applied(),
+            "More jemalloc arenas exist than shards plus one; the allocator's \
+             arena-count setting did not take effect, so non-shard allocations \
+             are spread over unattributed arenas"
+        ),
+        _ => info!(
+            bound,
+            num_shards,
+            arenas = ?total,
+            malloc_conf = crate::malloc_conf::requested(),
+            "Per-shard arenas bound"
+        ),
+    }
 }
 
 /// Deterministic replacement for a shard's periodic-sweep timer branches

@@ -10,8 +10,10 @@ use tokio::time::interval;
 use tracing::{debug, warn};
 
 use crate::jemalloc;
+use crate::shard_arenas::ShardArenaRegistry;
 use frogdb_types::metrics::definitions::{
     AllocatorActiveBytes, AllocatorAllocatedBytes, AllocatorFragRatio, AllocatorResidentBytes,
+    AllocatorShardAllocatedBytes, AllocatorShardFragRatio, AllocatorShardResidentBytes,
     CpuSystemSeconds, CpuUserSeconds, MemoryFragmentationRatio, MemoryMaxmemoryBytes,
     MemoryRssBytes, UptimeSeconds,
 };
@@ -39,6 +41,11 @@ pub struct SystemMetricsCollector {
     maxmemory: Arc<AtomicU64>,
     /// Per-shard memory usage atomics, summed for total used memory.
     shard_memory: Arc<Vec<AtomicU64>>,
+    /// Per-shard jemalloc arenas, kept current by its own sampler. This
+    /// collector only *reads* it: the two run at very different rates (5 s here
+    /// against 10–100 Hz there), and a broker deciding an eviction cannot wait
+    /// five seconds for a figure.
+    shard_arenas: Arc<ShardArenaRegistry>,
 }
 
 impl SystemMetricsCollector {
@@ -47,6 +54,7 @@ impl SystemMetricsCollector {
         recorder: Arc<dyn MetricsRecorder>,
         maxmemory: Arc<AtomicU64>,
         shard_memory: Arc<Vec<AtomicU64>>,
+        shard_arenas: Arc<ShardArenaRegistry>,
     ) -> Self {
         let pid = Pid::from_u32(std::process::id());
         let mut system = System::new();
@@ -64,6 +72,7 @@ impl SystemMetricsCollector {
             pid,
             maxmemory,
             shard_memory,
+            shard_arenas,
         }
     }
 
@@ -136,6 +145,27 @@ impl SystemMetricsCollector {
                 );
             }
         }
+
+        // Per-shard allocator gauges, from the arena bound to each shard's
+        // thread. Read, never sampled here — see the field's docs. A shard with
+        // no arena, or one whose arena has not been sampled yet, emits nothing:
+        // an absent series is a question a dashboard can ask about, a zero is a
+        // wrong answer it cannot.
+        for sample in self.shard_arenas.samples() {
+            if !sample.is_sampled() {
+                continue;
+            }
+            let shard = sample.shard_id.to_string();
+            AllocatorShardAllocatedBytes::set(
+                &*self.recorder,
+                sample.allocated_upper_bound_bytes() as f64,
+                &shard,
+            );
+            AllocatorShardResidentBytes::set(&*self.recorder, sample.resident_bytes as f64, &shard);
+            if let Some(ratio) = sample.fragmentation_ratio() {
+                AllocatorShardFragRatio::set(&*self.recorder, ratio, &shard);
+            }
+        }
     }
 
     /// Spawn a background task that collects system metrics periodically.
@@ -144,9 +174,11 @@ impl SystemMetricsCollector {
         collection_interval: Duration,
         maxmemory: Arc<AtomicU64>,
         shard_memory: Arc<Vec<AtomicU64>>,
+        shard_arenas: Arc<ShardArenaRegistry>,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
-            let mut collector = SystemMetricsCollector::new(recorder, maxmemory, shard_memory);
+            let mut collector =
+                SystemMetricsCollector::new(recorder, maxmemory, shard_memory, shard_arenas);
             let mut ticker = interval(collection_interval);
 
             loop {
@@ -170,21 +202,72 @@ mod tests {
         Arc::new(vec![])
     }
 
+    fn test_shard_arenas() -> Arc<ShardArenaRegistry> {
+        Arc::new(ShardArenaRegistry::empty())
+    }
+
     #[test]
     fn test_system_metrics_collector_creation() {
         let recorder = Arc::new(NoopMetricsRecorder::new());
-        let collector =
-            SystemMetricsCollector::new(recorder, test_maxmemory(), test_shard_memory());
+        let collector = SystemMetricsCollector::new(
+            recorder,
+            test_maxmemory(),
+            test_shard_memory(),
+            test_shard_arenas(),
+        );
         assert!(collector.start_time.elapsed().as_secs() < 1);
     }
 
     #[test]
     fn test_system_metrics_collection() {
         let recorder = Arc::new(NoopMetricsRecorder::new());
-        let mut collector =
-            SystemMetricsCollector::new(recorder, test_maxmemory(), test_shard_memory());
+        let mut collector = SystemMetricsCollector::new(
+            recorder,
+            test_maxmemory(),
+            test_shard_memory(),
+            test_shard_arenas(),
+        );
         // Should not panic
         collector.collect();
+    }
+
+    /// A sampled arena becomes a labelled per-shard series; an unsampled one
+    /// stays absent. Absence is the honest answer for a shard whose memory is
+    /// not separately attributable — a zero would read as "this shard holds
+    /// nothing", which is the opposite of what is known.
+    #[cfg(not(target_env = "msvc"))]
+    #[test]
+    fn per_shard_allocator_gauges_are_emitted_only_for_sampled_arenas() {
+        use crate::prometheus_recorder::PrometheusRecorder;
+
+        let arena = jemalloc::create_arena().expect("arenas.create");
+        // Shard 0's arena is sampled below; shard 1's is never touched.
+        let arenas = Arc::new(ShardArenaRegistry::new([(0, arena), (1, arena + 1)]));
+
+        let recorder = Arc::new(PrometheusRecorder::new());
+        let mut collector = SystemMetricsCollector::new(
+            recorder.clone(),
+            test_maxmemory(),
+            test_shard_memory(),
+            arenas.clone(),
+        );
+
+        collector.collect();
+        assert!(
+            !recorder.encode().contains("frogdb_allocator_shard_"),
+            "nothing has been sampled yet, so no per-shard series may exist"
+        );
+
+        assert!(arenas.refresh() > 0, "refresh must sample the live arenas");
+        collector.collect();
+
+        let output = recorder.encode();
+        assert!(output.contains("frogdb_allocator_shard_allocated_bytes"));
+        assert!(output.contains("frogdb_allocator_shard_resident_bytes"));
+        assert!(
+            output.contains(r#"shard="0""#),
+            "the per-shard series must be labelled by shard: {output}"
+        );
     }
 
     #[tokio::test]
@@ -195,6 +278,7 @@ mod tests {
             Duration::from_millis(100),
             test_maxmemory(),
             test_shard_memory(),
+            test_shard_arenas(),
         );
 
         // Let it run for a bit

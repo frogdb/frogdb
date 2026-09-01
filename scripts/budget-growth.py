@@ -186,7 +186,11 @@ ALLOWLIST: dict[str, tuple[int, str]] = {
         "`InvalidationRegistry` and `BroadcastTable`; the `TrackingTable` beside them is "
         "converted (issue 05) and these two follow with BCAST-mode accounting",
     ),
-    "frogdb-server/crates/net/src/lib.rs": (1, "one runtime handle per shard, at startup"),
+    "frogdb-server/crates/net/src/lib.rs": (
+        2,
+        "one runtime handle and one arena binding per shard, both at startup, both "
+        "bounded by the shard count",
+    ),
     # --- Replication
     "frogdb-server/crates/replication-runtime/src/install.rs": (
         2,

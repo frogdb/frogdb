@@ -70,6 +70,20 @@ pub struct MemoryConfig {
     #[serde(default = "default_maxmemory_clients")]
     #[param(mutable)]
     pub maxmemory_clients: String,
+
+    /// How often (Hz) the per-shard jemalloc arena figures are refreshed.
+    ///
+    /// One epoch advance per tick refreshes every shard's arena at once. ADR-0006
+    /// §3 fixes the band at 10-100 Hz and values outside it are clamped, not
+    /// honoured: slower makes the bound a memory budget refuses against too
+    /// stale, faster makes the all-arena epoch merge (~2.5 us per arena) a
+    /// measurable cost.
+    #[serde(default = "default_arena_sample_hz")]
+    #[param(skip)]
+    // skip: boot-time sampler cadence. The sampler's interval is fixed when its
+    // task is spawned, so a live change would not reach it; retuning is an ADR
+    // decision (issue 04's Linux measurements), not an operator dial.
+    pub arena_sample_hz: u32,
 }
 
 fn default_maxmemory() -> u64 {
@@ -136,6 +150,15 @@ fn default_maxmemory_clients() -> String {
     "0".to_string()
 }
 
+/// 20 Hz: a 50 ms-stale per-shard bound for ~0.045 % of one core at eight
+/// shards. Mirrors `frogdb_telemetry::ArenaSampleRate::DEFAULT_HZ`, which is
+/// also what clamps an out-of-band value.
+pub const DEFAULT_ARENA_SAMPLE_HZ: u32 = 20;
+
+fn default_arena_sample_hz() -> u32 {
+    DEFAULT_ARENA_SAMPLE_HZ
+}
+
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
@@ -148,6 +171,7 @@ impl Default for MemoryConfig {
             doctor_max_big_keys: default_doctor_max_big_keys(),
             doctor_imbalance_threshold: default_doctor_imbalance_threshold(),
             maxmemory_clients: default_maxmemory_clients(),
+            arena_sample_hz: default_arena_sample_hz(),
         }
     }
 }

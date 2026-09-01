@@ -6,6 +6,18 @@
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
+/// Overrides jemalloc's weak `malloc_conf` symbol, which it reads once during
+/// initialization — before `main`, and before any allocation this program makes.
+///
+/// The definition lives here rather than in the library because a symbol may be
+/// defined only once in a linked image, and the library's own test binary links
+/// both itself and the library. See [`frogdb_server::malloc_conf`] for what the
+/// option string asks for and why.
+#[cfg(not(target_env = "msvc"))]
+#[used]
+#[unsafe(export_name = "_rjem_malloc_conf")]
+static MALLOC_CONF: &[u8; 10] = frogdb_server::malloc_conf::MALLOC_CONF;
+
 use anyhow::Result;
 use clap::Parser;
 use frogdb_server::{
@@ -169,4 +181,21 @@ fn main() -> Result<()> {
     profiler.report();
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    /// The override only counts if jemalloc read it. Assert against the live
+    /// allocator in the one binary that defines the symbol — the library's own
+    /// test binary does not, so this can only be checked here.
+    #[cfg(not(target_env = "msvc"))]
+    #[test]
+    fn jemalloc_applies_the_requested_arena_count() {
+        assert_eq!(
+            frogdb_server::malloc_conf::applied(),
+            Some(true),
+            "jemalloc ignored `{}`; check the `_rjem_` symbol prefix",
+            frogdb_server::malloc_conf::requested()
+        );
+    }
 }

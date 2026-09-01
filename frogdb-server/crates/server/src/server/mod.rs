@@ -114,6 +114,14 @@ pub struct Server {
     /// ambient runtime.
     shard_placement: crate::net::ShardPlacement,
 
+    /// Which jemalloc arena each shard bound, plus that arena's sampled figures.
+    ///
+    /// Taken once after launch, like the placement above, and kept current by
+    /// its own sampler task (see `start_subsystems`). Empty under turmoil and on
+    /// any build with no arena-capable allocator; a shard absent from it has
+    /// memory that is not separately attributable.
+    shard_arenas: Arc<frogdb_telemetry::ShardArenaRegistry>,
+
     /// Optional RocksDB store for persistence.
     rocks_store: Option<Arc<RocksStore>>,
 
@@ -388,6 +396,7 @@ impl Server {
         let shards::SpawnedShards {
             handles: shard_handles,
             placement: shard_placement,
+            arenas: shard_arenas,
         } = shards::spawn_shard_workers(shards::ShardSpawnContext {
             config: config.clone(),
             num_shards: infra.num_shards,
@@ -484,6 +493,7 @@ impl Server {
             new_conn_senders: infra.new_conn_senders,
             shard_supervisor_handle,
             shard_placement,
+            shard_arenas,
             rocks_store: infra.rocks_store,
             periodic_sync_handle: infra.periodic_sync_handle,
             periodic_snapshot_handle: infra.periodic_snapshot_handle,
