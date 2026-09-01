@@ -480,10 +480,13 @@ impl<'a> ScriptInvoker<'a> {
     /// Dispatch a synchronous [`ScriptingMsg::ScriptSubCommand`] to the owning
     /// shard and block on the reply.
     ///
-    /// The wait uses `block_in_place`, which requires a multi-thread Tokio
-    /// runtime; on a current-thread runtime it panics. We catch that panic and
-    /// return [`RemoteError::RuntimeUnavailable`] rather than falling through to
-    /// local execution — a cross-shard write must never land on the wrong shard.
+    /// How the wait blocks depends on the shard's execution shape (see
+    /// [`crate::shard::placement`]): a shard with its own thread blocks it
+    /// directly, a shard sharing a multi-thread runtime hands its worker slot
+    /// back with `block_in_place`. The latter panics on a current-thread runtime
+    /// (simulation); we catch that and return [`RemoteError::RuntimeUnavailable`]
+    /// rather than falling through to local execution — a cross-shard write must
+    /// never land on the wrong shard.
     fn run_remote_inner(
         &self,
         target_shard: usize,
@@ -499,13 +502,26 @@ impl<'a> ScriptInvoker<'a> {
             })
             .map_err(|e| RemoteError::Dispatch(format!("ERR cross-shard dispatch failed: {e}")))?;
 
-        // block_in_place releases the tokio worker thread while we synchronously
-        // wait for the target shard's response. It requires a multi-thread
-        // runtime; on current_thread it panics, which catch_unwind converts into
-        // an explicit RuntimeUnavailable error instead of a wrong-shard write.
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            tokio::task::block_in_place(|| rx.recv())
-        }));
+        // How to wait depends on what kind of thread this shard runs on — see
+        // `crate::shard::placement`.
+        let result = if crate::shard::shards_own_threads() {
+            // Thread-per-core: this shard owns its OS thread and its own
+            // `current_thread` runtime. `Plan::Remote` is only ever produced for
+            // a *different* shard, which is a different thread with a different
+            // runtime, so blocking here cannot starve the shard we are waiting
+            // on. There is no shared worker slot to hand back, and asking for
+            // one would panic.
+            Ok(rx.recv())
+        } else {
+            // Shared multi-thread runtime: release the worker thread while we
+            // synchronously wait, so the target shard's task can be scheduled on
+            // it. On a current-thread runtime (simulation) this panics, which
+            // catch_unwind converts into an explicit RuntimeUnavailable error
+            // instead of a wrong-shard write.
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                tokio::task::block_in_place(|| rx.recv())
+            }))
+        };
         match result {
             Ok(Ok(resp)) => Ok(resp),
             Ok(Err(e)) => Err(RemoteError::Response(format!(

@@ -54,6 +54,7 @@ pub mod message;
 mod panic_guard;
 mod partition;
 mod persistence;
+pub mod placement;
 mod post_execution;
 mod pubsub;
 mod rollback;
@@ -81,6 +82,7 @@ pub use message::{
     SnapshotEntry, TrackingMsg, UnregisterAck, VllMsg, WalDrainAck, WatchEntry,
 };
 pub use partition::{REDIS_CLUSTER_SLOTS, extract_hash_tag, shard_for_key, slot_for_key};
+pub use placement::{declare_shards_own_threads, shards_own_threads};
 pub use search::lifecycle::{
     IndexLifecycleManager, LifecycleError, RecoveryOutcome, RecoveryResult,
 };
