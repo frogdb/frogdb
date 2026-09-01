@@ -14,7 +14,7 @@
 //! Test-infrastructure / developer-only:
 //! - `Failing test` — redis-specific — `$::force_failure` helper, not a real test
 //!
-//! Jemalloc-specific (FrogDB does not link against jemalloc):
+//! Jemalloc-specific (FrogDB links jemalloc but does not implement this subcommand):
 //! - `Coverage: MEMORY MALLOC-STATS` — redis-specific — jemalloc-only subcommand
 //!
 //! RDB persistence (FrogDB uses WAL + RocksDB snapshots, not Redis RDB):

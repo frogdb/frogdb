@@ -183,14 +183,26 @@ details firm up); they are the first artifact of implementation kickoff.
 
 These are live today and worth stand-alone fixes if the big build is distant:
 
-1. `core/src/tracking.rs` — tracking-table `lru_order` unbounded outside accounting
-   (issue 66; subsumed by R8).
-2. `cluster-runtime feed_sequencer.rs` — barrier hold buffer missing its spec-ruled
-   byte cap (TR-CLUSTER-016 / cluster issue 17; subsumed by R8).
+1. Replica-feed hold buffer missing its spec-ruled byte cap (TR-CLUSTER-016 — spec row
+   says "byte cap not yet in code"; subsumed by R8). Deliberately deferred: campaign-31
+   (`.scratch/cluster-correctness/campaign-31-decomposition/c31-06`) rewrites
+   TR-CLUSTER-016 to ordinary replica-feed backpressure, and issue 31 is
+   ready-for-human — implementing the cap against the current row risks throwaway work.
 
-Also worth noting: stale mimalloc comment in
-`frogdb-server/crates/redis-regression/tests/memefficiency_tcl.rs` (~line 12) should
-say jemalloc.
+## Spike findings (2026-08-31)
+
+Phase-1 spike ran — see [spike-report.md](spike-report.md). Verdicts: R2 GO
+(byte-exact arena attribution, zero-cost binding), R3 GO (colocated thread-per-core
+2.27× throughput / 7.5× p99 vs work-stealing in the microbench), R4 GO **only
+together with R3** (current-thread runtimes without connection pinning measured 3.7×
+*worse* than today), turmoil GO via a mandatory `ShardExecutor` seam (real-threads
+impl vs sim impl; determinism verified). Amendments the report argues for, to fold in
+when specs/memory.md is drafted: R4 must bundle connection→core pinning; R8 arena
+stats are a sampled upper bound (epoch ~2.5µs/arena — sample at 10–100Hz, ride
+`thread.allocated` per-request; bind arena once at thread start or tcache bleeds;
+set `narenas:1`); R3's real cross-slot cost is the thread hop (~8×), not the copy;
+the turmoil seam must exist from the first R2 commit and specs/memory.md must state
+that sim tests logic, not execution shape.
 
 ## Rough dependency order for eventual implementation
 
