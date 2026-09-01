@@ -13,7 +13,7 @@ use tracing::{info, warn};
 
 use crate::cluster::failure_detector::FailureDetector;
 use crate::config::{Config, JsonConfigExt};
-use crate::net::spawn;
+use crate::net::{ShardHandle, shard_executor};
 use crate::runtime_config::ConfigManager;
 
 /// Context for spawning shard workers.
@@ -65,7 +65,7 @@ pub(super) struct ShardSpawnContext {
 /// loudly instead (see also the earlier guard in `RocksStore::open`).
 pub(super) fn spawn_shard_workers(
     ctx: ShardSpawnContext,
-) -> anyhow::Result<Vec<(usize, crate::net::JoinHandle<()>)>> {
+) -> anyhow::Result<Vec<(usize, ShardHandle)>> {
     if ctx.recovered_stores.len() != ctx.num_shards {
         anyhow::bail!(
             "recovered {} shard store(s) but the server is configured for {} shard(s); data \
@@ -76,6 +76,14 @@ pub(super) fn spawn_shard_workers(
             ctx.config.persistence.data_dir.display(),
         );
     }
+
+    // Shard placement goes through the executor seam (ADR-0006 §1): one
+    // executor, chosen at compile time by the `turmoil` feature, launches every
+    // shard. Today both implementations spawn a task on the ambient runtime;
+    // the seam exists so the production shape can become thread-per-core
+    // without the simulation following it onto threads it cannot schedule.
+    let mut executor = shard_executor();
+    info!(executor = executor.kind(), "Shard executor selected");
 
     let mut shard_handles = Vec::with_capacity(ctx.num_shards);
     let mut recovered_iter = ctx.recovered_stores.into_iter();
@@ -310,9 +318,12 @@ pub(super) fn spawn_shard_workers(
         spawn_shard_tick_pump(shard_id, ctx.shard_senders.clone());
 
         let monitor = ctx.shard_monitor.clone();
-        let handle = spawn(monitor.instrument(async move {
-            worker.run().await;
-        }));
+        let handle = executor.launch(
+            shard_id,
+            Box::pin(monitor.instrument(async move {
+                worker.run().await;
+            })),
+        );
 
         shard_handles.push((shard_id, handle));
     }
@@ -337,6 +348,7 @@ pub(super) fn spawn_shard_workers(
 /// shard it drives.
 #[cfg(feature = "turmoil")]
 fn spawn_shard_tick_pump(shard_id: usize, senders: Arc<Vec<ShardSender>>) {
+    use crate::net::spawn;
     use frogdb_core::TickKind;
     use std::time::Duration;
 
@@ -370,4 +382,47 @@ fn spawn_shard_tick_pump(shard_id: usize, senders: Arc<Vec<ShardSender>>) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    /// The wiring this issue delivers: which [`crate::net::ShardExecutor`] the
+    /// server actually gets.
+    ///
+    /// This is not a restatement of `frogdb-net`'s own selection test — it is
+    /// asserted *here*, from inside `frogdb-server`, because the feature has to
+    /// travel: `frogdb-server/turmoil` must forward `frogdb-net/turmoil` or the
+    /// simulation would silently run production shard placement. Same failure
+    /// mode the `net` module's type-identity assertion guards for TCP types.
+    #[test]
+    fn selected_shard_executor_matches_the_build() {
+        let executor = crate::net::shard_executor();
+
+        #[cfg(feature = "turmoil")]
+        assert_eq!(
+            executor.kind(),
+            "sim",
+            "turmoil builds must place shards with the simulation executor"
+        );
+
+        #[cfg(not(feature = "turmoil"))]
+        assert_eq!(
+            executor.kind(),
+            "real",
+            "production builds must place shards with the real executor"
+        );
+    }
+
+    /// Arena binding is deliberately not modelled under simulation: the sim
+    /// host is one thread hosting every shard, so a reported arena would be a
+    /// fiction. Permanent — it must still hold once the real executor binds
+    /// real arenas (ADR-0006 §1/§3).
+    #[cfg(feature = "turmoil")]
+    #[test]
+    fn simulation_reports_no_arena_for_any_shard() {
+        let executor = crate::net::shard_executor();
+        for shard_id in 0..16 {
+            assert_eq!(executor.arena_of(shard_id), None);
+        }
+    }
 }
