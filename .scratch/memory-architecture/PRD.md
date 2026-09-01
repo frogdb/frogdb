@@ -226,3 +226,15 @@ that sim tests logic, not execution shape.
   replication Budget.
 - Per-type small→block promotion thresholds (default to Redis values initially).
 - How turmoil tests model per-core pinning (simulation fidelity for R2/R3).
+
+## Grill-dispatch decisions (2026-09-01)
+
+Session decisions layered on the R1–R15 rulings above; D-numbers are cited by issues.
+
+- D1: resume slug `memory-architecture` — drafts 10, 13–22 are the carve backlog; spike
+  dispatches on approval; remaining open questions grilled while agents run.
+- D2: landing flow — agents commit in own worktrees, session cherry-picks onto
+  `mem-arch-integration`, gates, pushes `mem-arch-integration:main` directly. No PRs, no
+  merge commits.
+- D3: drafts 10, 13–22 bulk-approved as filed; promoted to `issues/open/`. Per-issue
+  ambiguity resolved at dispatch time.
