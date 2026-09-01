@@ -398,6 +398,379 @@
       },
       "id": 7,
       "panels": [],
+      "title": "Allocator",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "jemalloc `stats.allocated`: bytes allocated by the application",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 13
+      },
+      "id": 8,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "frogdb_allocator_allocated_bytes{instance=~\"$instance\", job=~\"$job\"}",
+          "legendFormat": "{{__name__}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Frogdb Allocator Allocated Bytes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "jemalloc `stats.active`: bytes in active pages allocated by the application",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 13
+      },
+      "id": 9,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "frogdb_allocator_active_bytes{instance=~\"$instance\", job=~\"$job\"}",
+          "legendFormat": "{{__name__}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Frogdb Allocator Active Bytes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "jemalloc `stats.resident`: bytes physically resident (metadata + active pages + unused dirty pages)",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 21
+      },
+      "id": 10,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "frogdb_allocator_resident_bytes{instance=~\"$instance\", job=~\"$job\"}",
+          "legendFormat": "{{__name__}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Frogdb Allocator Resident Bytes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Allocator fragmentation ratio (allocator active / allocator allocated)",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 21
+      },
+      "id": 11,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "frogdb_allocator_frag_ratio{instance=~\"$instance\", job=~\"$job\"}",
+          "legendFormat": "{{__name__}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Frogdb Allocator Frag Ratio",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
+      "id": 12,
+      "panels": [],
       "title": "Binary",
       "type": "row"
     },
@@ -460,9 +833,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 13
+        "y": 30
       },
-      "id": 8,
+      "id": 13,
       "options": {
         "legend": {
           "calcs": [],
@@ -497,9 +870,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 21
+        "y": 38
       },
-      "id": 9,
+      "id": 14,
       "panels": [],
       "title": "Blocked",
       "type": "row"
@@ -563,9 +936,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 22
+        "y": 39
       },
-      "id": 10,
+      "id": 15,
       "options": {
         "legend": {
           "calcs": [],
@@ -653,9 +1026,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 22
+        "y": 39
       },
-      "id": 11,
+      "id": 16,
       "options": {
         "legend": {
           "calcs": [],
@@ -743,9 +1116,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 30
+        "y": 47
       },
-      "id": 12,
+      "id": 17,
       "options": {
         "legend": {
           "calcs": [],
@@ -833,9 +1206,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 30
+        "y": 47
       },
-      "id": 13,
+      "id": 18,
       "options": {
         "legend": {
           "calcs": [],
@@ -923,9 +1296,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 38
+        "y": 55
       },
-      "id": 14,
+      "id": 19,
       "options": {
         "legend": {
           "calcs": [],
@@ -960,9 +1333,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 46
+        "y": 63
       },
-      "id": 15,
+      "id": 20,
       "panels": [],
       "title": "Cluster",
       "type": "row"
@@ -1026,9 +1399,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 47
+        "y": 64
       },
-      "id": 16,
+      "id": 21,
       "options": {
         "legend": {
           "calcs": [],
@@ -1063,9 +1436,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 55
+        "y": 72
       },
-      "id": 17,
+      "id": 22,
       "panels": [],
       "title": "Commands",
       "type": "row"
@@ -1129,9 +1502,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 56
+        "y": 73
       },
-      "id": 18,
+      "id": 23,
       "options": {
         "legend": {
           "calcs": [],
@@ -1219,9 +1592,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 56
+        "y": 73
       },
-      "id": 19,
+      "id": 24,
       "options": {
         "legend": {
           "calcs": [],
@@ -1331,9 +1704,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 64
+        "y": 81
       },
-      "id": 20,
+      "id": 25,
       "options": {
         "legend": {
           "calcs": [],
@@ -1368,9 +1741,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 72
+        "y": 89
       },
-      "id": 21,
+      "id": 26,
       "panels": [],
       "title": "Connections",
       "type": "row"
@@ -1434,9 +1807,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 73
+        "y": 90
       },
-      "id": 22,
+      "id": 27,
       "options": {
         "legend": {
           "calcs": [],
@@ -1524,9 +1897,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 73
+        "y": 90
       },
-      "id": 23,
+      "id": 28,
       "options": {
         "legend": {
           "calcs": [],
@@ -1614,9 +1987,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 81
+        "y": 98
       },
-      "id": 24,
+      "id": 29,
       "options": {
         "legend": {
           "calcs": [],
@@ -1704,9 +2077,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 81
+        "y": 98
       },
-      "id": 25,
+      "id": 30,
       "options": {
         "legend": {
           "calcs": [],
@@ -1741,9 +2114,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 89
+        "y": 106
       },
-      "id": 26,
+      "id": 31,
       "panels": [],
       "title": "Cpu",
       "type": "row"
@@ -1807,9 +2180,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 90
+        "y": 107
       },
-      "id": 27,
+      "id": 32,
       "options": {
         "legend": {
           "calcs": [],
@@ -1897,9 +2270,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 90
+        "y": 107
       },
-      "id": 28,
+      "id": 33,
       "options": {
         "legend": {
           "calcs": [],
@@ -1934,9 +2307,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 98
+        "y": 115
       },
-      "id": 29,
+      "id": 34,
       "panels": [],
       "title": "Eviction",
       "type": "row"
@@ -2000,9 +2373,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 99
+        "y": 116
       },
-      "id": 30,
+      "id": 35,
       "options": {
         "legend": {
           "calcs": [],
@@ -2090,9 +2463,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 99
+        "y": 116
       },
-      "id": 31,
+      "id": 36,
       "options": {
         "legend": {
           "calcs": [],
@@ -2180,9 +2553,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 107
+        "y": 124
       },
-      "id": 32,
+      "id": 37,
       "options": {
         "legend": {
           "calcs": [],
@@ -2270,9 +2643,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 107
+        "y": 124
       },
-      "id": 33,
+      "id": 38,
       "options": {
         "legend": {
           "calcs": [],
@@ -2307,9 +2680,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 115
+        "y": 132
       },
-      "id": 34,
+      "id": 39,
       "panels": [],
       "title": "Fields",
       "type": "row"
@@ -2373,9 +2746,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 116
+        "y": 133
       },
-      "id": 35,
+      "id": 40,
       "options": {
         "legend": {
           "calcs": [],
@@ -2410,9 +2783,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 124
+        "y": 141
       },
-      "id": 36,
+      "id": 41,
       "panels": [],
       "title": "Flush",
       "type": "row"
@@ -2476,9 +2849,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 125
+        "y": 142
       },
-      "id": 37,
+      "id": 42,
       "options": {
         "legend": {
           "calcs": [],
@@ -2566,9 +2939,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 125
+        "y": 142
       },
-      "id": 38,
+      "id": 43,
       "options": {
         "legend": {
           "calcs": [],
@@ -2603,9 +2976,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 133
+        "y": 150
       },
-      "id": 39,
+      "id": 44,
       "panels": [],
       "title": "Info",
       "type": "row"
@@ -2669,9 +3042,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 134
+        "y": 151
       },
-      "id": 40,
+      "id": 45,
       "options": {
         "legend": {
           "calcs": [],
@@ -2706,9 +3079,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 142
+        "y": 159
       },
-      "id": 41,
+      "id": 46,
       "panels": [],
       "title": "Keys",
       "type": "row"
@@ -2772,9 +3145,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 143
+        "y": 160
       },
-      "id": 42,
+      "id": 47,
       "options": {
         "legend": {
           "calcs": [],
@@ -2862,9 +3235,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 143
+        "y": 160
       },
-      "id": 43,
+      "id": 48,
       "options": {
         "legend": {
           "calcs": [],
@@ -2952,9 +3325,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 151
+        "y": 168
       },
-      "id": 44,
+      "id": 49,
       "options": {
         "legend": {
           "calcs": [],
@@ -2989,9 +3362,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 159
+        "y": 176
       },
-      "id": 45,
+      "id": 50,
       "panels": [],
       "title": "Keyspace",
       "type": "row"
@@ -3055,9 +3428,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 160
+        "y": 177
       },
-      "id": 46,
+      "id": 51,
       "options": {
         "legend": {
           "calcs": [],
@@ -3145,9 +3518,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 160
+        "y": 177
       },
-      "id": 47,
+      "id": 52,
       "options": {
         "legend": {
           "calcs": [],
@@ -3235,9 +3608,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 168
+        "y": 185
       },
-      "id": 48,
+      "id": 53,
       "options": {
         "legend": {
           "calcs": [],
@@ -3272,9 +3645,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 176
+        "y": 193
       },
-      "id": 49,
+      "id": 54,
       "panels": [],
       "title": "Latency",
       "type": "row"
@@ -3338,9 +3711,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 177
+        "y": 194
       },
-      "id": 50,
+      "id": 55,
       "options": {
         "legend": {
           "calcs": [],
@@ -3375,9 +3748,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 185
+        "y": 202
       },
-      "id": 51,
+      "id": 56,
       "panels": [],
       "title": "Lua",
       "type": "row"
@@ -3441,9 +3814,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 186
+        "y": 203
       },
-      "id": 52,
+      "id": 57,
       "options": {
         "legend": {
           "calcs": [],
@@ -3531,9 +3904,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 186
+        "y": 203
       },
-      "id": 53,
+      "id": 58,
       "options": {
         "legend": {
           "calcs": [],
@@ -3643,9 +4016,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 194
+        "y": 211
       },
-      "id": 54,
+      "id": 59,
       "options": {
         "legend": {
           "calcs": [],
@@ -3733,9 +4106,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 194
+        "y": 211
       },
-      "id": 55,
+      "id": 60,
       "options": {
         "legend": {
           "calcs": [],
@@ -3823,9 +4196,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 202
+        "y": 219
       },
-      "id": 56,
+      "id": 61,
       "options": {
         "legend": {
           "calcs": [],
@@ -3860,9 +4233,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 210
+        "y": 227
       },
-      "id": 57,
+      "id": 62,
       "panels": [],
       "title": "Memory",
       "type": "row"
@@ -3926,9 +4299,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 211
+        "y": 228
       },
-      "id": 58,
+      "id": 63,
       "options": {
         "legend": {
           "calcs": [],
@@ -4016,9 +4389,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 211
+        "y": 228
       },
-      "id": 59,
+      "id": 64,
       "options": {
         "legend": {
           "calcs": [],
@@ -4106,9 +4479,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 219
+        "y": 236
       },
-      "id": 60,
+      "id": 65,
       "options": {
         "legend": {
           "calcs": [],
@@ -4196,9 +4569,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 219
+        "y": 236
       },
-      "id": 61,
+      "id": 66,
       "options": {
         "legend": {
           "calcs": [],
@@ -4286,9 +4659,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 227
+        "y": 244
       },
-      "id": 62,
+      "id": 67,
       "options": {
         "legend": {
           "calcs": [],
@@ -4318,14 +4691,284 @@
       "type": "timeseries"
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Bytes a subsystem's `Budget` currently authorizes on a core. This is what the broker charged, not an allocator reading.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 244
+      },
+      "id": 68,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (shard, subsystem) (frogdb_memory_budget_charged_bytes{instance=~\"$instance\", job=~\"$job\"})",
+          "legendFormat": "{{__name__}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Frogdb Memory Budget Charged Bytes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "A subsystem `Budget`'s limit on a core. Zero for a subsystem that has not been converted to charge yet.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 252
+      },
+      "id": 69,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (shard, subsystem) (frogdb_memory_budget_limit_bytes{instance=~\"$instance\", job=~\"$job\"})",
+          "legendFormat": "{{__name__}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Frogdb Memory Budget Limit Bytes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Charges a subsystem's `Budget` refused. Every refusal is handled at that subsystem's seam by shedding or backpressuring.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 252
+      },
+      "id": 70,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (shard, subsystem) (rate(frogdb_memory_budget_refusals_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval]))",
+          "legendFormat": "{{__name__}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Frogdb Memory Budget Refusals Total",
+      "type": "timeseries"
+    },
+    {
       "collapsed": true,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 235
+        "y": 260
       },
-      "id": 63,
+      "id": 71,
       "panels": [],
       "title": "Persistence",
       "type": "row"
@@ -4389,9 +5032,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 236
+        "y": 261
       },
-      "id": 64,
+      "id": 72,
       "options": {
         "legend": {
           "calcs": [],
@@ -4426,9 +5069,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 244
+        "y": 269
       },
-      "id": 65,
+      "id": 73,
       "panels": [],
       "title": "Pubsub",
       "type": "row"
@@ -4492,9 +5135,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 245
+        "y": 270
       },
-      "id": 66,
+      "id": 74,
       "options": {
         "legend": {
           "calcs": [],
@@ -4582,9 +5225,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 245
+        "y": 270
       },
-      "id": 67,
+      "id": 75,
       "options": {
         "legend": {
           "calcs": [],
@@ -4672,9 +5315,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 253
+        "y": 278
       },
-      "id": 68,
+      "id": 76,
       "options": {
         "legend": {
           "calcs": [],
@@ -4762,9 +5405,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 253
+        "y": 278
       },
-      "id": 69,
+      "id": 77,
       "options": {
         "legend": {
           "calcs": [],
@@ -4852,9 +5495,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 261
+        "y": 286
       },
-      "id": 70,
+      "id": 78,
       "options": {
         "legend": {
           "calcs": [],
@@ -4942,9 +5585,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 261
+        "y": 286
       },
-      "id": 71,
+      "id": 79,
       "options": {
         "legend": {
           "calcs": [],
@@ -4979,9 +5622,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 269
+        "y": 294
       },
-      "id": 72,
+      "id": 80,
       "panels": [],
       "title": "Recovery",
       "type": "row"
@@ -5045,9 +5688,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 270
+        "y": 295
       },
-      "id": 73,
+      "id": 81,
       "options": {
         "legend": {
           "calcs": [],
@@ -5077,14 +5720,104 @@
       "type": "timeseries"
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Total function libraries lost at startup because the file or the library failed to load",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 295
+      },
+      "id": 82,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "rate(frogdb_recovery_functions_failed_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])",
+          "legendFormat": "{{__name__}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Frogdb Recovery Functions Failed Total",
+      "type": "timeseries"
+    },
+    {
       "collapsed": true,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 278
+        "y": 303
       },
-      "id": 74,
+      "id": 83,
       "panels": [],
       "title": "Scatter",
       "type": "row"
@@ -5148,9 +5881,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 279
+        "y": 304
       },
-      "id": 75,
+      "id": 84,
       "options": {
         "legend": {
           "calcs": [],
@@ -5238,9 +5971,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 279
+        "y": 304
       },
-      "id": 76,
+      "id": 85,
       "options": {
         "legend": {
           "calcs": [],
@@ -5350,9 +6083,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 287
+        "y": 312
       },
-      "id": 77,
+      "id": 86,
       "options": {
         "legend": {
           "calcs": [],
@@ -5409,9 +6142,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 295
+        "y": 320
       },
-      "id": 78,
+      "id": 87,
       "panels": [],
       "title": "Shard",
       "type": "row"
@@ -5475,9 +6208,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 296
+        "y": 321
       },
-      "id": 79,
+      "id": 88,
       "options": {
         "legend": {
           "calcs": [],
@@ -5565,9 +6298,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 296
+        "y": 321
       },
-      "id": 80,
+      "id": 89,
       "options": {
         "legend": {
           "calcs": [],
@@ -5655,9 +6388,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 304
+        "y": 329
       },
-      "id": 81,
+      "id": 90,
       "options": {
         "legend": {
           "calcs": [],
@@ -5745,9 +6478,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 304
+        "y": 329
       },
-      "id": 82,
+      "id": 91,
       "options": {
         "legend": {
           "calcs": [],
@@ -5857,9 +6590,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 312
+        "y": 337
       },
-      "id": 83,
+      "id": 92,
       "options": {
         "legend": {
           "calcs": [],
@@ -5894,9 +6627,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 320
+        "y": 345
       },
-      "id": 84,
+      "id": 93,
       "panels": [],
       "title": "Snapshot",
       "type": "row"
@@ -5960,9 +6693,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 321
+        "y": 346
       },
-      "id": 85,
+      "id": 94,
       "options": {
         "legend": {
           "calcs": [],
@@ -6050,9 +6783,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 321
+        "y": 346
       },
-      "id": 86,
+      "id": 95,
       "options": {
         "legend": {
           "calcs": [],
@@ -6140,9 +6873,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 329
+        "y": 354
       },
-      "id": 87,
+      "id": 96,
       "options": {
         "legend": {
           "calcs": [],
@@ -6230,9 +6963,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 329
+        "y": 354
       },
-      "id": 88,
+      "id": 97,
       "options": {
         "legend": {
           "calcs": [],
@@ -6342,9 +7075,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 337
+        "y": 362
       },
-      "id": 89,
+      "id": 98,
       "options": {
         "legend": {
           "calcs": [],
@@ -6379,9 +7112,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 345
+        "y": 370
       },
-      "id": 90,
+      "id": 99,
       "panels": [],
       "title": "Split",
       "type": "row"
@@ -6445,9 +7178,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 346
+        "y": 371
       },
-      "id": 91,
+      "id": 100,
       "options": {
         "legend": {
           "calcs": [],
@@ -6535,9 +7268,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 346
+        "y": 371
       },
-      "id": 92,
+      "id": 101,
       "options": {
         "legend": {
           "calcs": [],
@@ -6625,9 +7358,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 354
+        "y": 379
       },
-      "id": 93,
+      "id": 102,
       "options": {
         "legend": {
           "calcs": [],
@@ -6715,9 +7448,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 354
+        "y": 379
       },
-      "id": 94,
+      "id": 103,
       "options": {
         "legend": {
           "calcs": [],
@@ -6752,9 +7485,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 362
+        "y": 387
       },
-      "id": 95,
+      "id": 104,
       "panels": [],
       "title": "Task",
       "type": "row"
@@ -6818,9 +7551,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 363
+        "y": 388
       },
-      "id": 96,
+      "id": 105,
       "options": {
         "legend": {
           "calcs": [],
@@ -6908,9 +7641,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 363
+        "y": 388
       },
-      "id": 97,
+      "id": 106,
       "options": {
         "legend": {
           "calcs": [],
@@ -6998,9 +7731,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 371
+        "y": 396
       },
-      "id": 98,
+      "id": 107,
       "options": {
         "legend": {
           "calcs": [],
@@ -7088,9 +7821,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 371
+        "y": 396
       },
-      "id": 99,
+      "id": 108,
       "options": {
         "legend": {
           "calcs": [],
@@ -7178,9 +7911,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 379
+        "y": 404
       },
-      "id": 100,
+      "id": 109,
       "options": {
         "legend": {
           "calcs": [],
@@ -7268,9 +8001,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 379
+        "y": 404
       },
-      "id": 101,
+      "id": 110,
       "options": {
         "legend": {
           "calcs": [],
@@ -7305,9 +8038,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 387
+        "y": 412
       },
-      "id": 102,
+      "id": 111,
       "panels": [],
       "title": "Tiered",
       "type": "row"
@@ -7371,9 +8104,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 388
+        "y": 413
       },
-      "id": 103,
+      "id": 112,
       "options": {
         "legend": {
           "calcs": [],
@@ -7461,9 +8194,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 388
+        "y": 413
       },
-      "id": 104,
+      "id": 113,
       "options": {
         "legend": {
           "calcs": [],
@@ -7498,9 +8231,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 396
+        "y": 421
       },
-      "id": 105,
+      "id": 114,
       "panels": [],
       "title": "Tls",
       "type": "row"
@@ -7564,9 +8297,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 397
+        "y": 422
       },
-      "id": 106,
+      "id": 115,
       "options": {
         "legend": {
           "calcs": [],
@@ -7601,9 +8334,202 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 405
+        "y": 430
       },
-      "id": 107,
+      "id": 116,
+      "panels": [],
+      "title": "Tracking",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Tracked keys the client-tracking table shed (evicted and invalidated) because its `Budget` refused a charge — the declared `shed` disposition, made observable.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 431
+      },
+      "id": 117,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (shard) (rate(frogdb_tracking_table_budget_shed_keys_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval]))",
+          "legendFormat": "{{__name__}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Frogdb Tracking Table Budget Shed Keys Total",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Reads the client-tracking table declined to record because even an empty table could not fit them (a budget smaller than one entry).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 431
+      },
+      "id": 118,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (shard) (rate(frogdb_tracking_table_budget_declines_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval]))",
+          "legendFormat": "{{__name__}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Frogdb Tracking Table Budget Declines Total",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 439
+      },
+      "id": 119,
       "panels": [],
       "title": "Transactions",
       "type": "row"
@@ -7667,9 +8593,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 406
+        "y": 440
       },
-      "id": 108,
+      "id": 120,
       "options": {
         "legend": {
           "calcs": [],
@@ -7757,9 +8683,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 406
+        "y": 440
       },
-      "id": 109,
+      "id": 121,
       "options": {
         "legend": {
           "calcs": [],
@@ -7869,9 +8795,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 414
+        "y": 448
       },
-      "id": 110,
+      "id": 122,
       "options": {
         "legend": {
           "calcs": [],
@@ -7923,14 +8849,104 @@
       "type": "timeseries"
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Total WATCH-aborted transactions by what invalidated the watch: `watched-slot-write` (a write moved the watched key's Hash Slot version -- a write to the key, to any key aliased onto its slot, or a keyless dirtying write such as FLUSHDB) or `expiry` (a key that was live at WATCH time is gone at EXEC). A CAS loop that never commits is diagnosed here.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 448
+      },
+      "id": 123,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (reason) (rate(frogdb_transactions_watch_aborted_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval]))",
+          "legendFormat": "{{__name__}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Frogdb Transactions Watch Aborted Total",
+      "type": "timeseries"
+    },
+    {
       "collapsed": true,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 422
+        "y": 456
       },
-      "id": 111,
+      "id": 124,
       "panels": [],
       "title": "Uptime",
       "type": "row"
@@ -7994,9 +9010,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 423
+        "y": 457
       },
-      "id": 112,
+      "id": 125,
       "options": {
         "legend": {
           "calcs": [],
@@ -8031,9 +9047,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 431
+        "y": 465
       },
-      "id": 113,
+      "id": 126,
       "panels": [],
       "title": "Version",
       "type": "row"
@@ -8097,9 +9113,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 432
+        "y": 466
       },
-      "id": 114,
+      "id": 127,
       "options": {
         "legend": {
           "calcs": [],
@@ -8134,9 +9150,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 440
+        "y": 474
       },
-      "id": 115,
+      "id": 128,
       "panels": [],
       "title": "Wal",
       "type": "row"
@@ -8200,9 +9216,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 441
+        "y": 475
       },
-      "id": 116,
+      "id": 129,
       "options": {
         "legend": {
           "calcs": [],
@@ -8290,9 +9306,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 441
+        "y": 475
       },
-      "id": 117,
+      "id": 130,
       "options": {
         "legend": {
           "calcs": [],
@@ -8380,9 +9396,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 449
+        "y": 483
       },
-      "id": 118,
+      "id": 131,
       "options": {
         "legend": {
           "calcs": [],
@@ -8492,9 +9508,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 449
+        "y": 483
       },
-      "id": 119,
+      "id": 132,
       "options": {
         "legend": {
           "calcs": [],
@@ -8582,9 +9598,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 457
+        "y": 491
       },
-      "id": 120,
+      "id": 133,
       "options": {
         "legend": {
           "calcs": [],
@@ -8672,9 +9688,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 457
+        "y": 491
       },
-      "id": 121,
+      "id": 134,
       "options": {
         "legend": {
           "calcs": [],
@@ -8762,9 +9778,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 465
+        "y": 499
       },
-      "id": 122,
+      "id": 135,
       "options": {
         "legend": {
           "calcs": [],
@@ -8852,9 +9868,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 465
+        "y": 499
       },
-      "id": 123,
+      "id": 136,
       "options": {
         "legend": {
           "calcs": [],
@@ -8942,9 +9958,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 473
+        "y": 507
       },
-      "id": 124,
+      "id": 137,
       "options": {
         "legend": {
           "calcs": [],
@@ -9032,9 +10048,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 473
+        "y": 507
       },
-      "id": 125,
+      "id": 138,
       "options": {
         "legend": {
           "calcs": [],
@@ -9122,9 +10138,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 481
+        "y": 515
       },
-      "id": 126,
+      "id": 139,
       "options": {
         "legend": {
           "calcs": [],
@@ -9212,9 +10228,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 481
+        "y": 515
       },
-      "id": 127,
+      "id": 140,
       "options": {
         "legend": {
           "calcs": [],
@@ -9302,9 +10318,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 489
+        "y": 523
       },
-      "id": 128,
+      "id": 141,
       "options": {
         "legend": {
           "calcs": [],
@@ -9392,9 +10408,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 489
+        "y": 523
       },
-      "id": 129,
+      "id": 142,
       "options": {
         "legend": {
           "calcs": [],
