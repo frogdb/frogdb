@@ -45,6 +45,7 @@ pub mod latency_bands;
 pub mod node_state;
 pub mod otlp;
 pub mod prometheus_recorder;
+pub mod shard_arenas;
 pub mod status;
 pub mod system;
 pub mod task_monitors;
@@ -69,6 +70,7 @@ pub use node_state::{NodeStateSnapshot, ShardScatterError, ShardState};
 pub use prometheus_recorder::{
     CommandSnapshot, DashboardMetrics, PrometheusRecorder, ShardSnapshot,
 };
+pub use shard_arenas::{ArenaSampleRate, ArenaSampler, ShardArenaRegistry, ShardArenaSample};
 pub use status::{LiveMode, ServerStatus, StatusCollector, StatusThresholds};
 pub use system::SystemMetricsCollector;
 pub use task_monitors::TaskMonitorRegistry;
