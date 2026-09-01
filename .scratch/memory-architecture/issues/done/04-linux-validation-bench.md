@@ -1,6 +1,6 @@
 # 04: re-run the phase-1 spike benches on Linux with hard pinning and `narenas:1`
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Origin: memory-architecture phase-1 spike, 2026-08-31 — [spike-report.md](../../spike-report.md)
 "Follow-ups" item 1, forced by the "Caveats" section
@@ -88,3 +88,39 @@ a platform where the numbers mean something.
 
 Nothing — the spike crate is standalone and independent of issues 01–03. It should ideally run
 *before* 03 picks a sampler frequency, but nothing blocks it.
+
+## Resolution (2026-09-01)
+
+Run on a Blacksmith 8-vCPU Ampere-1a aarch64 testbox (Ubuntu 24.04, kernel 6.6.141,
+jemalloc 5.3.0 via tikv-jemalloc-sys), hard `sched_setaffinity` pinning verified per thread
+(new `spike/src/pin.rs` prints an allowed==observed==intended evidence table per run). Full
+results: [spike-report-linux.md](../../spike-report-linux.md), linked from the macOS report
+and the feature README. All acceptance criteria met; every §(a)/§(b) verdict addressed.
+
+**Every GO verdict confirms.** R2 attribution byte-identical across 4 runs; R3's colocated
+win *grows* under pinning (2.27×→2.54× vs today, 3.61× at equal threads, p99 7.59× better),
+plus a pinning-only figure: 4.7× less CPU per op than today's shape. R4-alone softens to a
+2.5× regression (was 3.7×) — ruling unchanged.
+
+**Six corrections** to macOS figures (report §Corrections): env var is `_RJEM_MALLOC_CONF`
+not `MALLOC_CONF` (plain name silently ignored — `opt.narenas` readback proves it);
+`narenas:1` buys 1.87× not ~5×; E4 bleed 0.32 %/8,192 B not 1.00 %/25,600 B (bound is
+"tcache per-bin capacity", never a byte count); hop 6.35× not ~8×; per-arena epoch ≈13.4 µs
+not 2.5 µs (platform constant — measure, don't hardcode).
+
+**Three consumers answered:** issue 03's 20 Hz default / 10–100 Hz clamp supported (0.167 %
+of one core at 8 shards; conditions: clamp is not shard-count-aware — revisit past ~32
+shards — and the sampler must stay off shard cores); issue 02's fan-out budget is ~6 µs CPU
+per foreign core touched, one hop per distinct core, cap fan-out width (cross-thread p99.9
+at 512 clients is 11× colocated's — park/unpark, not locality, per pinning evidence);
+colocated survives hard pinning and grows.
+
+Shipped code needed no change — issue 03 already sets `narenas:1` via the compile-time
+`_rjem_` symbol with an `opt.narenas` readback (`malloc_conf::applied()`). Stale prose
+corrected at merge: adr/0006 §3 accounting paragraph, `malloc_conf.rs` env-var note,
+`telemetry/jemalloc.rs` comments that encoded macOS-specific byte/µs figures.
+
+Deviations (all noted in the report's caveats): E5b added as a new isolated-process
+experiment (single run per config, internal best-of, E5 medians agree within 8 %); runtime
+bench ran with `_RJEM_MALLOC_CONF` unset (shape and arena count independent); pinning
+instrumentation added to both binaries — no shape changes.

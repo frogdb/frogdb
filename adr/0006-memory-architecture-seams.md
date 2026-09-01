@@ -112,14 +112,18 @@ cross-bleed measurement is the executable form of it. It cannot be tested under 
 where it is trivially true because there is one thread.
 
 **Accounting is a sampled upper bound plus an exact per-request counter.** Arena statistics
-are refreshed by a `mallctl` epoch advance that merges every arena, costing about 2.5 µs per
-arena per advance, and they overstate live bytes by whatever is parked in a thread cache — in
-the spike, an arena still reported 25,600 B after every object charged to it had been freed,
-going to zero only on an explicit cache flush. So the broker advances the epoch at 10–100 Hz,
-not per command, and rides `thread.allocated` (23 ns, exact, per thread) in between, with
-periodic reconciliation. A thread-per-core FrogDB also sets `narenas:1` in `MALLOC_CONF` and
-creates exactly N shard arenas rather than accepting jemalloc's default of four per CPU, which
-cuts epoch cost roughly fivefold at eight shards (spike-report §(a) E4/E5). The direction of
+are refreshed by a `mallctl` epoch advance that merges every arena, at a per-arena cost that
+is a platform constant (~3.4 µs on the macOS spike box, ~13.4 µs on the Linux validation
+box — budget from a measured sample), and they overstate live bytes by whatever is parked in
+a thread cache — a residue bounded by the tcache's per-bin capacity, going to zero only on an
+explicit cache flush. So the broker advances the epoch at 10–100 Hz, not per command, and
+rides `thread.allocated` (tens of ns, exact, per thread) in between, with periodic
+reconciliation. A thread-per-core FrogDB also sets `narenas:1` — via the compile-time
+`_rjem_malloc_conf` symbol, since `tikv-jemalloc-sys` prefixes everything and plain
+`MALLOC_CONF` is silently ignored (the env form is `_RJEM_MALLOC_CONF`) — and creates
+exactly N shard arenas rather than accepting jemalloc's default of four per CPU, roughly
+halving full-sample cost at eight shards (spike-report §(a) E4/E5, corrected by
+spike-report-linux.md E5b). The direction of
 the error is the safe one — an upper bound refuses slightly early — and
 [`specs/memory.md`](../specs/memory.md)'s OOM rows are to be written against what a sampled
 upper bound can promise, not against an exact per-command reading nothing can implement.

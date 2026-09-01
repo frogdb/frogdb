@@ -33,19 +33,24 @@
 //!
 //! Two properties of those reads are load-bearing enough to be in the type
 //! system rather than in prose, and both come from the phase-1 spike
-//! (`.scratch/memory-architecture/spike-report.md` §(a)):
+//! (`.scratch/memory-architecture/spike-report.md` §(a), validated in
+//! `spike-report-linux.md`):
 //!
 //! * **Arena `allocated` is an upper bound on live bytes.** Objects freed into
 //!   the owning thread's cache stay charged to their arena until an explicit
-//!   `thread.tcache.flush` (E4 row 1: 25,600 B still charged after every object
-//!   was freed; 0 after a flush). [`ArenaStats`] names every such field
-//!   `*_upper_bound` so no later caller can read it as live bytes. The
-//!   overstatement direction is the safe one for a refusal.
+//!   `thread.tcache.flush` (E4 row 1: a non-zero residue bounded by the
+//!   tcache's per-bin capacity — 25,600 B on macOS, 8,192 B on aarch64 Linux —
+//!   and exactly 0 after a flush; only those two statements are portable).
+//!   [`ArenaStats`] names every such field `*_upper_bound` so no later caller
+//!   can read it as live bytes. The overstatement direction is the safe one
+//!   for a refusal.
 //! * **Stats are sampled, not live.** They refresh only on an `epoch` advance,
-//!   which merges *every* arena at ~2.5 µs per arena (E5). So [`advance_epoch`]
-//!   is separated from [`read_arena_stats`]: one advance per sampler tick, then
-//!   N cheap by-name reads (146 ns each). Nothing on a command path advances the
-//!   epoch.
+//!   which merges *every* arena at a per-arena cost that is a platform constant
+//!   (E5: ~3.4 µs/arena on macOS, ~13.4 µs on aarch64 Linux — budget from a
+//!   measured sample, never a hardcoded figure). So [`advance_epoch`] is
+//!   separated from [`read_arena_stats`]: one advance per sampler tick, then N
+//!   cheap by-name reads (nanoseconds each, noise next to the epoch). Nothing
+//!   on a command path advances the epoch.
 //!
 //! On the pre-resolved-MIB fast path the spike left open: `mallctlnametomib`
 //! does resolve for `stats.arenas.<i>.small.allocated` (see
@@ -170,8 +175,9 @@ mod imp {
     /// Must be the calling thread's first act, before it allocates anything:
     /// `thread.arena` does not flush the thread cache, so a rebind leaves
     /// already-cached regions charged to the old arena — the spike measured
-    /// 1.00 % of subsequently allocated bytes bleeding backwards (spike-report
-    /// §(a) E4 row 2). There is deliberately no rebind helper here. If one is
+    /// bleed bounded by the tcache's per-bin capacity (1.00 % of subsequent
+    /// bytes on macOS, 0.32 % on aarch64 Linux; spike-report §(a) E4 row 2 and
+    /// spike-report-linux.md). There is deliberately no rebind helper here. If one is
     /// ever needed (shard migration, teardown) it is this call **plus**
     /// [`flush_current_thread_cache`], or the no-cross-arena-bleed invariant is
     /// quietly false by a percent.

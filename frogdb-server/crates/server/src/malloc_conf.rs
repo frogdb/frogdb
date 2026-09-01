@@ -2,11 +2,13 @@
 //!
 //! jemalloc reads its options at initialization from a `const char *malloc_conf`
 //! symbol it declares weak, so the only way to set an option that must hold from
-//! the first allocation is to *define* that symbol. Environment variables
-//! (`MALLOC_CONF`) would work too, but they are a property of how the process
-//! was launched, and every launcher — systemd unit, Docker `CMD`, Kubernetes
-//! spec, a developer's shell, a test harness — would have to set it identically
-//! or accounting would silently differ between them.
+//! the first allocation is to *define* that symbol. An environment variable
+//! would work too — but only under its prefixed name `_RJEM_MALLOC_CONF`
+//! (`tikv-jemalloc-sys` prefixes every symbol, and plain `MALLOC_CONF` is
+//! silently ignored; measured in spike-report-linux.md) — and it is a property
+//! of how the process was launched: every launcher — systemd unit, Docker
+//! `CMD`, Kubernetes spec, a developer's shell, a test harness — would have to
+//! set it identically or accounting would silently differ between them.
 //!
 //! # `narenas:1`
 //!

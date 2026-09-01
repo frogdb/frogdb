@@ -5,7 +5,7 @@ Date: 2026-09-01
 Validates: [spike-report.md](spike-report.md) — every number there was taken on an
 unpinnable, noisy macOS box. This run repeats both benches on aarch64 Linux with hard
 `sched_setaffinity(2)` pinning and `narenas:1`.
-Issue: [`issues/open/04-linux-validation-bench.md`](issues/open/04-linux-validation-bench.md)
+Issue: [memory-architecture issue 04](issues/)
 
 ## Bottom line
 
