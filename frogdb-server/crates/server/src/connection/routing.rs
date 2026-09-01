@@ -4,6 +4,35 @@
 //! - `route_and_execute` - Main routing logic with ACL key checks and scatter-gather
 //! - `execute_cross_shard_copy` - Two-phase cross-shard COPY operation
 //! - `execute_on_shard` - Send a command to a specific shard
+//!
+//! # The cross-core hop
+//!
+//! Under thread-per-core placement (PRD R2–R4) a connection is served on the
+//! OS thread that owns the shard it was accepted onto, and it never moves. That
+//! splits every keyed command into two cases:
+//!
+//! - **Zero hop.** The key hashes to `self.shard_id`. The `CoreMsg` send below
+//!   lands in a channel drained by the *same* thread, so the handoff is a
+//!   cooperative yield: no wakeup, no cache-line migration, no cross-core
+//!   traffic. This is the case the placement rule exists to create.
+//! - **One hop.** The key hashes elsewhere. The send wakes the owning shard's
+//!   thread and its `oneshot` reply wakes ours — two cross-core wakeups per
+//!   command. The spike measured this at roughly 8x the cost of the colocated
+//!   handoff, which is the number any future work on placement (key-affine
+//!   routing, migrating a connection) has to beat.
+//!
+//! The hop protocol itself is unchanged by placement and needs no new
+//! machinery, because everything crossing the boundary is already owned:
+//! `CoreMsg::Execute` carries an `Arc<ParsedCommand>` whose arguments are
+//! `Bytes`, and the reply travels back by value over a `oneshot`. Nothing is
+//! borrowed from the connection's stack, so a command is as safe to execute on
+//! a foreign core as on its own.
+//!
+//! Scatter-gather (`dispatch_scatter`) is the multi-hop form: an MGET/MSET/DEL
+//! touching *k* distinct shards costs *k* hops, not one, and the merge waits on
+//! the slowest of them. Sizing follows directly — a fan-out over all N shards
+//! is N times the single-hop cost, so the cross-slot fraction of a workload,
+//! not the hop cost alone, is what decides whether placement pays.
 
 use std::sync::Arc;
 
