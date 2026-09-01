@@ -1,6 +1,6 @@
 # 03: bind a jemalloc arena per shard thread and sample per-arena stats
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Origin: memory-architecture phase-1 spike, 2026-08-31
 Area: frogdb-telemetry / jemalloc + frogdb-server shard startup
@@ -103,3 +103,43 @@ are issue 05 and later. This issue makes memory visible per shard and nothing el
 
 [Issue 02](../) — there is no shard thread to bind an arena to until the real executor spawns
 one. (Ordering only: nothing here changes the executor's interface.)
+
+## Resolution
+
+Landed on main (5 commits, reviewed and cherry-picked from the implementing agent's branch).
+Dependency inversion instead of a second mallctl caller: `frogdb-net` defines a
+`ShardArenaSource` trait (`arenas_available`/`create_arena`/`bind_current_thread`); the sole
+implementation, `JemallocShardArenas`, lives in the server crate wrapping
+`frogdb_telemetry::jemalloc`, which stays the one module touching `tikv_jemalloc_*`
+(pinned by the `arena_sampling_is_not_on_a_command_path` grep test — `advance_epoch(` appears
+in exactly two files, neither on a command path).
+
+Binding: the shard thread's **first act** — before `pin_current_thread`, before `block_on` —
+is `bind_shard_arena`; bind-once, no rebind path (spike E4 tcache bleed). Degraded-not-fatal:
+a failed create/bind logs ERROR and the shard runs unattributed (`arena_of() -> None`);
+`launch` blocks on an mpsc until each thread reports its arena, so `bound_arenas()` is
+complete at startup. Sim executor untouched — still `None`.
+
+Sampling: `ShardArenaRegistry` (absent-not-zero for unbound shards, relaxed atomics, one
+epoch advance per refresh) + `ArenaSampler::spawn` tokio task at `ArenaSampleRate` (clamped
+10–100 Hz, default 20; `memory.arena-sample-hz`, boot-only `#[param(skip)]`). Sample type is
+`ShardArenaSample` with upper-bound naming (`allocated_upper_bound`), `is_sampled()`,
+`fragmentation_ratio()`. `narenas:1` via `_rjem_malloc_conf` weak symbol defined only in
+`main.rs` (a lib definition duplicates the symbol in every test binary); startup
+`arena_layout(num_shards, narenas)` reports AsIntended/Excess/Unknown (expected
+`num_shards + 1`).
+
+Surfaced: `frogdb_allocator_shard_{allocated,resident}_bytes` + `frogdb_allocator_shard_frag_ratio`
+labelled by shard; `INFO memory` deliberately unchanged (per-shard figures are
+Prometheus-only — Redis field-set compatibility). Attribution pinned by real-thread test
+`each_arena_reports_its_own_shards_bytes_and_no_others` plus bind-before-first-allocation and
+failed-bind-leaves-shard-running tests in `frogdb-net`.
+
+Merge notes: `metrics/definitions.rs` union-merged with issue 05's five broker metrics;
+`budget-growth.py` ALLOWLIST for `net/src/lib.rs` bumped 1→2 (`bound_arenas` push — startup,
+bounded by shard count); grafana/deb/docs regenerated from the merged definitions.
+
+For broker integration (follow-up): issue 05's `NoArenaReading` stub in `ShardWorkerBuilder`
+is **not yet wired** to this issue's `ShardArenaRegistry`. The broker should read the registry
+via `Server::shard_arenas` / `SpawnedShards::arenas`, check `is_sampled()`, and never call
+`refresh()` on a decision path.
