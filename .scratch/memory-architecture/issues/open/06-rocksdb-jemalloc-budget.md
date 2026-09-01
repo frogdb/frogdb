@@ -123,3 +123,89 @@ here is forceable from turmoil.
 [Issue 05](../) — there is no persistence `Budget` to size from until the broker and the handle
 exist. The jemalloc-linkage half (part 1) is technically independent and can be split out first
 if the build work turns out to be large; the sizing half cannot.
+
+---
+
+# Decisions (recorded before code, per "This is a locked area")
+
+## D1 — the spec split: two rows in `specs/persistence.md`, one blocked on `specs/memory.md`
+
+**Goes in `specs/persistence.md`** (both are durability-path observable — they change *when a
+write is admitted* and *what a reader of storage pays to read a block*, which is this spec's
+scope):
+
+- **FM-PERSISTENCE-060 — memtable memory is bounded by one process-wide write-buffer manager,
+  not by a per-column-family product.** The observable is the shape of the bound: total live
+  memtable bytes stay under one number as column families multiply (shards × warm/search
+  tiers), and a write arriving with the manager at capacity *stalls until a flush frees room*
+  rather than allocating. The stall is a durability-path outcome: it moves when an append is
+  acknowledged.
+- **FM-PERSISTENCE-061 — one process-wide block cache, sized as the sum of the two operator
+  knobs; `0` still means RocksDB's own default.** The observable is that every column family in
+  the process shares one cache whose capacity is `block_cache_size + memtable budget` (memtable
+  memory is *costed to* the cache, so the sum is the single enforced number), and that
+  `block_cache_size_mb: 0` installs no override at all rather than a cache with no room in it.
+
+**Blocked on `specs/memory.md`** (`Status: DRAFT`, takes no rows yet — recorded here so it is
+not lost):
+
+- **"who is charged for RocksDB's C++ bytes"** — that the persistence `Budget`'s charge tracks
+  the engine's *reported* footprint (write-buffer-manager usage + block-cache usage) rather than
+  an allocator reading, that its declared disposition is `Backpressure` and that the
+  backpressure is RocksDB's own write stall, and that the per-subsystem breakdown attributes the
+  charge **once per process** rather than once per shard. Every clause of that is about
+  attribution, not about durability, so it belongs in the memory spec and goes in when that spec
+  locks. The mechanism ships now; only the row waits.
+
+## D2 — budget shape: one process-global persistence budget, not one per shard
+
+RocksDB in FrogDB is **one `DB` handle per process** with a column family per (shard × tier) —
+`RocksStore::open_with_warm_metrics` is called exactly once, from
+`frogdb-recovery/src/shards.rs::open_rocks`. Its block cache, its memtables and its write-buffer
+manager are process-global C++ allocations that no core owns.
+
+A per-shard budget was rejected for three reasons:
+
+1. It reintroduces the multiplication R10 exists to remove. `N` budgets of `limit/N` is the same
+   arithmetic as `write_buffer_size × max_write_buffer_number × shards × tiers`, just written
+   down somewhere else.
+2. The pools could not lend to each other. A write-heavy shard would be refused while the
+   process-wide pool had room, and RocksDB — which flushes whichever column family is largest,
+   globally — has no way to honor a per-shard split anyway.
+3. Nothing to charge against. RocksDB reports usage for the *manager* and the *cache*, not per
+   column family, so a per-shard charge would be a made-up division of a number the engine never
+   breaks down.
+
+So: the `Budget` is created where the memory it covers is created — at `RocksStore` open — and
+**shard 0's** `MemoryBroker` adopts that handle, so `persistence` appears exactly once in the
+per-subsystem breakdown (`frogdb_memory_budget_charged_bytes{shard="0",subsystem="persistence"}`)
+and a sum across shards is not an N-fold over-count. Adopting rather than re-opening is why
+`MemoryBroker::adopt` exists: `open()` mints a *new* pool, which is the wrong verb for a resource
+that already exists by the time any broker does.
+
+## D3 — strict capacity is not reachable through `rocksdb 0.24`, and is not faked
+
+The C API has `rocksdb_cache_create_lru_with_strict_capacity_limit(size_t)`
+(`librocksdb-sys/rocksdb/include/rocksdb/c.h:2345`), but the Rust `rocksdb::Cache` has no public
+constructor from a raw `rocksdb_cache_t*` (`Cache(pub(crate) Arc<CacheWrapper>)`), `LruCacheOptions`
+exposes only `set_capacity`/`set_num_shard_bits`, and the crate does not re-export `librocksdb_sys`
+(`use librocksdb_sys as ffi;` is private). There is no way to build a strict-capacity cache and
+hand it to `BlockBasedOptions::set_block_cache` without forking the crate.
+
+What ships instead, and what it buys:
+
+- **The memtable half really is hard-bounded**, which is the half that multiplied: the
+  `WriteBufferManager` stalls writers at its buffer size (`allow_stall = true`). That is the
+  `Backpressure` disposition, realized by the engine rather than asserted by us.
+- **The cache half is bounded by eviction, not by refusal.** An LRU cache without
+  `strict_capacity_limit` evicts to stay at capacity and overshoots only for *pinned* entries.
+- **The refusal path is the `Budget`'s.** `RocksMemory::refresh()` reconciles the charge against
+  the engine's reported usage; when reported usage exceeds the budget the `Charge::grow` is
+  `Refused`, the refusal is counted, and it reaches
+  `frogdb_memory_budget_refusals_total{subsystem="persistence"}`. A refusal is therefore a
+  specified, observable outcome — it just names over-budget *engine* memory rather than a
+  rejected cache insert.
+
+Residual, deliberately not taken here: index and filter blocks are still outside the cap
+(`cache_index_and_filter_blocks` is off, as today). Turning it on is a read-latency trade with
+its own evidence requirement and does not belong in the same change as the budget seam.
