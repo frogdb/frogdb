@@ -1,6 +1,6 @@
 # 05: per-core memory broker, the `Budget` handle, and the buffer-growth seam lint
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Origin: memory-architecture PRD ruling R8 + R15
 Area: new broker crate + frogdb-core (tracking) + `scripts/` seam lint
@@ -127,3 +127,43 @@ decisions this issue is not equipped to make.
 arena figure the broker reads; the broker can land with a stubbed reading and pick it up when
 03 lands, so 03 is a soft dependency, but the "sampled upper bound" wording is required either
 way.
+
+## Resolution
+
+Landed on main (4 commits, reviewed and cherry-picked from the implementing agent's branch).
+New `frogdb-memory` crate: `Budget` (Arc-shared, relaxed-CAS charge loop, saturating
+give-back, peak/refusal counters, live `set_limit`), `Charge` (`#[must_use]`,
+grow/shrink/release, releases on drop, `open_charge()` zero-byte form for grow-in-place),
+`Subsystem` (7 stable names), `Disposition::{Shed,Backpressure}` declared at construction,
+`Refused`. `MemoryBroker` is per-core; an unopened subsystem's budget has limit 0, so a
+structure that has not been converted cannot grow by default. Arena seam: `ArenaSampler`
+trait + `NoArenaReading` stub — issue 03's plug-in point is one site in
+`ShardWorkerBuilder`; "sampled upper bound" naming throughout, no API returns "live bytes".
+
+Proof subsystem: the client tracking table. One long-lived grow/shrink-in-place `Charge`
+(not per-entry charges) makes `memory_usage()` O(1) and equal to the broker breakdown by
+construction; drift is guarded by test-only `recomputed_memory_usage()` + a reconciliation
+test covering every mutation path. Disposition shed: a refused charge evicts the oldest
+tracked key (invalidating its clients) and retries; an empty table that still cannot fit
+declines the read. Both observable via drained counters →
+`frogdb_tracking_table_budget_{shed_keys,declines}_total`; broker breakdown →
+`frogdb_memory_budget_{charged,limit}_bytes` + `_refusals_total` (5 new metrics, grafana
+regenerated). `ShardTracking::new(&Budget)` replaces `Default` — an unbudgeted table is
+unrepresentable.
+
+Seam lint: `just lint-budget-growth` (`scripts/budget-growth.py`, struct-level attribution
+via enclosing `impl`, keyspace out of scope per ADR-0006 §3), 99 unconverted sites pinned
+by file+count in a both-directions ratchet; in `lint-gates` (nineteenth compile-free gate) +
+row in `agents/seam-lints.md`; scanner unit-tested (`scripts/tests/test_budget_growth.py`,
+13 checks, `just test-budget-growth`).
+
+Flagged for human review: the one-long-lived-Charge structure call (vs per-entry charges) —
+see the reconciliation test if revisiting. Verification: `just test frogdb-server` green
+except one unrelated contention flake (passes in isolation); lint-gates clean; budget-growth
+gate fails on a deliberately introduced unbudgeted site.
+
+For issue 06: `broker.open(Subsystem::Persistence, limit, Disposition::Backpressure)`;
+`Budget` clones cheaply into a RocksDB `WriteBufferManager` shim mapping callbacks onto
+`grow`/`shrink`; `Refused` is the backpressure signal; metrics come free via the breakdown.
+Global-vs-per-shard RocksDB budget is 06's call — `Budget` supports both (limit lives in
+the shared Arc).
