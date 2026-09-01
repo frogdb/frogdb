@@ -1,6 +1,6 @@
 # 01: introduce the `ShardExecutor` seam over the existing spawn chokepoint
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Origin: memory-architecture phase-1 spike, 2026-08-31
 Area: frogdb-server / net + server::shards
@@ -89,3 +89,52 @@ purpose of splitting it out.
 ## Depends on
 
 Nothing.
+
+## Resolution
+
+Landed in `562f8d9b` — `feat(net): introduce the ShardExecutor placement seam`.
+
+**Shape.** `frogdb-net` grew the seam beside the existing tokio/turmoil type swap:
+`ShardBody = Pin<Box<dyn Future<Output = ()> + Send + 'static>>`, `ShardHandle = JoinHandle<()>`,
+and `trait ShardExecutor: Send` with `launch`/`arena_of`/`kind`. Two implementations,
+`RealShardExecutor` (`frogdb_net::spawn` on the ambient runtime) and `SimShardExecutor`
+(`tokio::spawn` on the caller's runtime); both are defined unconditionally so each compiles under
+both feature configurations, and only the `shard_executor()` factory is `cfg`-selected on
+`feature = "turmoil"`. Object safety is proved at compile time by a `const _` block next to the
+existing type-identity assertions.
+
+`server/shards.rs` constructs one executor before the shard loop, logs `executor.kind()`, and
+launches every shard through `executor.launch(shard_id, Box::pin(monitor.instrument(...)))`. No
+shard-worker `spawn` remains in the file; the file-level `use crate::net::spawn` moved into
+`spawn_shard_tick_pump`, which — along with the driven-ticks accommodation — was left exactly
+where it was.
+
+**Deliberate choices.**
+
+- `ShardHandle` is a type *alias* for `JoinHandle<()>`, not a new struct: the shard supervisor
+  `select_all`s these handles, and a distinct type would have forced edits to
+  `spawn_shard_supervisor` and its tests — which the acceptance criteria forbid. This alias is the
+  single place issue 02 must widen to bridge an OS-thread join back into something the supervisor
+  can await.
+- `launch` takes `ShardBody` (a boxed `Send + 'static` future) rather than a generic future
+  parameter — required for object safety, and exactly what `shards.rs` already handed to `spawn`.
+- Behavior is byte-for-byte unchanged: `frogdb_net::spawn` is `pub use tokio::spawn` in *both*
+  feature arms, so real and sim launch identically today. The seam exists for issue 02, not for a
+  behavior difference now.
+
+**Tests added** (no existing test was edited):
+
+- `frogdb-net`: `sim_executor_reports_no_arena_for_any_shard` (permanent), `real_executor_reports_no_arena_yet`
+  (the one issue 03 replaces), `kinds_are_distinct`, `selected_executor_matches_the_feature`.
+- `server::shards::tests`: `selected_shard_executor_matches_the_build` (runs in both arms; also
+  proves `frogdb-server/turmoil` forwards `frogdb-net/turmoil`) and, turmoil-only,
+  `simulation_reports_no_arena_for_any_shard`.
+
+**Verification** (local mode): `just check frogdb-net`; `cargo check -p frogdb-net --all-targets
+--features turmoil`; `cargo nextest run -p frogdb-net` 4/4 and `--features turmoil` 4/4;
+`just check frogdb-server`; `just lint-turmoil` clean; `just lint-gates` OK; `just test
+frogdb-server` 2105 passed / 5 skipped. Turmoil sim suite: 176/178 passed. The two failures
+(`simulation::client_pause_write_expiry_suppression_realpath`,
+`simulation::test_cluster_wait_unblocked_across_failover`) reproduce identically — same assertions,
+same payloads — at the parent commit `41ae1177` with this change absent, i.e. they are pre-existing
+red, not regressions.
