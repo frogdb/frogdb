@@ -344,13 +344,20 @@ impl Server {
         // reconciles the persistence `Budget` charge against them — the store
         // has no thread of its own, so this ticker is what keeps the charge
         // tracking reality. Same 5s cadence as the system collector.
+        //
+        // The ticker holds a `Weak`, never an `Arc`: a strong handle here would
+        // outlive shutdown and keep the RocksDB instance — and its `LOCK` file
+        // — alive, so a restart inside the same process fails to open the
+        // database. The loop ends when the last real owner drops the store.
         if self.prometheus_recorder.is_some()
-            && let Some(rocks) = self.rocks_store.clone()
+            && let Some(rocks) = self.rocks_store.as_ref()
         {
+            let rocks = Arc::downgrade(rocks);
             tokio::spawn(async move {
                 let mut ticker = tokio::time::interval(Duration::from_secs(5));
                 loop {
                     ticker.tick().await;
+                    let Some(rocks) = rocks.upgrade() else { break };
                     rocks.record_memory_metrics();
                 }
             });
