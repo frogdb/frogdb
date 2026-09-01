@@ -102,14 +102,20 @@ pub trait ShardExecutor: Send {
     /// Launch shard `shard_id` running `worker`, and return its handle.
     fn launch(&mut self, shard_id: usize, worker: ShardBody) -> ShardHandle;
 
-    /// The jemalloc arena bound to shard `shard_id`, or `None` when arena
-    /// binding is not modelled by this executor.
+    /// The jemalloc arena bound to shard `shard_id`, or `None` when that shard
+    /// has no arena of its own.
     ///
-    /// Every implementation returns `None` today; the real one grows a `Some`
-    /// when arenas arrive. [`SimShardExecutor`] returns `None` *permanently* —
-    /// a simulation host is one thread hosting every shard, so `thread.arena`
-    /// cannot express per-shard ownership and allocator behavior is explicitly
-    /// outside the simulation's fidelity envelope (ADR-0006 §1, §3).
+    /// [`RealShardExecutor`] answers `Some` for every shard it launched with a
+    /// working [`ShardArenaSource`], and `None` for a shard whose bind failed —
+    /// which is a degraded, still-correct state (see
+    /// [`RealShardExecutor::launch`]), not an impossible one. Callers must treat
+    /// `None` as "this shard's memory is not separately attributable", never as
+    /// "this shard allocated nothing".
+    ///
+    /// [`SimShardExecutor`] returns `None` *permanently* — a simulation host is
+    /// one thread hosting every shard, so `thread.arena` cannot express
+    /// per-shard ownership and allocator behavior is explicitly outside the
+    /// simulation's fidelity envelope (ADR-0006 §1, §3).
     fn arena_of(&self, shard_id: usize) -> Option<u32>;
 
     /// The runtime a connection assigned to shard `shard_id` should run on, or
@@ -178,6 +184,63 @@ impl ShardPlacement {
     }
 }
 
+// ------------------------------------------------------------ shard arenas ---
+
+/// The allocator operations [`RealShardExecutor`] needs to give a shard thread
+/// an arena of its own.
+///
+/// The two calls are `arenas.create` and `thread.arena` (ADR-0006 §3). They live
+/// behind a trait rather than being made here because the jemalloc `mallctl`
+/// chokepoint is `frogdb_telemetry::jemalloc` — the one module allowed to call
+/// `tikv_jemalloc_*` — and this crate sits *below* telemetry in the dependency
+/// graph. Inverting the dependency keeps the chokepoint intact and keeps this
+/// crate's four-dependency footprint (and its arena tests' determinism: the
+/// tests drive a counting fake, not the real allocator).
+///
+/// Implementations must be callable from the shard thread itself: `thread.arena`
+/// binds *the calling thread*, so [`Self::bind_current_thread`] is only
+/// meaningful when invoked on the thread being bound.
+pub trait ShardArenaSource: Send + Sync + std::fmt::Debug {
+    /// Whether this build can bind arenas at all. `false` short-circuits the
+    /// whole setup, so a build without an arena-capable allocator does not log a
+    /// failure per shard for a facility it was never going to have.
+    fn arenas_available(&self) -> bool;
+
+    /// Create a fresh arena and return its index (`arenas.create`).
+    fn create_arena(&self) -> std::io::Result<u32>;
+
+    /// Bind the *calling* thread to `arena` (`thread.arena`).
+    fn bind_current_thread(&self, arena: u32) -> std::io::Result<()>;
+}
+
+/// A source that provides no arenas: what a build with no arena-capable
+/// allocator (and every test that does not care about arenas) gets.
+///
+/// [`ShardExecutor::arena_of`] then reports `None` for every shard, which is the
+/// same answer as before arenas existed.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoShardArenas;
+
+impl ShardArenaSource for NoShardArenas {
+    fn arenas_available(&self) -> bool {
+        false
+    }
+
+    fn create_arena(&self) -> std::io::Result<u32> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "this build binds no per-shard arenas",
+        ))
+    }
+
+    fn bind_current_thread(&self, _arena: u32) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "this build binds no per-shard arenas",
+        ))
+    }
+}
+
 /// Production shard placement: one OS thread per shard, each running its own
 /// `tokio::runtime::Builder::new_current_thread()` runtime, pinned to a CPU
 /// where the platform supports it (PRD R4).
@@ -191,19 +254,85 @@ impl ShardPlacement {
 /// (spike-report §(b)). The `Runtime` value itself is moved onto the shard
 /// thread, which drives it with `block_on(worker)`.
 ///
-/// Arena binding is still absent — `arena_of` reports `None` (issue 03).
-#[derive(Debug, Default)]
+/// Each shard thread also binds a jemalloc arena of its own, as its first act,
+/// before it runs a line of the worker (ADR-0006 §3). See
+/// [`RealShardExecutor::launch`].
+#[derive(Debug)]
 pub struct RealShardExecutor {
     /// Per-shard runtime handles, indexed by launch order and keyed by shard id
     /// so a non-contiguous or out-of-order launch cannot silently misroute
     /// connections.
     runtimes: Vec<(usize, tokio::runtime::Handle)>,
+    /// Where arenas come from. Defaults to [`NoShardArenas`]; the server hands
+    /// in the jemalloc-backed one.
+    arenas: std::sync::Arc<dyn ShardArenaSource>,
+    /// `(shard_id, arena)` for every shard whose bind succeeded. A shard is
+    /// absent when it has no arena — never present with a placeholder.
+    bound_arenas: Vec<(usize, u32)>,
+}
+
+impl Default for RealShardExecutor {
+    fn default() -> Self {
+        Self {
+            runtimes: Vec::new(),
+            arenas: std::sync::Arc::new(NoShardArenas),
+            bound_arenas: Vec::new(),
+        }
+    }
 }
 
 impl RealShardExecutor {
+    /// An executor that binds no arenas.
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// An executor that gives each shard thread an arena from `arenas`.
+    pub fn with_arenas(arenas: std::sync::Arc<dyn ShardArenaSource>) -> Self {
+        Self {
+            arenas,
+            ..Self::default()
+        }
+    }
+
+    /// Every `(shard_id, arena)` binding made so far, in launch order — what the
+    /// server feeds to `frogdb_telemetry::ShardArenaRegistry`.
+    pub fn bound_arenas(&self) -> &[(usize, u32)] {
+        &self.bound_arenas
+    }
+}
+
+/// Create and bind this thread's arena, on the thread being bound.
+///
+/// Returns the arena, or `None` when this build has no arenas or the allocator
+/// refused. A refusal is **degraded, not fatal** — see [`RealShardExecutor::launch`].
+fn bind_shard_arena(arenas: &dyn ShardArenaSource, shard_id: usize) -> Option<u32> {
+    if !arenas.arenas_available() {
+        return None;
+    }
+    let arena = match arenas.create_arena() {
+        Ok(arena) => arena,
+        Err(error) => {
+            tracing::error!(
+                shard_id,
+                %error,
+                "Shard arena creation failed; shard will allocate on the automatic \
+                 arena and its memory will not be separately attributable"
+            );
+            return None;
+        }
+    };
+    if let Err(error) = arenas.bind_current_thread(arena) {
+        tracing::error!(
+            shard_id,
+            arena,
+            %error,
+            "Shard arena bind failed; shard will allocate on the automatic arena \
+             and its memory will not be separately attributable"
+        );
+        return None;
+    }
+    Some(arena)
 }
 
 /// The CPU shard `shard_id` intends to run on: shards are laid out over the
@@ -284,6 +413,42 @@ fn pin_current_thread(_cpu: usize) -> Option<usize> {
 }
 
 impl ShardExecutor for RealShardExecutor {
+    /// Launch shard `shard_id` on its own thread, with its own arena.
+    ///
+    /// # Arena binding
+    ///
+    /// The shard thread's *first* act is `arenas.create` + `thread.arena`,
+    /// before it runs any of the worker: jemalloc charges an allocation to
+    /// whatever arena the thread is bound to at the time, so bytes allocated
+    /// before the bind are charged to the automatic arena permanently, and
+    /// rebinding later without flushing the thread cache bleeds allocations
+    /// across arenas (spike-report §(a) E4). Hence bind-once, first, and no
+    /// rebinding machinery anywhere.
+    ///
+    /// `launch` then blocks until the thread reports what it bound. This costs
+    /// one thread-spawn plus one `mallctl` at startup, and buys an `arena_of`
+    /// that is exact the instant `launch` returns — the alternative, publishing
+    /// the arena asynchronously, would make the registry the server builds
+    /// straight afterwards racy for no gain on a path that runs once per boot.
+    ///
+    /// # A failed bind is degraded, not fatal
+    ///
+    /// If the allocator refuses, the shard runs on the automatic arena and
+    /// `arena_of` reports `None`. It does **not** fail-stop, because:
+    ///
+    /// * Arenas are an *accounting* mechanism under ADR-0006 §3. No data-path
+    ///   behavior depends on which arena serves a shard: allocation, freeing,
+    ///   and every correctness property are identical either way. Fail-stop is
+    ///   for states where continuing produces wrong answers, and this is not one.
+    /// * Every consumer already handles an absent arena. Simulation builds bind
+    ///   none at all and `msvc` builds cannot, so "no arena for this shard" is a
+    ///   state the registry and the broker must handle regardless; making it
+    ///   fatal here would add a fail-stop trigger that buys nothing.
+    /// * The failure is loud without being fatal: an ERROR names the shard and
+    ///   the allocator's own message, the shard's startup line carries
+    ///   `arena=None`, and the shard is simply missing from the per-shard memory
+    ///   gauges. Refusing to start a database because a statistics arena could
+    ///   not be created trades a monitoring gap for a total outage.
     fn launch(&mut self, shard_id: usize, worker: ShardBody) -> ShardHandle {
         // Built here, not on the shard thread: `Runtime` is `Send`, and building
         // it eagerly makes the handle available to `connection_runtime` the
@@ -298,11 +463,18 @@ impl ShardExecutor for RealShardExecutor {
 
         let intended = intended_cpu(shard_id, available_cpus());
         let pin = pinning_enabled();
+        let arenas = self.arenas.clone();
         let (done_tx, done_rx) = tokio::sync::oneshot::channel::<Option<Box<dyn Any + Send>>>();
+        let (arena_tx, arena_rx) = std::sync::mpsc::channel::<Option<u32>>();
 
         std::thread::Builder::new()
             .name(format!("frogdb-shard-{shard_id}"))
             .spawn(move || {
+                // First, before anything on this thread allocates into the
+                // shard's steady state.
+                let arena = bind_shard_arena(&*arenas, shard_id);
+                let _ = arena_tx.send(arena);
+
                 let achieved = if pin {
                     pin_current_thread(intended)
                 } else {
@@ -314,6 +486,7 @@ impl ShardExecutor for RealShardExecutor {
                     achieved_cpu = ?achieved,
                     pinning_requested = pin,
                     mechanism = PINNING_MECHANISM,
+                    arena = ?arena,
                     "Shard thread started"
                 );
                 // The supervisor's fail-stop policy is written against a
@@ -327,6 +500,12 @@ impl ShardExecutor for RealShardExecutor {
                 let _ = done_tx.send(outcome.err());
             })
             .expect("spawn shard thread");
+
+        // A dropped sender means the thread died before it could report — the
+        // same "no arena for this shard" answer, arrived at differently.
+        if let Some(arena) = arena_rx.recv().unwrap_or(None) {
+            self.bound_arenas.push((shard_id, arena));
+        }
 
         spawn(async move {
             match done_rx.await {
@@ -345,9 +524,11 @@ impl ShardExecutor for RealShardExecutor {
         })
     }
 
-    fn arena_of(&self, _shard_id: usize) -> Option<u32> {
-        // No arenas yet (issue 03).
-        None
+    fn arena_of(&self, shard_id: usize) -> Option<u32> {
+        self.bound_arenas
+            .iter()
+            .find(|(id, _)| *id == shard_id)
+            .map(|(_, arena)| *arena)
     }
 
     fn connection_runtime(&self, shard_id: usize) -> Option<tokio::runtime::Handle> {
@@ -410,15 +591,18 @@ impl ShardExecutor for SimShardExecutor {
 ///
 /// Selection is a compile-time `cfg`, following the type swaps above rather
 /// than adding a runtime switch.
+///
+/// `arenas` is where shard arenas come from; the simulation arm drops it, since
+/// a sim host is one thread and per-shard arenas cannot exist there.
 #[cfg(feature = "turmoil")]
-pub fn shard_executor() -> Box<dyn ShardExecutor> {
+pub fn shard_executor(_arenas: std::sync::Arc<dyn ShardArenaSource>) -> Box<dyn ShardExecutor> {
     Box::new(SimShardExecutor::new())
 }
 
 /// The shard executor for this build — see the `turmoil` arm above.
 #[cfg(not(feature = "turmoil"))]
-pub fn shard_executor() -> Box<dyn ShardExecutor> {
-    Box::new(RealShardExecutor::new())
+pub fn shard_executor(arenas: std::sync::Arc<dyn ShardArenaSource>) -> Box<dyn ShardExecutor> {
+    Box::new(RealShardExecutor::with_arenas(arenas))
 }
 
 /// Creates a TcpListener with SO_REUSEADDR enabled.
@@ -535,10 +719,186 @@ mod shard_executor_tests {
         }
     }
 
-    /// Arena binding is issue 03's, not this one's: the real executor puts
-    /// shards on threads but still reports no arena.
+    /// A [`ShardArenaSource`] that hands out arenas from a counter and records
+    /// which thread each bind ran on.
+    ///
+    /// A fake, not the real allocator: the properties under test here are the
+    /// executor's (one arena per shard, bound on the shard's own thread, before
+    /// the worker runs, degrading rather than dying), and the allocator's own
+    /// behavior is pinned separately by `frogdb-telemetry`'s jemalloc tests.
+    #[derive(Debug, Default)]
+    struct FakeArenas {
+        next: std::sync::atomic::AtomicU32,
+        binds: std::sync::Mutex<Vec<(u32, std::thread::ThreadId)>>,
+        fail_create: bool,
+        fail_bind: bool,
+        unavailable: bool,
+    }
+
+    impl FakeArenas {
+        fn working() -> Arc<Self> {
+            Arc::new(Self {
+                // Start above 0: the automatic arena is 0, so a bug that
+                // reported "unbound" as an arena would look like arena 0.
+                next: std::sync::atomic::AtomicU32::new(1),
+                ..Self::default()
+            })
+        }
+
+        fn binds(&self) -> Vec<(u32, std::thread::ThreadId)> {
+            self.binds.lock().unwrap().clone()
+        }
+    }
+
+    impl ShardArenaSource for FakeArenas {
+        fn arenas_available(&self) -> bool {
+            !self.unavailable
+        }
+
+        fn create_arena(&self) -> std::io::Result<u32> {
+            if self.fail_create {
+                return Err(std::io::Error::other("arenas.create refused"));
+            }
+            Ok(self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+        }
+
+        fn bind_current_thread(&self, arena: u32) -> std::io::Result<()> {
+            if self.fail_bind {
+                return Err(std::io::Error::other("thread.arena refused"));
+            }
+            self.binds
+                .lock()
+                .unwrap()
+                .push((arena, std::thread::current().id()));
+            Ok(())
+        }
+    }
+
+    /// The real executor gives every shard an arena of its own — the mapping
+    /// issue 05's broker reads to charge memory to the shard that allocated it.
+    /// Two shards sharing an arena would make every per-shard figure a sum of
+    /// both.
     #[tokio::test]
-    async fn real_executor_reports_no_arena_yet() {
+    async fn real_executor_reports_a_distinct_arena_per_shard() {
+        let arenas = FakeArenas::working();
+        let mut exec = RealShardExecutor::with_arenas(arenas.clone());
+        launch_all(&mut exec).await;
+
+        let mut seen = Vec::new();
+        for shard_id in 0..SHARDS {
+            let arena = exec
+                .arena_of(shard_id)
+                .unwrap_or_else(|| panic!("shard {shard_id} must report an arena"));
+            assert!(
+                !seen.contains(&arena),
+                "arena {arena} was handed to two shards; per-shard accounting \
+                 would double-count both"
+            );
+            seen.push(arena);
+        }
+        assert_eq!(
+            exec.bound_arenas().len(),
+            SHARDS,
+            "every binding must be visible to the registry the server builds"
+        );
+    }
+
+    /// `thread.arena` binds *the calling thread*, so a bind performed anywhere
+    /// but on the shard's own thread would charge the launching thread's
+    /// allocations to the shard's arena and leave the shard on the automatic
+    /// one — the exact inversion of what the arena is for.
+    #[tokio::test]
+    async fn each_arena_is_bound_on_the_shard_thread_that_owns_it() {
+        let arenas = FakeArenas::working();
+        let launcher = std::thread::current().id();
+        let mut exec = RealShardExecutor::with_arenas(arenas.clone());
+        launch_all(&mut exec).await;
+
+        let binds = arenas.binds();
+        assert_eq!(binds.len(), SHARDS, "one bind per shard");
+        let mut threads = Vec::new();
+        for (arena, thread) in binds {
+            assert_ne!(thread, launcher, "arena {arena} was bound on the launcher");
+            assert!(
+                !threads.contains(&thread),
+                "two shards bound arenas from the same thread"
+            );
+            threads.push(thread);
+        }
+    }
+
+    /// The bind must precede the worker: jemalloc charges an allocation to
+    /// whatever arena the thread is bound to at the time, so anything the worker
+    /// allocates before the bind lands on the automatic arena permanently.
+    #[tokio::test]
+    async fn the_arena_is_bound_before_the_worker_runs() {
+        let arenas = FakeArenas::working();
+        let mut exec = RealShardExecutor::with_arenas(arenas.clone());
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let observer = arenas.clone();
+        let handle = exec.launch(
+            0,
+            Box::pin(async move {
+                let _ = tx.send(observer.binds().len());
+            }),
+        );
+        let binds_when_the_worker_started = rx.await.expect("worker reported");
+        handle.await.expect("shard body must not panic");
+
+        assert_eq!(
+            binds_when_the_worker_started, 1,
+            "the shard's arena must already be bound when its worker gets \
+             control, or the worker's first allocations escape it"
+        );
+    }
+
+    /// A refused bind is degraded, not fatal: the shard still runs, and reports
+    /// no arena rather than a wrong one. See `RealShardExecutor::launch` for why
+    /// this is not a fail-stop.
+    #[tokio::test]
+    async fn a_failed_arena_bind_leaves_the_shard_running_and_unattributed() {
+        for arenas in [
+            Arc::new(FakeArenas {
+                fail_create: true,
+                ..FakeArenas::default()
+            }),
+            Arc::new(FakeArenas {
+                fail_bind: true,
+                ..FakeArenas::default()
+            }),
+        ] {
+            let ran = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let mut exec = RealShardExecutor::with_arenas(arenas);
+            let mut handles = Vec::new();
+            for shard_id in 0..SHARDS {
+                let ran = ran.clone();
+                handles.push(exec.launch(
+                    shard_id,
+                    Box::pin(async move {
+                        ran.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }),
+                ));
+            }
+            for h in handles {
+                h.await.expect("a shard whose arena failed must still run");
+            }
+            assert_eq!(ran.load(std::sync::atomic::Ordering::Relaxed), SHARDS);
+            for shard_id in 0..SHARDS {
+                assert_eq!(
+                    exec.arena_of(shard_id),
+                    None,
+                    "a shard that failed to bind must report no arena, not a \
+                     wrong one"
+                );
+            }
+            assert!(exec.bound_arenas().is_empty());
+        }
+    }
+
+    /// Without a source — the default, and every build with no arena-capable
+    /// allocator — the executor binds nothing and reports nothing.
+    #[tokio::test]
+    async fn real_executor_without_a_source_reports_no_arena() {
         let mut exec = RealShardExecutor::new();
         launch_all(&mut exec).await;
         for shard_id in 0..SHARDS {
@@ -749,6 +1109,6 @@ mod shard_executor_tests {
         } else {
             "real"
         };
-        assert_eq!(shard_executor().kind(), expected);
+        assert_eq!(shard_executor(Arc::new(NoShardArenas)).kind(), expected);
     }
 }
