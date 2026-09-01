@@ -1,6 +1,6 @@
 # 08: arena bind failure fails boot instead of degrading
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Origin: post-wave review grill, 2026-09-01 — human reopened issue 03's degraded-not-fatal ruling
 Area: frogdb-net (shard launch) + frogdb-server boot path
@@ -41,3 +41,22 @@ Changing bind order or sampling.
 ## Depends on
 
 Nothing — issues 03 and 07 are merged.
+
+## Resolution (2026-09-01)
+
+Landed in `feat(memory)!: fail boot on a refused shard arena bind; move real-thread arena
+tests out` (one combined commit with issue 09, same code area). `ShardExecutor::launch` now
+returns `Result<ShardHandle, ShardLaunchError>`; the shard thread reports its bind through
+the existing mpsc channel as a `Result`, returns before running a line of the worker on
+refusal, and `spawn_shard_workers` aborts boot via its `anyhow::Result` with the shard id
+and the refusing mallctl (`arenas.create` or `thread.arena`) in the message. No config
+knob. `NoShardArenas`/sim untouched: `Ok(None)` — and `arena_of() == None` — now mean one
+thing only, no arena source in this build. The degraded path, its two `tracing::error!`
+logs, the partial-binding `warn!` in `report_arena_binding`, and the test pinning
+degradation are all gone; mixed bound/unbound is impossible. `specs/memory.md` (DRAFT)
+allocation-substrate bullet records the ruling.
+
+Tests: `a_failed_arena_bind_fails_the_launch_and_names_the_shard` covers both refusing
+mallctls (asserts shard id, mallctl name, empty `bound_arenas()`, worker ran 0 times);
+`real_executor_without_a_source_reports_no_arena` extended with an unavailable source that
+would fail create/bind if asked. frogdb-net 15/15, frogdb-server 2116/2116, lint-gates OK.

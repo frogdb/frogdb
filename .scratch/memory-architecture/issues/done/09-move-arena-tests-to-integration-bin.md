@@ -1,6 +1,6 @@
 # 09: move real-thread arena tests to an integration test binary
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Origin: post-wave review grill, 2026-09-01 — human reopened issue 07's test-only global_allocator flag
 Area: frogdb-server/crates/server tests
@@ -38,3 +38,15 @@ Changing what the tests assert. Touching frogdb-telemetry's own test allocator.
 
 Nothing — issue 07 is merged. Coordinate with issue 08 if one agent takes both (same code
 area).
+
+## Resolution (2026-09-01)
+
+Landed with issue 08 in one combined commit. New
+`frogdb-server/crates/server/tests/arena_reading.rs` (own `[[test]]` entry — the crate has
+`autotests = false`) declares `#[global_allocator] tikv_jemallocator::Jemalloc` with a
+why-comment mirroring `main.rs` and the `frogdb-telemetry` arena tests; both real-thread
+tests moved verbatim, no assertion changed. `#[cfg(test)] #[global_allocator]` removed from
+`lib.rs`, so lib unit tests run on the default allocator again. The allocator-independent
+unit tests stay in `shard_arena_reading.rs` — four, not the six this issue guessed — and
+the module doc gained a "Where the tests are" pointer. Both moved tests pass in the new
+binary; frogdb-server suite 2116/2116.
