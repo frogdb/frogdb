@@ -20,3 +20,23 @@ answer when one exists, Redis's own error when it doesn't, never a fabricated va
 See [`PRD.md`](PRD.md) for the full writeup and acceptance criteria.
 
 Issues: [open](issues/open/) / [done](issues/done/)
+
+## Second sweep — 2026-09-01 stub/fabrication audit
+
+A follow-up pass asked a narrower question: which commands are stubbed out or return dummy data
+*unintentionally* — excluding the deliberate deviations recorded in ADR-0005 and the compat
+matrix. Findings became issues 22–35, in three groups:
+
+- **Behavior stubbed while the data exists** (22–24): `LATENCY HISTOGRAM` returns an empty array
+  though `latencystats` already renders real percentiles; `XREADGROUP` refuses multiple streams
+  though `XREAD` serves N; `RESTORE IDLETIME/FREQ` and `CLIENT KILL USER` parse their arguments
+  and discard them.
+- **`INFO` and `CLIENT LIST` fabrications** (25–29): uptime, CPU, allocator and script-cache
+  fields, keyspace `expires`, tracking counters, and the `user`/`resp`/`redir`/`run_id`
+  identity literals.
+- **Commands absent from the advertised 8.6.1 surface** (30–35): `FAILOVER`, `RESTORE-ASKING`,
+  `SFLUSH`, `TRIMSLOTS`, `XCFGSET`, a `SENTINEL` deviation that was never written down, and a
+  phantom `MAXMEMORY` row the compat-matrix generator manufactures from a test-suite name.
+
+Issues needing a product ruling before work starts are `needs-triage`; the mechanical ones are
+`ready-for-agent`.
