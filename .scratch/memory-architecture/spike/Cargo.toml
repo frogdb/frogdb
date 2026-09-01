@@ -1,0 +1,33 @@
+# THROWAWAY SPIKE CRATE — not a workspace member, not production code.
+# The empty `[workspace]` table below makes cargo treat this directory as its own
+# workspace root, so it never participates in (or slows down) FrogDB workspace builds
+# and keeps its own Cargo.lock.
+[workspace]
+
+[package]
+name = "memarch-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "arena"
+path = "src/bin/arena.rs"
+
+[[bin]]
+name = "runtime"
+path = "src/bin/runtime.rs"
+
+[dependencies]
+tikv-jemallocator = "0.6"
+tikv-jemalloc-ctl = { version = "0.6", features = ["use_std"] }
+tikv-jemalloc-sys = { version = "0.6", features = ["stats"] }
+libc = "0.2"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros", "time"] }
+
+[dev-dependencies]
+turmoil = "0.7"
+tokio = { version = "1", features = ["rt", "sync", "macros", "time", "io-util", "net"] }
+
+[profile.release]
+debug = true

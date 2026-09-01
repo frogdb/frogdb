@@ -11,4 +11,8 @@ RocksDB, pooled network buffers, zero-copy parse path, and a future locked
 
 Survey report: https://claude.ai/code/artifact/952c39ae-b28f-40fe-bd34-9105f9537819
 
+Phase-1 de-risk spike: [spike-report.md](spike-report.md) — measured answers for R2
+(per-shard arenas), R3/R4 (runtime shape), and turmoil fidelity, with go/no-go verdicts.
+Prototype code: [spike/](spike/) (throwaway, not a workspace member).
+
 Issues: none yet — design-only ruling; issues get filed at implementation kickoff.
