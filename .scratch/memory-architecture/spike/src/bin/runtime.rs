@@ -15,17 +15,26 @@
 //!   colocated  one current-thread runtime per shard thread; each client lives on
 //!              the SAME runtime as the shard it talks to; zero cross-thread hops  (R3 ideal)
 //!
-//! CAVEAT: macOS offers no strict core pinning (`thread_policy_set` affinity tags are
-//! advisory and ignored on Apple silicon), so no shape here is hard-pinned. The
-//! architectural ordering is what this measures; absolute numbers need a Linux run.
+//! PINNING: on Linux every shard thread and every client/worker thread is bound to a
+//! single CPU with `sched_setaffinity(2)`, and the achieved placement is reported at
+//! the end of the run (allowed mask readback + observed `sched_getcpu` + per-thread
+//! CPU seconds). On macOS there is no strict affinity API (`thread_policy_set`
+//! affinity tags are advisory and ignored on Apple silicon) so pinning is a no-op and
+//! the report says so — that is the caveat the Linux validation run exists to remove.
+//!
+//! CPU budget (shards = S, machine CPUs = C):
+//!   mt work-stealing, W workers   workers -> CPUs 0..W          (shards are tasks)
+//!   tpc cross-thread              shards  -> CPUs 0..S, clients -> CPUs S..S+W
+//!   tpc colocated                 shards  -> CPUs 0..S          (clients ride along)
 //!
 //! Run: `cargo run --release --bin runtime`
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use memarch_spike::pin;
 use tokio::sync::{mpsc, oneshot};
 
 #[global_allocator]
@@ -158,16 +167,39 @@ impl Run {
 
 // ------------------------------------------------------------------- shapes ---
 
+/// A multi-thread runtime whose worker `i` is hard-pinned to CPU `base + i`.
+/// Threads the runtime starts beyond `workers` (e.g. a lazily created blocking
+/// thread) are labelled separately and left unpinned so they cannot silently
+/// squat on a shard's CPU.
+fn pinned_mt(workers: usize, base: usize, label: String) -> tokio::runtime::Runtime {
+    let next = Arc::new(AtomicUsize::new(0));
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(workers)
+        .on_thread_start({
+            let next = next.clone();
+            move || {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                if i < workers {
+                    pin::pin_tls(&label, base + i);
+                }
+            }
+        })
+        .on_thread_stop(pin::unpin_tls)
+        .enable_all()
+        .build()
+        .unwrap()
+}
+
 /// `affine = true` restricts each client to the keys of one shard — the same
 /// working-set locality the colocated shape enjoys, but still on the
 /// work-stealing runtime. It is the control that separates "runtime shape"
 /// from "smaller per-thread key set".
 fn shape_mt(shards: usize, clients: usize, ops_total: usize, workers: usize, affine: bool) -> Run {
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(workers)
-        .enable_all()
-        .build()
-        .unwrap();
+    let rt = pinned_mt(
+        workers,
+        0,
+        format!("mt/{workers}w{} worker", if affine { "-affine" } else { "" }),
+    );
     rt.block_on(async move {
         let mut senders = Vec::new();
         for s in 0..shards {
@@ -212,6 +244,7 @@ fn shape_tpc(shards: usize, clients: usize, ops_total: usize, client_workers: us
         senders.push(tx);
         shutdown.push(sd_tx);
         threads.push(std::thread::spawn(move || {
+            let mut guard = pin::pin_current("tpc-xthread shard", s);
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -223,15 +256,14 @@ fn shape_tpc(shards: usize, clients: usize, ops_total: usize, client_workers: us
                     _ = sd_rx => {}
                 }
             });
+            guard.observe();
         }));
     }
     let senders = Arc::new(senders);
 
-    let crt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(client_workers)
-        .enable_all()
-        .build()
-        .unwrap();
+    // Clients get their own CPUs, disjoint from the shard threads': this shape's
+    // whole point is that every request crosses a thread boundary.
+    let crt = pinned_mt(client_workers, shards, "tpc-xthread client".to_string());
     let run = crt.block_on({
         let senders = senders.clone();
         async move { drive(senders, clients, ops_total, None, |fut| tokio::spawn(fut)).await }
@@ -262,11 +294,12 @@ fn shape_colocated(shards: usize, clients: usize, ops_total: usize) -> Run {
         let started = started.clone();
         let done_ops = done_ops.clone();
         threads.push(std::thread::spawn(move || {
+            let mut guard = pin::pin_current("colocated shard+clients", s);
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .unwrap();
-            rt.block_on(async move {
+            let lat = rt.block_on(async move {
                 let (tx, rx) = mpsc::channel(CHAN_CAP);
                 let map = new_map(s, shards);
                 let shard = tokio::spawn(shard_loop(rx, map));
@@ -293,7 +326,9 @@ fn shape_colocated(shards: usize, clients: usize, ops_total: usize) -> Run {
                 drop(tx);
                 let _ = shard.await;
                 lat
-            })
+            });
+            guard.observe();
+            lat
         }));
     }
     started.wait();
@@ -347,21 +382,36 @@ where
 
 // --------------------------------------------------------------------- main ---
 
-fn bench(name: &str, threads: usize, clients: usize, mut run: Run) {
+fn bench(name: &str, threads: usize, clients: usize, mut run: Run, la: &str, spread: f64) {
     let p50 = run.pct(0.50);
     let p99 = run.pct(0.99);
     let p999 = run.pct(0.999);
     println!(
-        "{:<26} {:>7} {:>8} {:>14.0} {:>10.2} {:>10.2} {:>10.2}",
+        "{:<26} {:>7} {:>8} {:>14.0} {:>10.2} {:>10.2} {:>10.2} {:>7.1}% {:>18}",
         name,
         threads,
         clients,
         run.throughput(),
         p50,
         p99,
-        p999
+        p999,
+        spread * 100.0,
+        la
     );
     let _ = std::io::Write::flush(&mut std::io::stdout());
+}
+
+/// Run `reps` reps of one shape, bracketing them with a load-average reading so
+/// the report can show the box was quiet for that specific measurement.
+fn run_shape<F: FnMut() -> Run>(name: &str, threads: usize, clients: usize, reps: usize, mut f: F) {
+    let load1 = |s: String| s.split_whitespace().next().unwrap_or("?").to_string();
+    let before = load1(pin::loadavg());
+    let mut v = Vec::new();
+    for _ in 0..reps {
+        v.push(f());
+    }
+    let after = load1(pin::loadavg());
+    report_median(name, threads, clients, v, &format!("{before}->{after}"));
 }
 
 fn main() {
@@ -378,61 +428,69 @@ fn main() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(3);
 
+    let cpus = pin::available_cpus();
     println!("memarch-spike / runtime  (THROWAWAY prototype for PRD R3/R4)");
     println!(
-        "cpus={} shards={} ops/run={} reps={} (median reported)",
-        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0),
-        shards,
-        ops,
-        reps
+        "cpus={cpus} shards={shards} ops/run={ops} reps={reps} (median reported)"
     );
-    println!("NOTE: no hard core pinning (macOS); see report caveat.\n");
+    println!(
+        "hard pinning: {}  MALLOC_CONF={}",
+        if pin::SUPPORTED {
+            "sched_setaffinity(2) — evidence table at end of run"
+        } else {
+            "UNAVAILABLE on this platform (no-op); see report caveat"
+        },
+        // tikv-jemalloc-sys uses the `_rjem_` prefix, so jemalloc reads
+        // `_RJEM_MALLOC_CONF`; the plain name is inert. Report both.
+        format!(
+            "{} / _RJEM_MALLOC_CONF={}",
+            std::env::var("MALLOC_CONF").unwrap_or_else(|_| "<unset>".into()),
+            std::env::var("_RJEM_MALLOC_CONF").unwrap_or_else(|_| "<unset>".into())
+        )
+    );
+    println!("loadavg at start: {}\n", pin::loadavg());
 
     // warm-up so the first measured shape is not paying page-fault/JIT-ish costs
     let _ = shape_mt(shards, 32, ops / 4, 8, false);
 
     println!(
-        "{:<26} {:>7} {:>8} {:>14} {:>10} {:>10} {:>10}",
-        "shape", "threads", "clients", "ops/sec", "p50 us", "p99 us", "p99.9 us"
+        "{:<26} {:>7} {:>8} {:>14} {:>10} {:>10} {:>10} {:>8} {:>18}",
+        "shape", "threads", "clients", "ops/sec", "p50 us", "p99 us", "p99.9 us", "spread",
+        "load1 pre->post"
     );
 
     for &clients in &[32usize, 128, 512] {
-        let mut v = Vec::new();
-        for _ in 0..reps {
-            v.push(shape_mt(shards, clients, ops, 8, false));
-        }
-        report_median("mt work-stealing (today)", 8, clients, v);
-
-        let mut v = Vec::new();
-        for _ in 0..reps {
-            v.push(shape_mt(shards, clients, ops, 4, false));
-        }
-        report_median("mt work-stealing, 4 wrk", 4, clients, v);
-
-        let mut v = Vec::new();
-        for _ in 0..reps {
-            v.push(shape_mt(shards, clients, ops, 8, true));
-        }
-        report_median("mt + shard-affine keys", 8, clients, v);
-
-        let mut v = Vec::new();
-        for _ in 0..reps {
-            v.push(shape_tpc(shards, clients, ops, 4));
-        }
-        report_median("tpc, cross-thread (R4)", 8, clients, v);
-
-        let mut v = Vec::new();
-        for _ in 0..reps {
-            v.push(shape_colocated(shards, clients, ops));
-        }
-        report_median("tpc colocated (R3+R4)", shards, clients, v);
+        run_shape("mt work-stealing (today)", 8, clients, reps, || {
+            shape_mt(shards, clients, ops, 8, false)
+        });
+        run_shape("mt work-stealing, 4 wrk", 4, clients, reps, || {
+            shape_mt(shards, clients, ops, 4, false)
+        });
+        run_shape("mt + shard-affine keys", 8, clients, reps, || {
+            shape_mt(shards, clients, ops, 8, true)
+        });
+        run_shape("tpc, cross-thread (R4)", 8, clients, reps, || {
+            shape_tpc(shards, clients, ops, 4)
+        });
+        run_shape("tpc colocated (R3+R4)", shards, clients, reps, || {
+            shape_colocated(shards, clients, ops)
+        });
         println!();
     }
+
+    println!("loadavg at end: {}", pin::loadavg());
+    pin::report();
 }
 
-fn report_median(name: &str, threads: usize, clients: usize, mut runs: Vec<Run>) {
+/// `spread` is (max - min) / median throughput across the reps — the cheap
+/// witness that the box was quiet enough for the median to mean something.
+fn report_median(name: &str, threads: usize, clients: usize, mut runs: Vec<Run>, la: &str) {
     runs.sort_by(|a, b| a.throughput().partial_cmp(&b.throughput()).unwrap());
+    let lo = runs.first().map(|r| r.throughput()).unwrap_or(0.0);
+    let hi = runs.last().map(|r| r.throughput()).unwrap_or(0.0);
     let mid = runs.len() / 2;
     let run = runs.swap_remove(mid);
-    bench(name, threads, clients, run);
+    let med = run.throughput();
+    let spread = if med > 0.0 { (hi - lo) / med } else { 0.0 };
+    bench(name, threads, clients, run, la, spread);
 }

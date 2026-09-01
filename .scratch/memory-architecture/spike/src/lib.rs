@@ -19,6 +19,10 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::{mpsc, oneshot};
 
+/// Hard CPU affinity + the evidence that it took. Platform affordance for the
+/// Linux validation run; a no-op everywhere else.
+pub mod pin;
+
 pub const CHAN_CAP: usize = 1024;
 
 pub type Reply = Option<Vec<u8>>;

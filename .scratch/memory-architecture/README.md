@@ -14,6 +14,9 @@ Survey report: https://claude.ai/code/artifact/952c39ae-b28f-40fe-bd34-9105f9537
 Phase-1 de-risk spike: [spike-report.md](spike-report.md) — measured answers for R2
 (per-shard arenas), R3/R4 (runtime shape), and turmoil fidelity, with go/no-go verdicts.
 Prototype code: [spike/](spike/) (throwaway, not a workspace member).
+Linux validation: [spike-report-linux.md](spike-report-linux.md) — both benches re-run on
+aarch64 Linux with hard `sched_setaffinity` pinning and `narenas:1`. Every verdict holds;
+it corrects six numbers and finds that the jemalloc config env var is `_RJEM_MALLOC_CONF`.
 
 Spec draft: [`specs/memory.md`](../../specs/memory.md) — `Status: DRAFT`, scope statement and
 invariant vocabulary only, deliberately zero FM rows (a row arrives with its forcing test). It

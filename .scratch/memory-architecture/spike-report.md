@@ -7,6 +7,15 @@ Rules under test: [PRD.md](PRD.md) R2 (per-shard jemalloc arenas), R3 (shared-no
 symmetric cores), R4 (tokio current-thread per core), and the open question
 *"how turmoil tests model per-core pinning"*.
 
+> **Validated on Linux.** Both benches were re-run on aarch64 Linux with hard
+> `sched_setaffinity(2)` pinning and `narenas:1` —
+> [spike-report-linux.md](spike-report-linux.md). **Every verdict below is confirmed**,
+> and the colocated win *grows* under pinning (2.27× → 2.54×). Six numbers in this
+> document are corrected there: the jemalloc config env var is `_RJEM_MALLOC_CONF` (not
+> `MALLOC_CONF`), `narenas:1` buys 1.9× not 5×, E4's bleed is 0.32 % not 1.00 %, R4-alone
+> is 2.5× not 3.7×, the hop is 6.35× not 8×, and the per-arena epoch cost is ~13 µs not
+> 2.5 µs. Prefer the Linux numbers where they differ.
+
 ## Headline verdicts
 
 | Ruling | Verdict | One-line reason |
@@ -397,26 +406,23 @@ forces each one.
 
 ## Follow-ups
 
-1. **Linux pinning run.** Re-run `spike/src/bin/runtime.rs` on aarch64 Linux (testbox)
-   with real `sched_setaffinity` pinning, and with `MALLOC_CONF=narenas:1`. Confirms the
-   ratios and gives the epoch-cost curve at a realistic arena count.
-2. **Cross-slot hop cost.** Extend the bench with a tunable cross-slot fraction
+1. **Cross-slot hop cost.** Extend the bench with a tunable cross-slot fraction
    (0 / 5 / 25 / 100 %) to find the point where R3's hop erases R3's win. Directly sizes
    the "copy at boundary" trade in R3 and the MGET/MSET fan-out design.
-3. **io_uring interplay.** `.scratch/roadmap/optimizations/ASYNC_RUNTIME.md` §4 favours
+2. **io_uring interplay.** `.scratch/roadmap/optimizations/ASYNC_RUNTIME.md` §4 favours
    compio for a completion-based backend. compio is *natively* thread-per-core, so R4's
    "tokio current-thread per core" and a later io_uring move are the same shape — R4 does
    not foreclose it. But compio has no turmoil equivalent: the `ShardExecutor` seam from
    (c) plus the existing `frogdb-net` swap is what would keep the sim suite alive across
    that change. Check before committing to R4 that the seam is drawn at the executor,
    not at tokio types.
-4. **`mallctlnametomib` on `stats.arenas.<i>.*`.** Returned an error under
+3. **`mallctlnametomib` on `stats.arenas.<i>.*`.** Returned an error under
    `tikv-jemalloc-ctl 0.6.1`; the by-name path works. Worth resolving so the broker can
    use the MIB fast path.
-5. **`MALLOC_CONF` tuning study.** `narenas`, `dirty_decay_ms`, `muzzy_decay_ms`,
+4. **`_RJEM_MALLOC_CONF` tuning study.** `narenas`, `dirty_decay_ms`, `muzzy_decay_ms`,
    `tcache_max` all move the R13 fragmentation/RSS trade. E1c shows purge recovers
    ~99 % of resident; a decay study should precede the R13 metrics work.
-6. **Real-thread cross-bleed assertion.** Turn E1b into a non-turmoil regression test
+5. **Real-thread cross-bleed assertion.** Turn E1b into a non-turmoil regression test
    asserting zero cross-arena attribution across shard threads — the executable form of
    R3's "no cross-arena bleed" invariant, which the sim cannot test.
 

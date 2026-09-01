@@ -15,6 +15,15 @@ use std::io::Write as _;
 use std::sync::mpsc;
 use std::time::Instant;
 
+use memarch_spike::pin;
+
+/// CPU assignment (see `pin`): main thread 0, E1's four shard threads 1..=4,
+/// E4's rebind thread 5, E3's microbench threads 6.
+const CPU_MAIN: usize = 0;
+const CPU_E1_BASE: usize = 1;
+const CPU_E4: usize = 5;
+const CPU_E3: usize = 6;
+
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
@@ -169,6 +178,7 @@ fn e1_binding_and_attribution() -> Vec<E1Row> {
         let go_rx = go_rx.clone();
         let plan = *plan;
         handles.push(std::thread::spawn(move || {
+            let _pin = pin::pin_current("E1 shard thread", CPU_E1_BASE + shard);
             thread_bind_arena(arena);
             assert_eq!(thread_arena(), arena, "thread.arena readback");
 
@@ -304,6 +314,7 @@ fn best_of(reps: usize, iters: usize, sz: usize, bind: bool, tcache: bool) -> f6
     let mut best = f64::INFINITY;
     for _ in 0..reps {
         let v = std::thread::spawn(move || {
+            let _pin = pin::pin_current("E3 microbench thread", CPU_E3);
             if bind {
                 thread_bind_arena(arena_create());
             }
@@ -425,6 +436,101 @@ fn e5_stats_read_cost() {
     println!("{:<44} {:>12.1}", "thread.allocated (thread-local counter)", thr_ns);
 }
 
+// -------------------------------------------------------------------- E5b ---
+
+/// E5 measures the epoch-cost *curve*; E5b measures the single number a memory
+/// broker actually budgets against: one full sample at the shipping
+/// configuration — `narenas:1` plus exactly `shards` explicit arenas, every one
+/// of them **live** (a shard thread bound to it holding a realistic working
+/// set), plus the per-arena stat reads the broker does after the epoch.
+///
+/// Run in its own process (`ARENA_MODE=e5b`) so no other experiment's arenas
+/// inflate the count.
+fn e5b_shipping_sample_cost(shards: usize) {
+    hdr("E5b  full broker sample at the shipping configuration");
+    println!(
+        "opt.narenas = {}   arenas.narenas before = {}",
+        unsafe { tikv_jemalloc_ctl::raw::read::<u32>(b"opt.narenas\0").unwrap_or(0) },
+        narenas()
+    );
+
+    let arenas: Vec<u32> = (0..shards).map(|_| arena_create()).collect();
+    let ready = std::sync::Arc::new(std::sync::Barrier::new(shards + 1));
+    let release = std::sync::Arc::new(std::sync::Barrier::new(shards + 1));
+
+    let mut handles = Vec::new();
+    for (s, &a) in arenas.iter().enumerate() {
+        let ready = ready.clone();
+        let release = release.clone();
+        handles.push(std::thread::spawn(move || {
+            let _pin = pin::pin_current("E5b shard thread", s);
+            thread_bind_arena(a);
+            // A realistic-ish live set: ~8 MB spread over several size classes,
+            // so each arena has populated bins and large extents to merge.
+            let mut live: Vec<Vec<u8>> = Vec::new();
+            for (n, sz) in [(20_000usize, 128usize), (4_000, 512), (500, 4_096), (60, 65_536)] {
+                for _ in 0..n {
+                    live.push(vec![0u8; sz]);
+                }
+            }
+            ready.wait();
+            release.wait();
+            drop(live);
+        }));
+    }
+    ready.wait();
+
+    let live = narenas();
+    epoch_advance();
+
+    const REPS: usize = 2_000;
+    let t = Instant::now();
+    for _ in 0..REPS {
+        epoch_advance();
+    }
+    let epoch_us = t.elapsed().as_nanos() as f64 / REPS as f64 / 1000.0;
+
+    // What a broker really does per sample: one epoch, then small+large for
+    // every shard arena.
+    let t = Instant::now();
+    for _ in 0..REPS {
+        epoch_advance();
+        let mut acc = 0usize;
+        for &a in &arenas {
+            acc += arena_small_allocated(a) + arena_large_allocated(a);
+        }
+        std::hint::black_box(acc);
+    }
+    let sample_us = t.elapsed().as_nanos() as f64 / REPS as f64 / 1000.0;
+
+    println!(
+        "\nshard arenas = {shards}   arenas.narenas (live) = {live}   all arenas populated"
+    );
+    println!("{:<52} {:>12}", "operation", "us/call");
+    println!("{:<52} {:>12.2}", "epoch advance only", epoch_us);
+    println!(
+        "{:<52} {:>12.2}",
+        format!("full broker sample (epoch + {} stat reads)", shards * 2),
+        sample_us
+    );
+    println!(
+        "{:<52} {:>12.3}",
+        "epoch cost per arena", epoch_us / live as f64
+    );
+    for hz in [10u32, 20, 50, 100] {
+        println!(
+            "  at {hz:>3} Hz: {:>7.3} ms/s = {:>6.4}% of one core",
+            sample_us * hz as f64 / 1000.0,
+            sample_us * hz as f64 / 10_000.0
+        );
+    }
+
+    release.wait();
+    for h in handles {
+        let _ = h.join();
+    }
+}
+
 // --------------------------------------------------------------------- E4 ---
 
 fn e4_tcache_composition() {
@@ -435,6 +541,7 @@ fn e4_tcache_composition() {
     println!("arena A={a}  arena B={b}");
 
     let h = std::thread::spawn(move || {
+        let _pin = pin::pin_current("E4 rebind thread", CPU_E4);
         const N: usize = 20_000;
         const SZ: usize = 128; // small class -> tcache eligible
 
@@ -533,7 +640,12 @@ fn e4_tcache_composition() {
     h.join().unwrap();
 }
 
+fn narenas() -> u32 {
+    unsafe { tikv_jemalloc_ctl::raw::read(b"arenas.narenas\0").unwrap_or(0) }
+}
+
 fn main() {
+    let _pin = pin::pin_current("main thread", CPU_MAIN);
     println!("memarch-spike / arena  (THROWAWAY prototype for PRD R2)");
     epoch_advance();
     println!(
@@ -541,10 +653,53 @@ fn main() {
         read_usize("stats.allocated".into()) > 0,
         read_usize("stats.allocated".into())
     );
-    println!("cpus: {}", std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0));
+    let ver = unsafe {
+        let p: *const libc::c_char =
+            tikv_jemalloc_ctl::raw::read(b"version\0").unwrap_or(std::ptr::null());
+        if p.is_null() {
+            "?".to_string()
+        } else {
+            std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned()
+        }
+    };
+    println!("jemalloc version: {ver}");
+    // NB: tikv-jemalloc-sys builds jemalloc with `--with-jemalloc-prefix=_rjem_`,
+    // so jemalloc reads `_RJEM_MALLOC_CONF`, NOT `MALLOC_CONF`. Setting the plain
+    // name silently does nothing — verified by the `opt.narenas` readback below.
+    let opt_narenas: u32 = unsafe { tikv_jemalloc_ctl::raw::read(b"opt.narenas\0").unwrap_or(0) };
+    println!(
+        "MALLOC_CONF={}  _RJEM_MALLOC_CONF={}",
+        std::env::var("MALLOC_CONF").unwrap_or_else(|_| "<unset>".into()),
+        std::env::var("_RJEM_MALLOC_CONF").unwrap_or_else(|_| "<unset>".into()),
+    );
+    println!("opt.narenas (effective) = {opt_narenas}   arenas.narenas at start = {}", narenas());
+    println!(
+        "cpus: {}  hard pinning: {}  loadavg: {}",
+        pin::available_cpus(),
+        if pin::SUPPORTED { "sched_setaffinity(2)" } else { "UNAVAILABLE (no-op)" },
+        pin::loadavg()
+    );
+
+    // `ARENA_MODE=e5b` runs only E5b, in a process whose arena count is exactly
+    // `narenas:1` + SHARDS explicit arenas — the shipping configuration.
+    if std::env::var("ARENA_MODE").as_deref() == Ok("e5b") {
+        let shards: usize = std::env::var("SHARDS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(8);
+        e5b_shipping_sample_cost(shards);
+        println!("\nloadavg at end: {}", pin::loadavg());
+        drop(_pin);
+        pin::report();
+        return;
+    }
 
     let _ = e1_binding_and_attribution();
     e4_tcache_composition();
     e5_stats_read_cost();
     e3_alloc_cost();
+
+    println!("\nloadavg at end: {}", pin::loadavg());
+    drop(_pin);
+    pin::report();
 }
