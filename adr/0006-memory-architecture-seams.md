@@ -1,0 +1,139 @@
+# Shard placement, buffer growth, and arena ownership are three seams, drawn before the first commit
+
+The memory architecture ruled in
+[`.scratch/memory-architecture/PRD.md`](../.scratch/memory-architecture/PRD.md) changes what a
+shard *is*: today it is a tokio task on a work-stealing runtime, and it becomes an OS thread
+with a pinned current-thread runtime and a dedicated jemalloc arena. Almost every consequence
+of that change — deterministic simulation, per-shard accounting, the no-foreign-frees rule —
+depends on decisions that are cheap to make now and expensive to retrofit, because they are
+decisions about *where a boundary is*, not about what happens inside one. The phase-1 spike
+([spike-report.md](../.scratch/memory-architecture/spike-report.md)) measured all three and
+each came back with a condition attached. This ADR records the three boundaries and the
+conditions.
+
+## 1. Shard placement goes through a `ShardExecutor` seam, from the first commit
+
+Shards are launched through an object-safe executor rather than a bare spawn, with two
+implementations: a real one that puts each shard on its own OS thread with a
+`Builder::new_current_thread()` runtime and a bound arena, and a simulation one that spawns
+each shard as a task on the caller's runtime — under turmoil, the sim host's single thread —
+and makes arena binding a **no-op**, reporting no arena rather than a fake one. The shard body
+is one piece of code shared by both.
+
+The seam is not an abstraction for its own sake; it is the only thing that keeps the
+simulation suite alive. A turmoil host is one thread with a virtual clock, and a shard on its
+own OS thread escapes both: it is no longer scheduled by the simulation and no longer sees
+simulated time, so determinism goes immediately. The spike's simulation implementation
+reproduced bit-identical execution traces across five runs of one seed while still exploring
+six distinct schedules across six seeds — determinism preserved *and* non-degenerate
+(spike-report §(c)).
+
+**From the first commit** is the operative half of the ruling. The seam must land as the
+introduction of the abstraction over today's behavior — real implementation spawns exactly
+what `server/shards.rs` spawns today, no threads, no arenas, no behavior change — and only
+then does the thread-per-core implementation grow inside it. This is the cheap order: the
+call sites move once, under a no-op change, rather than being rewritten under a change that
+also alters execution. Retrofitting the seam after shards are threads means doing both at
+once in a tree where the simulation suite is already red.
+
+There is precedent, which is why this is a widening of an established pattern rather than a
+new one. `frogdb-net` already exists to swap tokio and turmoil types at one import
+(`crates/net/src/lib.rs`, including the `spawn` that `server/shards.rs` uses), and the shard
+worker already carries a simulation-only determinism accommodation: under the turmoil feature
+its periodic-sweep timer branches are replaced by queued tick messages so the sweeps take a
+definite place in the shard's totally ordered queue. The executor is the third member of that
+family.
+
+The cost is a fidelity gap, and it is real enough to be written down in the contract rather
+than in a comment: after this lands, **turmoil tests production logic, not production
+execution shape.** [`specs/memory.md`](../specs/memory.md) states it and derives the rule that
+follows from it — allocator behavior, real memory-ordering effects, cross-core cost, and the
+absence of foreign-thread frees may not be forced by a simulation test, and each needs a
+real-thread harness instead. A later move to a completion-based backend (compio is natively
+thread-per-core, and has no turmoil equivalent) survives only if the seam is drawn at the
+executor rather than at tokio's types, which is a second reason to draw it exactly here.
+
+## 2. Every non-keyspace buffer growth goes through a `Budget` handle
+
+The per-core broker owns the budgets; each non-keyspace subsystem — network output, the
+replication backlog, the tracking table, the WAL channel, full-sync staging, transaction
+buffering — holds a handle and charges growth against it **before** the bytes exist. A charge
+that fails is a refusal handled at that seam: the subsystem sheds (drops the client, discards
+the buffered output) or backpressures (declines the write, stops reading), and it declares
+which. A structure that cannot charge cannot grow.
+
+The rule is worth exactly as much as its chokepoint, so it gets one, in the family documented
+in [`agents/seam-lints.md`](../agents/seam-lints.md): an invariant stated so a violation is a
+defect rather than a style opinion, a single type that satisfies it, a mechanical predicate
+over source text, one of the two shipped suppression idioms, and a ratchet — the lint lands
+with every unconverted buffer in a count-pinned allowlist so it can ship before the cleanup
+does, and entries burn down in batches. Checking the allowlist in both directions is the
+point: a buffer that gets converted has to leave the list, and a new violation inside an
+already-listed file fails just like a new file would.
+
+Why a lint rather than a type that makes the mistake unrepresentable: the buffers are
+heterogeneous — a `Vec` in a ring, a codec's write half, a channel's queue depth, a staging
+map — and no single wrapper type fits all of them without contorting each. What they *do*
+share is a syntactic growth site, which is what a grep-shaped gate is good at. The precedent
+in this repo is that the gates which stuck are the ones that pinned a call site, and the ones
+that had to pin a type did so because the invariant was about constructibility
+(`lint-status-sanitize`), which this one is not.
+
+This ruling is what closes the issue-66 bug class by construction rather than one buffer at a
+time: an unbounded structure is not a bug someone has to notice, it is a lint failure.
+
+## 3. Arena ownership: one arena per shard thread, bound once, never crossed
+
+Three rules, each measured:
+
+**One arena per shard thread, created with `arenas.create` and bound with `thread.arena`.**
+The spike's four-shard run attributed bytes to arenas exactly: three of four arenas matched
+their expected byte count to the byte, the fourth to within 0.19 %, and no arena reported a
+single byte belonging to another shard's thread. Binding costs nothing measurable — every
+allocation-cost ratio against the default arena landed between 0.97× and 1.00× across sizes
+from 64 B to 64 KB, because the thread cache is the fast path either way and is per-thread in
+both shapes. Disabling the thread cache, by contrast, costs 2.3–2.9× on small sizes, so the
+per-shard arena and the per-thread cache are orthogonal mechanisms that compose, and the cache
+stays on (spike-report §(a) E1/E2/E3).
+
+**Bound once, at thread start, before the thread allocates anything.** Rebinding
+`thread.arena` does not flush the thread cache, so a rebind bleeds: in the spike, a rebind
+charged 1.00 % of the objects allocated afterward to the *old* arena. With an explicit
+`thread.tcache.flush` at the rebind the bleed is 0 bytes exactly. Bind-once is what the
+thread-per-core design does naturally; if a rebind is ever needed — shard migration,
+teardown — it is a `thread.arena` write **plus** a cache flush, or the no-cross-arena-bleed
+invariant is quietly false by a percent (spike-report §(a) E4).
+
+**No cross-core refcounts, no foreign-thread frees.** Values use a same-core, non-atomic
+refcount; a cross-slot operation hops to the owning core and copies at the boundary rather
+than sharing a pointer. Arenas do not enforce this — nothing stops a pointer crossing a
+thread — so it is a separate invariant with its own real-thread assertion, and the spike's
+cross-bleed measurement is the executable form of it. It cannot be tested under simulation,
+where it is trivially true because there is one thread.
+
+**Accounting is a sampled upper bound plus an exact per-request counter.** Arena statistics
+are refreshed by a `mallctl` epoch advance that merges every arena, costing about 2.5 µs per
+arena per advance, and they overstate live bytes by whatever is parked in a thread cache — in
+the spike, an arena still reported 25,600 B after every object charged to it had been freed,
+going to zero only on an explicit cache flush. So the broker advances the epoch at 10–100 Hz,
+not per command, and rides `thread.allocated` (23 ns, exact, per thread) in between, with
+periodic reconciliation. A thread-per-core FrogDB also sets `narenas:1` in `MALLOC_CONF` and
+creates exactly N shard arenas rather than accepting jemalloc's default of four per CPU, which
+cuts epoch cost roughly fivefold at eight shards (spike-report §(a) E4/E5). The direction of
+the error is the safe one — an upper bound refuses slightly early — and
+[`specs/memory.md`](../specs/memory.md)'s OOM rows are to be written against what a sampled
+upper bound can promise, not against an exact per-command reading nothing can implement.
+
+## What this ADR does not rule
+
+The runtime shape itself is ruled in the PRD, not here, with one amendment the spike forced
+and that belongs on the record next to these seams: **R4 does not stand alone.** Per-shard
+current-thread runtimes *without* connection→core pinning measured 3.7× worse throughput and
+5× worse tail latency than today's work-stealing runtime, because every request then pays two
+cross-thread wakeups that work-stealing frequently avoids by co-scheduling the connection and
+the shard on one worker. With pinning, the same shape is 2.3× throughput and 7.5× better p99
+on *half* the OS threads, and a shard-affine-keys control rules out cache locality as the
+explanation. So R2, R3 and R4 ship together or not at all, and a phase plan that splits them
+ships a large regression in between (spike-report §(b)). The corollary sizes a design detail
+these seams have to live with: a cross-slot hop costs roughly 8×, and it is the thread hop,
+not the copy, that costs it.

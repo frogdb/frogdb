@@ -15,4 +15,14 @@ Phase-1 de-risk spike: [spike-report.md](spike-report.md) — measured answers f
 (per-shard arenas), R3/R4 (runtime shape), and turmoil fidelity, with go/no-go verdicts.
 Prototype code: [spike/](spike/) (throwaway, not a workspace member).
 
-Issues: none yet — design-only ruling; issues get filed at implementation kickoff.
+Spec draft: [`specs/memory.md`](../../specs/memory.md) — `Status: DRAFT`, scope statement and
+invariant vocabulary only, deliberately zero FM rows (a row arrives with its forcing test). It
+becomes the fifth locked area under R15 once the broker/table crates exist and pass their
+mutation gate.
+
+Boundary ADR: [`adr/0006-memory-architecture-seams.md`](../../adr/0006-memory-architecture-seams.md)
+— the three seams drawn before the first commit: the `ShardExecutor` (real thread-per-core vs
+turmoil sim), the `Budget` chokepoint and its future seam lint, and arena ownership
+(one per shard thread, bound once, sampled upper-bound accounting).
+
+Issues: 01-06 filed (phases 1-2); phases 3-6 filed after these land.
