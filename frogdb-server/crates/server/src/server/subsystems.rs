@@ -38,6 +38,10 @@ pub(super) struct SubsystemHandles {
     /// an arena to read (simulation, or a build with no arena-capable
     /// allocator).
     pub arena_sampler: Option<JoinHandle<()>>,
+    /// Ticks RocksDB's own memory counters and reconciles the persistence
+    /// budget charge against them. Aborted with the other collectors so no tick
+    /// can touch the store once shutdown has begun.
+    pub rocksdb_memory_collector: Option<JoinHandle<()>>,
     pub cluster_bus: Option<JoinHandle<()>>,
     pub replica: Option<(JoinHandle<()>, JoinHandle<()>)>,
     pub acceptor: JoinHandle<()>,
@@ -348,20 +352,25 @@ impl Server {
         // The ticker holds a `Weak`, never an `Arc`: a strong handle here would
         // outlive shutdown and keep the RocksDB instance — and its `LOCK` file
         // — alive, so a restart inside the same process fails to open the
-        // database. The loop ends when the last real owner drops the store.
-        if self.prometheus_recorder.is_some()
-            && let Some(rocks) = self.rocks_store.as_ref()
-        {
-            let rocks = Arc::downgrade(rocks);
-            tokio::spawn(async move {
-                let mut ticker = tokio::time::interval(Duration::from_secs(5));
-                loop {
-                    ticker.tick().await;
-                    let Some(rocks) = rocks.upgrade() else { break };
-                    rocks.record_memory_metrics();
-                }
-            });
-        }
+        // database. Shutdown aborts the handle, and the loop also ends on its
+        // own once the last real owner drops the store.
+        let rocksdb_memory_collector_handle = match (
+            self.prometheus_recorder.is_some(),
+            self.rocks_store.as_ref(),
+        ) {
+            (true, Some(rocks)) => {
+                let rocks = Arc::downgrade(rocks);
+                Some(tokio::spawn(async move {
+                    let mut ticker = tokio::time::interval(Duration::from_secs(5));
+                    loop {
+                        ticker.tick().await;
+                        let Some(rocks) = rocks.upgrade() else { break };
+                        rocks.record_memory_metrics();
+                    }
+                }))
+            }
+            _ => None,
+        };
 
         // Start version metrics collector (records active_version, mixed_version, gate status)
         if self.prometheus_recorder.is_some() {
@@ -741,6 +750,7 @@ impl Server {
             http_server: http_server_handle,
             system_collector: system_collector_handle,
             arena_sampler: arena_sampler_handle,
+            rocksdb_memory_collector: rocksdb_memory_collector_handle,
             cluster_bus: cluster_bus_handle,
             replica: replica_handle,
             acceptor: acceptor_handle,
@@ -771,6 +781,14 @@ impl Server {
         }
         #[cfg(not(feature = "turmoil"))]
         if let Some(handle) = handles.tls_acceptor {
+            handle.abort();
+        }
+
+        // Stop the RocksDB memory collector before the shards drain. Its tick
+        // upgrades a `Weak` to the store for the length of one sample; ending
+        // the ticker here keeps that window well clear of the teardown that
+        // drops the store and releases its `LOCK`.
+        if let Some(handle) = handles.rocksdb_memory_collector {
             handle.abort();
         }
 
