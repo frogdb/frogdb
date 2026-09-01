@@ -133,6 +133,10 @@ test-coverage-depth:
 test-continuation-lock-gate:
     ./scripts/tests/test_continuation_lock_gate.py
 
+# Unit tests for the budget-growth gate's Rust scanning (struct/impl attribution)
+test-budget-growth:
+    ./scripts/tests/test_budget_growth.py
+
 # Run concurrency tests (Shuttle + Turmoil + generated workload sweep)
 #
 # The generated-workload step filters on the whole `concurrency_workload` module, not just its
@@ -802,7 +806,7 @@ lint crate="": lint-gates lint-turmoil-features lint-turmoil lint-spec quint-che
 # second (see agents/seam-lints.md) and is cheap enough to run
 # unconditionally on every commit, unlike `lint` (clippy compiles the
 # workspace). Wired into lefthook pre-commit with no CLAUDECODE skip.
-lint-gates: lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-durable-ack lint-nested-config lint-error-sanitize lint-status-sanitize lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate lint-continuation-lock lint-script-write-seam lint-command-admission lint-ship-cmd-full
+lint-gates: lint-budget-growth lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-durable-ack lint-nested-config lint-error-sanitize lint-status-sanitize lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate lint-continuation-lock lint-script-write-seam lint-command-admission lint-ship-cmd-full
     @echo "OK: seam-lint gates passed"
 
 # Gate: turmoil-featured test bodies (frogdb-server/crates/server/tests/simulation.rs)
@@ -1855,6 +1859,14 @@ lint-status-sanitize:
 # forces a classification. See scripts/continuation-lock-gate.py.
 lint-continuation-lock:
     ./scripts/continuation-lock-gate.py
+
+# Gate: a structure that cannot charge cannot grow (adr/0006 §2). Every
+# non-keyspace buffer field a struct grows must be covered by a
+# `frogdb_memory::Charge`/`Budget` the same struct owns; unconverted buffers are
+# pinned by file and count in a ratcheted allowlist checked in both directions.
+# See scripts/budget-growth.py.
+lint-budget-growth:
+    ./scripts/budget-growth.py
 
 # Gate: a script's writes reach the store only through ShardWriteSeam::admit
 # (specs/txn.md FM-TXN-051). `ScriptCommandGate::dispatch` must admit before it

@@ -1813,6 +1813,7 @@ dependencies = [
  "dashmap",
  "frogdb-acl",
  "frogdb-cluster",
+ "frogdb-memory",
  "frogdb-persistence",
  "frogdb-protocol",
  "frogdb-replication",

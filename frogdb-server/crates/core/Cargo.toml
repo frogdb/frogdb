@@ -38,6 +38,7 @@ frogdb-persistence.workspace = true
 frogdb-acl.workspace = true
 frogdb-scripting.workspace = true
 frogdb-search.workspace = true
+frogdb-memory.workspace = true
 bytes.workspace = true
 # `FutureExt::catch_unwind` — the shard boundary's panic isolation
 # (`shard/panic_guard.rs`).

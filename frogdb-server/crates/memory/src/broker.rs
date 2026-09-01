@@ -1,6 +1,7 @@
 //! The per-core memory broker.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::arena::{ArenaSampler, NoArenaReading};
 use crate::budget::{Budget, Disposition, Subsystem};
@@ -21,13 +22,17 @@ pub mod defaults {
 }
 
 /// One budget slot in the broker's dense table.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct Slot {
     budget: Budget,
     /// Whether a subsystem has actually taken this budget. An unopened slot is
     /// reported so an operator can see the subsystem exists and is not yet
     /// charging, rather than seeing nothing and concluding it is free.
     opened: bool,
+    /// Refusals already handed to [`MemoryBroker::drain_refusals`], so a
+    /// caller feeding a monotonic counter gets an increment without keeping a
+    /// last-emitted snapshot of its own.
+    reported_refusals: AtomicU64,
 }
 
 /// The per-core owner of every [`Budget`] on that core, and the one component
@@ -68,6 +73,7 @@ impl MemoryBroker {
                 // instead of running unbounded.
                 budget: Budget::new(subsystem, Disposition::Backpressure, 0),
                 opened: false,
+                reported_refusals: AtomicU64::new(0),
             })
             .collect();
         Self { core, slots, arena }
@@ -93,8 +99,25 @@ impl MemoryBroker {
         self.slots[subsystem.index()] = Slot {
             budget: budget.clone(),
             opened: true,
+            // The fresh budget's refusal count starts at zero, so the reported
+            // watermark has to as well or the first drain would under-report.
+            reported_refusals: AtomicU64::new(0),
         };
         budget
+    }
+
+    /// Refusals since the last call, per subsystem. Feeds a monotonic counter
+    /// with `inc_by`; subsystems with no new refusals are omitted.
+    pub fn drain_refusals(&self) -> Vec<(Subsystem, u64)> {
+        self.slots
+            .iter()
+            .filter_map(|slot| {
+                let total = slot.budget.refusals();
+                let reported = slot.reported_refusals.swap(total, Ordering::Relaxed);
+                let delta = total.saturating_sub(reported);
+                (delta > 0).then(|| (slot.budget.subsystem(), delta))
+            })
+            .collect()
     }
 
     /// The handle for `subsystem`, whether or not it has been opened. An
@@ -259,6 +282,41 @@ mod tests {
         let budget = broker.open(Subsystem::NetworkOutput, 10, Disposition::Shed);
         assert!(budget.charge(11).is_err());
         assert_eq!(broker.breakdown().get(Subsystem::NetworkOutput).refusals, 1);
+    }
+
+    #[test]
+    fn refusals_drain_as_increments() {
+        let mut broker = MemoryBroker::detached(0);
+        let budget = broker.open(Subsystem::NetworkOutput, 10, Disposition::Shed);
+
+        assert!(broker.drain_refusals().is_empty(), "nothing yet");
+
+        assert!(budget.charge(11).is_err());
+        assert!(budget.charge(11).is_err());
+        assert_eq!(broker.drain_refusals(), vec![(Subsystem::NetworkOutput, 2)]);
+        assert!(
+            broker.drain_refusals().is_empty(),
+            "a drained refusal is not reported twice"
+        );
+
+        assert!(budget.charge(11).is_err());
+        assert_eq!(broker.drain_refusals(), vec![(Subsystem::NetworkOutput, 1)]);
+    }
+
+    #[test]
+    fn reopening_resets_the_drain_watermark() {
+        let mut broker = MemoryBroker::detached(0);
+        let budget = broker.open(Subsystem::TxnBuffering, 10, Disposition::Backpressure);
+        assert!(budget.charge(11).is_err());
+        assert_eq!(broker.drain_refusals(), vec![(Subsystem::TxnBuffering, 1)]);
+
+        let reopened = broker.open(Subsystem::TxnBuffering, 10, Disposition::Backpressure);
+        assert!(reopened.charge(11).is_err());
+        assert_eq!(
+            broker.drain_refusals(),
+            vec![(Subsystem::TxnBuffering, 1)],
+            "the fresh budget's first refusal is still an increment of one"
+        );
     }
 
     #[test]

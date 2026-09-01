@@ -9,12 +9,49 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use bytes::Bytes;
+use frogdb_memory::{Budget, Charge};
 use tokio::sync::mpsc;
 
 use crate::pubsub::ConnId;
 
 /// Default maximum number of tracked keys per shard (1 million).
+///
+/// This is a **ceiling**, not a budget, in the sense
+/// [`specs/memory.md`](../../../../specs/memory.md) gives those words: a
+/// constant bound on one quantity that exists for Redis compatibility
+/// (`tracking-table-max-keys`). The live allowance that decides whether the
+/// table may actually grow is the `ClientTracking` [`Budget`]; see
+/// [`TrackingTable`].
 pub const DEFAULT_TRACKING_TABLE_MAX_KEYS: usize = 1_000_000;
+
+/// Rough per-entry hash-map overhead, in bytes. Shared by every charge and
+/// release site so the table's charge and its recomputed footprint agree.
+const ENTRY_OVERHEAD: usize = 64;
+
+/// A `key_to_clients` entry holding no connections yet.
+const fn key_entry_cost(key_len: usize) -> usize {
+    key_len + ENTRY_OVERHEAD
+}
+
+/// One connection id inside a key's interest set.
+const fn conn_ref_cost() -> usize {
+    std::mem::size_of::<ConnId>()
+}
+
+/// A `client_to_keys` entry holding no keys yet.
+const fn client_entry_cost() -> usize {
+    ENTRY_OVERHEAD
+}
+
+/// One key inside a connection's reverse-index set.
+const fn client_key_cost(key_len: usize) -> usize {
+    key_len
+}
+
+/// One `lru_order` slot.
+const fn lru_entry_cost(key_len: usize) -> usize {
+    key_len + std::mem::size_of::<Bytes>()
+}
 
 /// Sender for delivering invalidation messages to connections.
 pub type InvalidationSender = mpsc::UnboundedSender<InvalidationMessage>;
@@ -75,7 +112,41 @@ impl InvalidationRegistry {
 ///
 /// When a connection reads a key with `track_reads=true`, the key is recorded.
 /// When that key is later written, all interested connections receive an invalidation.
-/// LRU eviction caps the table at `max_keys` entries per shard.
+///
+/// # Bounded by a budget, capped by a ceiling
+///
+/// Two independent bounds apply, and they are different kinds of thing
+/// ([`specs/memory.md`](../../../../specs/memory.md), "ceiling vs budget"):
+///
+/// * `max_keys` is the **ceiling** — Redis's `tracking-table-max-keys`, a
+///   constant on one quantity, kept for compatibility. It says nothing about
+///   what this node can afford.
+/// * The `ClientTracking` [`Budget`] is the **budget** — the live byte
+///   allowance this shard's broker issued. Every growth of this table is
+///   charged against it *before* the bytes exist, which is the invariant
+///   [adr/0006](../../../../adr/0006-memory-architecture-seams.md) §2 rules
+///   and the reason the `lru_order` unbounded-growth class
+///   (round-2 issue 66) cannot come back: `lru_order` is charged like every
+///   other field, so growing it outside accounting is not something this type
+///   can express.
+///
+/// # Disposition: shed
+///
+/// A refused charge sheds — the table evicts its oldest tracked key, sending
+/// that key's clients an invalidation exactly as an over-capacity eviction
+/// does, and retries. Shedding a tracked key is safe by construction: a client
+/// that receives an invalidation drops its cached copy, so the worst outcome
+/// is a cache miss. If the table is empty and the entry still does not fit —
+/// a budget smaller than a single key's footprint — the read is not recorded
+/// at all and [`TrackingTable::budget_declines`] counts it.
+///
+/// # Accounting
+///
+/// [`TrackingTable::memory_usage`] reads the charge, so it is O(1) and is by
+/// construction the same number the broker's breakdown shows. The O(n)
+/// recomputation it replaced survives as the test-only ground truth
+/// `recomputed_memory_usage`, which a reconciliation test asserts the
+/// incremental accounting against.
 #[derive(Debug)]
 pub struct TrackingTable {
     /// key → set of interested connection IDs.
@@ -88,19 +159,31 @@ pub struct TrackingTable {
     lru_order: VecDeque<Bytes>,
     /// Number of `lru_order` entries known to be stale since the last compaction.
     stale_count: usize,
-    /// Maximum number of tracked keys.
+    /// Maximum number of tracked keys — the Redis-compatibility ceiling.
     max_keys: usize,
+    /// The shard's `ClientTracking` allowance. Every field above grows only
+    /// after this charge does.
+    charge: Charge,
+    /// Keys shed to satisfy a refused charge, since the last drain.
+    budget_evictions: u64,
+    /// Reads not recorded because an empty table still could not fit them,
+    /// since the last drain.
+    budget_declines: u64,
 }
 
 impl TrackingTable {
-    /// Create a new tracking table with the given capacity.
-    pub fn new(max_keys: usize) -> Self {
+    /// Create a new tracking table with the given key ceiling, charging its
+    /// growth against `budget`.
+    pub fn new(max_keys: usize, budget: &Budget) -> Self {
         Self {
             key_to_clients: HashMap::new(),
             client_to_keys: HashMap::new(),
             lru_order: VecDeque::new(),
             stale_count: 0,
             max_keys,
+            charge: budget.open_charge(),
+            budget_evictions: 0,
+            budget_declines: 0,
         }
     }
 
@@ -118,9 +201,17 @@ impl TrackingTable {
     /// Drop every stale (no-longer-live) entry from `lru_order`.
     fn compact_lru(&mut self) {
         let key_to_clients = &self.key_to_clients;
-        self.lru_order
-            .retain(|key| key_to_clients.contains_key(key));
+        let mut freed = 0usize;
+        self.lru_order.retain(|key| {
+            if key_to_clients.contains_key(key) {
+                true
+            } else {
+                freed += lru_entry_cost(key.len());
+                false
+            }
+        });
         self.stale_count = 0;
+        self.charge.shrink(freed as u64);
     }
 
     /// Number of entries currently in `lru_order`, stale entries included.
@@ -131,31 +222,90 @@ impl TrackingTable {
         self.lru_order.len()
     }
 
-    /// Approximate heap footprint of this table, for `MEMORY STATS`/`INFO`
-    /// accounting. Cheap and approximate, not precise allocator accounting —
-    /// but it keeps the table's growth (including stale `lru_order` entries
-    /// pending compaction) from being invisible to the operator.
+    /// Heap footprint of this table, for `MEMORY STATS`/`INFO` accounting.
+    ///
+    /// This is the table's charge against the `ClientTracking` budget, so the
+    /// operator's memory figure and the broker's breakdown cannot disagree.
+    /// It is an estimate of the heap cost of the entries — a per-entry
+    /// overhead constant, not allocator truth — but it is the *same* estimate
+    /// the budget enforces, and it includes stale `lru_order` entries pending
+    /// compaction.
     pub(crate) fn memory_usage(&self) -> usize {
-        const ENTRY_OVERHEAD: usize = 64;
+        self.charge.bytes() as usize
+    }
+
+    /// The O(n) ground truth [`TrackingTable::memory_usage`]'s incremental
+    /// accounting must equal. Test-only: this is what the charge is checked
+    /// against, not what production reads.
+    #[cfg(test)]
+    pub(crate) fn recomputed_memory_usage(&self) -> usize {
         let key_to_clients: usize = self
             .key_to_clients
             .iter()
-            .map(|(k, v)| k.len() + ENTRY_OVERHEAD + v.len() * std::mem::size_of::<ConnId>())
+            .map(|(k, v)| key_entry_cost(k.len()) + v.len() * conn_ref_cost())
             .sum();
         let client_to_keys: usize = self
             .client_to_keys
             .values()
-            .map(|keys| ENTRY_OVERHEAD + keys.iter().map(Bytes::len).sum::<usize>())
+            .map(|keys| {
+                client_entry_cost() + keys.iter().map(|k| client_key_cost(k.len())).sum::<usize>()
+            })
             .sum();
         let lru_order: usize = self
             .lru_order
             .iter()
-            .map(|key| key.len() + std::mem::size_of::<Bytes>())
+            .map(|key| lru_entry_cost(key.len()))
             .sum();
         key_to_clients + client_to_keys + lru_order
     }
 
-    /// Record that `conn_id` read this key. LRU-evict if over capacity.
+    /// Keys shed because the budget refused a charge, and reads declined
+    /// outright, since the last call. Draining rather than reporting an
+    /// absolute lets the caller feed a Prometheus counter with `inc_by`
+    /// without holding a last-emitted snapshot of its own.
+    pub(crate) fn drain_budget_shed_counters(&mut self) -> (u64, u64) {
+        (
+            std::mem::take(&mut self.budget_evictions),
+            std::mem::take(&mut self.budget_declines),
+        )
+    }
+
+    /// Bytes this table would have to charge to record `conn_id`'s read of
+    /// `key`. Zero when the read adds nothing (an idempotent re-read).
+    fn insertion_cost(&self, key: &Bytes, conn_id: ConnId) -> usize {
+        let clients = self.key_to_clients.get(key);
+        let is_new_key = clients.is_none();
+        let conn_new_for_key = clients.is_none_or(|set| !set.contains(&conn_id));
+
+        let tracked = self.client_to_keys.get(&conn_id);
+        let client_entry_new = tracked.is_none();
+        let key_new_for_client = tracked.is_none_or(|set| !set.contains(key));
+
+        let mut cost = 0;
+        if is_new_key {
+            // A new key costs its `key_to_clients` entry *and* its `lru_order`
+            // slot. Charging the LRU slot here is what makes the issue-66
+            // growth class unrepresentable.
+            cost += key_entry_cost(key.len()) + lru_entry_cost(key.len());
+        }
+        if conn_new_for_key {
+            cost += conn_ref_cost();
+        }
+        if client_entry_new {
+            cost += client_entry_cost();
+        }
+        if key_new_for_client {
+            cost += client_key_cost(key.len());
+        }
+        cost
+    }
+
+    /// Record that `conn_id` read this key.
+    ///
+    /// Charges the `ClientTracking` budget before inserting anything. On a
+    /// refusal the table sheds — evicts its oldest tracked key, invalidating
+    /// that key's clients — and retries, until either the charge succeeds or
+    /// there is nothing left to shed.
     pub fn record_read(&mut self, key: &[u8], conn_id: ConnId, registry: &InvalidationRegistry) {
         // Only record if the connection is registered for tracking
         if !registry.contains(&conn_id) {
@@ -163,6 +313,31 @@ impl TrackingTable {
         }
 
         let key_bytes = Bytes::copy_from_slice(key);
+
+        loop {
+            // Recomputed each pass: shedding removes entries, so a charge that
+            // was refused may need *more* bytes on the retry, never fewer.
+            let cost = self.insertion_cost(&key_bytes, conn_id) as u64;
+            if cost == 0 {
+                return; // idempotent re-read: nothing grows, nothing to charge
+            }
+            match self.charge.grow(cost) {
+                Ok(()) => break,
+                Err(_refused) => {
+                    // Declared disposition: shed.
+                    if self.evict_lru(registry) {
+                        self.budget_evictions += 1;
+                    } else {
+                        // Nothing left to shed and it still does not fit: the
+                        // whole budget is smaller than one entry. Refuse to
+                        // grow rather than charge anyway.
+                        self.budget_declines += 1;
+                        return;
+                    }
+                }
+            }
+        }
+
         let is_new_key = !self.key_to_clients.contains_key(&key_bytes);
 
         // Add conn_id to the key's interest set
@@ -181,11 +356,36 @@ impl TrackingTable {
         if is_new_key {
             self.lru_order.push_back(key_bytes);
 
-            // Evict if over capacity
+            // Evict if over the Redis-compatibility key ceiling
             while self.key_to_clients.len() > self.max_keys {
                 self.evict_lru(registry);
             }
         }
+    }
+
+    /// Remove `key`'s entry from `key_to_clients` and the reverse index,
+    /// releasing the charge for everything removed. Returns the connections
+    /// that were interested, or `None` if the key was not live.
+    ///
+    /// Deliberately does **not** touch `lru_order` or `stale_count`: the two
+    /// callers disagree about that half (an eviction has already popped the
+    /// LRU slot; an invalidation leaves it behind as stale).
+    fn take_key_entry(&mut self, key: &Bytes) -> Option<HashSet<ConnId>> {
+        let conn_ids = self.key_to_clients.remove(key)?;
+        let mut freed = key_entry_cost(key.len()) + conn_ids.len() * conn_ref_cost();
+        for cid in &conn_ids {
+            if let Some(keys_set) = self.client_to_keys.get_mut(cid) {
+                if keys_set.remove(key) {
+                    freed += client_key_cost(key.len());
+                }
+                if keys_set.is_empty() {
+                    self.client_to_keys.remove(cid);
+                    freed += client_entry_cost();
+                }
+            }
+        }
+        self.charge.shrink(freed as u64);
+        Some(conn_ids)
     }
 
     /// Invalidate tracked keys after a write.
@@ -202,7 +402,10 @@ impl TrackingTable {
     ) {
         for key in keys {
             let key_bytes = Bytes::copy_from_slice(key);
-            if let Some(conn_ids) = self.key_to_clients.remove(&key_bytes) {
+            // `take_key_entry` releases the charge for the entry and its
+            // reverse-index rows; the key's `lru_order` slot stays behind as a
+            // stale entry (still charged) until `compact_lru` reclaims it.
+            if let Some(conn_ids) = self.take_key_entry(&key_bytes) {
                 for &cid in &conn_ids {
                     // NOLOOP: skip sending to the writer if their noloop flag is set
                     if cid == writer_conn_id && registry.get(&cid).is_some_and(|t| t.noloop) {
@@ -214,16 +417,6 @@ impl TrackingTable {
                         let _ = tracked
                             .sender
                             .send(InvalidationMessage::Keys(vec![key_bytes.clone()]));
-                    }
-                }
-
-                // Clean up reverse index
-                for cid in &conn_ids {
-                    if let Some(keys_set) = self.client_to_keys.get_mut(cid) {
-                        keys_set.remove(&key_bytes);
-                        if keys_set.is_empty() {
-                            self.client_to_keys.remove(cid);
-                        }
                     }
                 }
 
@@ -242,29 +435,43 @@ impl TrackingTable {
         self.client_to_keys.clear();
         self.lru_order.clear();
         self.stale_count = 0;
+        // Everything the table held is gone, so the whole charge goes back.
+        self.charge.shrink(self.charge.bytes());
     }
 
     /// Remove all tracking entries for a disconnected connection.
     pub fn remove_connection(&mut self, conn_id: ConnId) {
         // Use the reverse index for O(1) cleanup
         if let Some(keys) = self.client_to_keys.remove(&conn_id) {
+            let mut freed = client_entry_cost();
             for key in keys {
+                freed += client_key_cost(key.len());
                 if let Some(clients) = self.key_to_clients.get_mut(&key) {
-                    clients.remove(&conn_id);
+                    if clients.remove(&conn_id) {
+                        freed += conn_ref_cost();
+                    }
                     if clients.is_empty() {
                         self.key_to_clients.remove(&key);
+                        freed += key_entry_cost(key.len());
+                        // `mark_stale` may compact, which shrinks the charge
+                        // for the LRU slots it drops — a disjoint quantity
+                        // from the `freed` running total.
                         self.mark_stale();
                     }
                 }
             }
+            self.charge.shrink(freed as u64);
         }
     }
 
-    /// Evict the oldest key from the LRU, sending invalidation to interested clients.
-    fn evict_lru(&mut self, registry: &InvalidationRegistry) {
+    /// Evict the oldest key from the LRU, sending invalidation to interested
+    /// clients. Returns whether a live key was actually evicted — `false`
+    /// means the table had nothing left to shed.
+    fn evict_lru(&mut self, registry: &InvalidationRegistry) -> bool {
         while let Some(key) = self.lru_order.pop_front() {
+            self.charge.shrink(lru_entry_cost(key.len()) as u64);
             // Skip stale entries (already removed by invalidate_keys or remove_connection)
-            if let Some(conn_ids) = self.key_to_clients.remove(&key) {
+            if let Some(conn_ids) = self.take_key_entry(&key) {
                 // Send invalidation to all interested clients
                 for &cid in &conn_ids {
                     if let Some(tracked) = registry.get(&cid) {
@@ -273,21 +480,13 @@ impl TrackingTable {
                             .send(InvalidationMessage::Keys(vec![key.clone()]));
                     }
                 }
-                // Clean up reverse index
-                for cid in &conn_ids {
-                    if let Some(keys_set) = self.client_to_keys.get_mut(cid) {
-                        keys_set.remove(&key);
-                        if keys_set.is_empty() {
-                            self.client_to_keys.remove(cid);
-                        }
-                    }
-                }
-                return; // Evicted one real key
+                return true; // Evicted one real key
             }
             // Key wasn't in key_to_clients — it was already stale (invalidated
             // or its owning connection removed). Account for it and continue.
             self.stale_count = self.stale_count.saturating_sub(1);
         }
+        false
     }
 }
 
@@ -392,7 +591,21 @@ impl BroadcastTable {
 
 #[cfg(test)]
 mod tests {
+    use frogdb_memory::{Disposition, Subsystem};
+
     use super::*;
+
+    /// A table whose budget is effectively unbounded, for tests about the
+    /// `max_keys` ceiling rather than the budget.
+    fn test_table(max_keys: usize) -> TrackingTable {
+        budgeted_table(max_keys, u64::MAX).0
+    }
+
+    /// A table plus the budget backing it, for tests that drive the budget.
+    fn budgeted_table(max_keys: usize, limit_bytes: u64) -> (TrackingTable, Budget) {
+        let budget = Budget::new(Subsystem::ClientTracking, Disposition::Shed, limit_bytes);
+        (TrackingTable::new(max_keys, &budget), budget)
+    }
 
     fn make_registry_with(
         entries: Vec<(ConnId, bool)>,
@@ -413,7 +626,7 @@ mod tests {
     #[test]
     fn test_record_read_and_invalidate() {
         let (registry, mut rxs) = make_registry_with(vec![(1, false)]);
-        let mut table = TrackingTable::new(1000);
+        let mut table = test_table(1000);
 
         // Record a read
         table.record_read(b"foo", 1, &registry);
@@ -444,7 +657,7 @@ mod tests {
     #[test]
     fn test_noloop_skips_writer() {
         let (registry, mut rxs) = make_registry_with(vec![(1, true)]);
-        let mut table = TrackingTable::new(1000);
+        let mut table = test_table(1000);
 
         table.record_read(b"foo", 1, &registry);
 
@@ -458,7 +671,7 @@ mod tests {
     #[test]
     fn test_noloop_includes_other_readers() {
         let (registry, mut rxs) = make_registry_with(vec![(1, true), (2, false)]);
-        let mut table = TrackingTable::new(1000);
+        let mut table = test_table(1000);
 
         table.record_read(b"foo", 1, &registry);
         table.record_read(b"foo", 2, &registry);
@@ -477,7 +690,7 @@ mod tests {
     #[test]
     fn test_lru_eviction() {
         let (registry, mut rxs) = make_registry_with(vec![(1, false)]);
-        let mut table = TrackingTable::new(2); // Max 2 keys
+        let mut table = test_table(2); // Max 2 keys
 
         table.record_read(b"a", 1, &registry);
         table.record_read(b"b", 1, &registry);
@@ -503,7 +716,7 @@ mod tests {
     #[test]
     fn test_evict_lru_skips_stale_entries() {
         let (registry, mut rxs) = make_registry_with(vec![(1, false)]);
-        let mut table = TrackingTable::new(3); // Max 3 keys
+        let mut table = test_table(3); // Max 3 keys
 
         table.record_read(b"a", 1, &registry);
         table.record_read(b"b", 1, &registry);
@@ -543,7 +756,7 @@ mod tests {
     #[test]
     fn test_lru_order_bounded_after_invalidate() {
         let (registry, _rxs) = make_registry_with(vec![(1, false)]);
-        let mut table = TrackingTable::new(DEFAULT_TRACKING_TABLE_MAX_KEYS);
+        let mut table = test_table(DEFAULT_TRACKING_TABLE_MAX_KEYS);
 
         for i in 0..10_000u32 {
             let key = i.to_be_bytes();
@@ -564,7 +777,7 @@ mod tests {
     #[test]
     fn test_lru_order_bounded_after_remove_connection() {
         let (registry, _rxs) = make_registry_with(vec![(1, false)]);
-        let mut table = TrackingTable::new(DEFAULT_TRACKING_TABLE_MAX_KEYS);
+        let mut table = test_table(DEFAULT_TRACKING_TABLE_MAX_KEYS);
 
         for i in 0..10_000u32 {
             let key = i.to_be_bytes();
@@ -582,7 +795,7 @@ mod tests {
     #[test]
     fn test_remove_connection() {
         let (registry, _rxs) = make_registry_with(vec![(1, false), (2, false)]);
-        let mut table = TrackingTable::new(1000);
+        let mut table = test_table(1000);
 
         table.record_read(b"foo", 1, &registry);
         table.record_read(b"foo", 2, &registry);
@@ -612,7 +825,7 @@ mod tests {
     #[test]
     fn test_duplicate_reads_idempotent() {
         let (registry, _rxs) = make_registry_with(vec![(1, false)]);
-        let mut table = TrackingTable::new(1000);
+        let mut table = test_table(1000);
 
         table.record_read(b"foo", 1, &registry);
         table.record_read(b"foo", 1, &registry);
@@ -624,7 +837,7 @@ mod tests {
     #[test]
     fn test_flush_all() {
         let (registry, mut rxs) = make_registry_with(vec![(1, false), (2, false)]);
-        let mut table = TrackingTable::new(1000);
+        let mut table = test_table(1000);
 
         table.record_read(b"foo", 1, &registry);
         table.record_read(b"bar", 2, &registry);
@@ -650,7 +863,7 @@ mod tests {
     #[test]
     fn test_closed_sender_no_panic() {
         let (registry, rxs) = make_registry_with(vec![(1, false)]);
-        let mut table = TrackingTable::new(1000);
+        let mut table = test_table(1000);
 
         table.record_read(b"foo", 1, &registry);
 
@@ -665,7 +878,7 @@ mod tests {
     #[test]
     fn test_unregistered_connection_not_recorded() {
         let (registry, _rxs) = make_registry_with(vec![(1, false)]);
-        let mut table = TrackingTable::new(1000);
+        let mut table = test_table(1000);
 
         // Conn 99 is not registered — record_read should be a no-op
         table.record_read(b"foo", 99, &registry);
@@ -675,7 +888,7 @@ mod tests {
     #[test]
     fn test_invalidate_nonexistent_key() {
         let (registry, mut rxs) = make_registry_with(vec![(1, false)]);
-        let mut table = TrackingTable::new(1000);
+        let mut table = test_table(1000);
 
         // Invalidating a key that's not tracked should be a no-op
         table.invalidate_keys(&[b"nonexistent"], 2, &registry);
@@ -816,5 +1029,145 @@ mod tests {
         // Both should receive
         assert!(rxs[0].try_recv().is_ok());
         assert!(rxs[1].try_recv().is_ok());
+    }
+
+    fn tracked(table: &TrackingTable, key: &[u8]) -> bool {
+        table
+            .key_to_clients
+            .contains_key(&Bytes::copy_from_slice(key))
+    }
+
+    /// Bytes one connection's reads of `keys` charge, measured rather than
+    /// derived, so the budget tests below do not re-implement the cost model
+    /// they are checking.
+    fn charge_for(keys: &[&[u8]]) -> u64 {
+        let (registry, _rxs) = make_registry_with(vec![(1, false)]);
+        let mut probe = test_table(1000);
+        for key in keys {
+            probe.record_read(key, 1, &registry);
+        }
+        probe.memory_usage() as u64
+    }
+
+    /// The declared disposition is *shed*: over budget, the oldest tracked key
+    /// leaves the table and its clients are invalidated, exactly as an
+    /// over-ceiling eviction does. The new read is still recorded.
+    #[test]
+    fn budget_refusal_sheds_the_oldest_key() {
+        let (registry, mut rxs) = make_registry_with(vec![(1, false)]);
+        // Room for two keys, not three.
+        let (mut table, budget) = budgeted_table(1000, charge_for(&[b"k:a", b"k:b"]));
+
+        table.record_read(b"k:a", 1, &registry);
+        table.record_read(b"k:b", 1, &registry);
+        assert_eq!(budget.refusals(), 0, "two keys fit without a refusal");
+
+        table.record_read(b"k:c", 1, &registry);
+
+        assert!(budget.refusals() > 0, "the third key must be refused first");
+        assert!(!tracked(&table, b"k:a"), "oldest key shed");
+        assert!(tracked(&table, b"k:b"));
+        assert!(tracked(&table, b"k:c"), "the new read is still recorded");
+        assert!(table.memory_usage() as u64 <= budget.limit());
+
+        // Shedding delivers an invalidation, so the client drops its stale copy.
+        let msg = rxs[0].try_recv().expect("shed key invalidates its clients");
+        match msg {
+            InvalidationMessage::Keys(keys) => {
+                assert_eq!(keys, vec![Bytes::from_static(b"k:a")]);
+            }
+            other => panic!("unexpected invalidation: {other:?}"),
+        }
+
+        // The metric the shard emits: one shed, no decline.
+        assert_eq!(table.drain_budget_shed_counters(), (1, 0));
+        assert_eq!(
+            table.drain_budget_shed_counters(),
+            (0, 0),
+            "drained counters are increments, not absolutes"
+        );
+    }
+
+    /// A budget smaller than a single entry cannot be satisfied by shedding.
+    /// The read is declined rather than charged anyway.
+    #[test]
+    fn budget_too_small_for_one_entry_declines_the_read() {
+        let (registry, _rxs) = make_registry_with(vec![(1, false)]);
+        let (mut table, _budget) = budgeted_table(1000, 8);
+
+        table.record_read(b"k:a", 1, &registry);
+
+        assert!(!tracked(&table, b"k:a"));
+        assert_eq!(table.memory_usage(), 0, "nothing was charged");
+        assert_eq!(table.drain_budget_shed_counters(), (0, 1));
+    }
+
+    /// The incremental charge must equal the O(n) recomputation after every
+    /// mutation path: read, invalidate, evict, compact, disconnect, flush.
+    #[test]
+    fn charge_reconciles_with_recomputed_usage() {
+        let (registry, _rxs) = make_registry_with(vec![(1, false), (2, false)]);
+        let mut table = test_table(3);
+
+        let check = |t: &TrackingTable, what: &str| {
+            assert_eq!(
+                t.memory_usage(),
+                t.recomputed_memory_usage(),
+                "charge drifted from the recomputed footprint after {what}"
+            );
+        };
+
+        for key in [b"k:1".as_slice(), b"k:2", b"k:3"] {
+            table.record_read(key, 1, &registry);
+            table.record_read(key, 2, &registry);
+        }
+        check(&table, "reads");
+
+        // Over the ceiling: evicts the oldest.
+        table.record_read(b"k:4", 1, &registry);
+        check(&table, "ceiling eviction");
+
+        table.invalidate_keys(&[b"k:2"], 9, &registry);
+        check(&table, "invalidate (stale lru entry left behind)");
+
+        // Force compaction by staling out the rest.
+        table.invalidate_keys(&[b"k:3", b"k:4"], 9, &registry);
+        check(&table, "compaction");
+
+        table.record_read(b"k:5", 1, &registry);
+        table.record_read(b"k:5", 2, &registry);
+        table.remove_connection(2);
+        check(&table, "connection removal");
+
+        table.flush_all(&registry);
+        check(&table, "flush");
+        assert_eq!(table.memory_usage(), 0, "flush releases the whole charge");
+    }
+
+    /// Growth that the budget did not authorize is the bug class R8 exists to
+    /// kill: every field the table owns is charged, `lru_order` included.
+    #[test]
+    fn lru_entries_are_charged_like_every_other_field() {
+        let (registry, _rxs) = make_registry_with(vec![(1, false)]);
+        let mut table = test_table(1000);
+
+        // Two keys, so invalidating one does not immediately trip compaction
+        // (`stale_count > live keys`) and the stale slot is observable.
+        table.record_read(b"k:a", 1, &registry);
+        table.record_read(b"k:b", 1, &registry);
+        let with_both_live = table.memory_usage();
+
+        // Invalidation leaves a stale LRU slot behind; it is still charged.
+        table.invalidate_keys(&[b"k:a"], 9, &registry);
+        assert_eq!(table.lru_len(), 2, "the shed key's LRU slot is still there");
+        assert!(table.memory_usage() < with_both_live);
+        assert_eq!(table.memory_usage(), table.recomputed_memory_usage());
+
+        // Compacting it away releases exactly that slot's charge.
+        let before_compaction = table.memory_usage();
+        table.compact_lru();
+        assert_eq!(table.lru_len(), 1);
+        assert_eq!(table.memory_usage(), before_compaction - lru_entry_cost(3));
+        assert_eq!(table.memory_usage(), table.recomputed_memory_usage());
     }
 }

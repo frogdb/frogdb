@@ -472,6 +472,23 @@ impl ShardWorkerBuilder {
         );
         persistence.set_recovery_stats(recovery_stats);
 
+        // This core's memory broker. `NoArenaReading` is the arena figure
+        // until issue 03 binds a jemalloc arena per shard thread; swapping it
+        // is a one-site change here (see `frogdb_memory::arena`), and the
+        // simulation executor keeps `NoArenaReading` permanently because a
+        // simulated shard has no arena of its own.
+        let mut memory =
+            frogdb_memory::MemoryBroker::new(shard_id, Arc::new(frogdb_memory::NoArenaReading));
+        // The tracking table sheds (it evicts its oldest tracked key and
+        // invalidates that key's clients) rather than backpressuring: a client
+        // read must not be made to wait on a cache-invalidation bookkeeping
+        // structure.
+        let tracking_budget = memory.open(
+            frogdb_memory::Subsystem::ClientTracking,
+            frogdb_memory::defaults::CLIENT_TRACKING_BYTES,
+            frogdb_memory::Disposition::Shed,
+        );
+
         Ok(ShardWorker {
             identity: ShardIdentity::new(shard_id, num_shards, self.is_replica),
             store: self.store.unwrap_or_default(),
@@ -500,7 +517,8 @@ impl ShardWorkerBuilder {
             ),
             subscriptions: ShardSubscriptions::new(),
             keyspace_notify,
-            tracking: ShardTracking::default(),
+            tracking: ShardTracking::new(&tracking_budget),
+            memory,
             scripting: ShardScripting::new(script_executor, self.function_registry),
             wait_queue: ShardWaitQueue::new(),
             replication_broadcaster,

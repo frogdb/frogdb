@@ -533,19 +533,23 @@ pub(crate) struct ShardTracking {
     broadcast_table: crate::tracking::BroadcastTable,
 }
 
-impl Default for ShardTracking {
-    fn default() -> Self {
+impl ShardTracking {
+    /// Build the shard's tracking state against the `ClientTracking` budget
+    /// its broker issued. There is deliberately no `Default`: a tracking table
+    /// without a budget is a structure that can grow without charging, which
+    /// is the thing [adr/0006](../../../../adr/0006-memory-architecture-seams.md)
+    /// §2 forbids.
+    pub(crate) fn new(budget: &frogdb_memory::Budget) -> Self {
         Self {
             invalidation_registry: crate::tracking::InvalidationRegistry::default(),
             tracking_table: crate::tracking::TrackingTable::new(
                 crate::tracking::DEFAULT_TRACKING_TABLE_MAX_KEYS,
+                budget,
             ),
             broadcast_table: crate::tracking::BroadcastTable::default(),
         }
     }
-}
 
-impl ShardTracking {
     pub(crate) fn has_tracking_clients(&self) -> bool {
         !self.invalidation_registry.is_empty()
     }
@@ -609,10 +613,19 @@ impl ShardTracking {
         self.tracking_table.flush_all(&self.invalidation_registry);
     }
 
-    /// Approximate heap footprint of the tracking table (key/client indices +
-    /// LRU order, stale entries included), for memory accounting.
+    /// Heap footprint of the tracking table (key/client indices + LRU order,
+    /// stale entries included), for memory accounting. This is the table's
+    /// charge against the shard's `ClientTracking` budget, so it agrees with
+    /// the broker's breakdown by construction.
     pub(crate) fn memory_usage(&self) -> usize {
         self.tracking_table.memory_usage()
+    }
+
+    /// Tracking-table keys shed to a refused charge, and reads declined
+    /// outright, since the last call. Drained, so the caller can feed a
+    /// counter with `inc_by`.
+    pub(crate) fn drain_budget_shed_counters(&mut self) -> (u64, u64) {
+        self.tracking_table.drain_budget_shed_counters()
     }
 }
 
@@ -1741,18 +1754,25 @@ mod identity_tests {
 
 #[cfg(test)]
 mod tracking_tests {
+    use frogdb_memory::{Budget, Disposition, Subsystem};
+
     use super::*;
+
+    fn test_tracking() -> ShardTracking {
+        let budget = Budget::new(Subsystem::ClientTracking, Disposition::Shed, u64::MAX);
+        ShardTracking::new(&budget)
+    }
 
     #[test]
     fn default_has_no_tracking_clients() {
-        let t = ShardTracking::default();
+        let t = test_tracking();
         assert!(!t.has_tracking_clients());
         assert!(!t.has_any_tracking_clients());
     }
 
     #[test]
     fn unregister_unknown_connection_is_noop() {
-        let mut t = ShardTracking::default();
+        let mut t = test_tracking();
         t.unregister(999);
         assert!(!t.has_any_tracking_clients());
     }

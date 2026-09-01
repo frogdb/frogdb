@@ -356,6 +356,44 @@ define_metrics! {
     /// allocated)
     gauge AllocatorFragRatio("frogdb_allocator_frag_ratio") {}
 
+    // ------------------------------------------------------------------
+    // Per-core memory broker: the subsystem budget breakdown (ADR-0006 §2).
+    // `subsystem` is `frogdb_memory::Subsystem::as_str()` — a closed set of
+    // stable names, deliberately not derived from the Rust type that owns
+    // the buffer.
+    // ------------------------------------------------------------------
+
+    /// Bytes a subsystem's `Budget` currently authorizes on a core. This is
+    /// what the broker charged, not an allocator reading.
+    gauge MemoryBudgetChargedBytes("frogdb_memory_budget_charged_bytes") {
+        labels: [shard: &str, subsystem: &str],
+    }
+
+    /// A subsystem `Budget`'s limit on a core. Zero for a subsystem that has
+    /// not been converted to charge yet.
+    gauge MemoryBudgetLimitBytes("frogdb_memory_budget_limit_bytes") {
+        labels: [shard: &str, subsystem: &str],
+    }
+
+    /// Charges a subsystem's `Budget` refused. Every refusal is handled at
+    /// that subsystem's seam by shedding or backpressuring.
+    counter MemoryBudgetRefusalsTotal("frogdb_memory_budget_refusals_total") {
+        labels: [shard: &str, subsystem: &str],
+    }
+
+    /// Tracked keys the client-tracking table shed (evicted and invalidated)
+    /// because its `Budget` refused a charge — the declared `shed`
+    /// disposition, made observable.
+    counter TrackingTableBudgetShedKeys("frogdb_tracking_table_budget_shed_keys_total") {
+        labels: [shard: &str],
+    }
+
+    /// Reads the client-tracking table declined to record because even an
+    /// empty table could not fit them (a budget smaller than one entry).
+    counter TrackingTableBudgetDeclines("frogdb_tracking_table_budget_declines_total") {
+        labels: [shard: &str],
+    }
+
     /// Total keys evicted
     counter EvictionKeysTotal("frogdb_eviction_keys_total") {
         labels: [shard: &str, policy: &str],

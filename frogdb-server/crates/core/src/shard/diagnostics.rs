@@ -1,9 +1,11 @@
 use bytes::Bytes;
 
 use frogdb_types::metrics::definitions::{
-    BlockedKeys, KeysTotal, KeysWithExpiry, MemoryPeakBytes, MemoryUsedBytes, PubsubChannels,
-    PubsubPatterns, PubsubSubscribers, ShardKeys, ShardMemoryBytes, ShardQueueDepth,
-    WalDurabilityLagMs, WalLastFlushOk, WalLastFlushTimestamp, WalPendingBytes, WalPendingOps,
+    BlockedKeys, KeysTotal, KeysWithExpiry, MemoryBudgetChargedBytes, MemoryBudgetLimitBytes,
+    MemoryBudgetRefusalsTotal, MemoryPeakBytes, MemoryUsedBytes, PubsubChannels, PubsubPatterns,
+    PubsubSubscribers, ShardKeys, ShardMemoryBytes, ShardQueueDepth, TrackingTableBudgetDeclines,
+    TrackingTableBudgetShedKeys, WalDurabilityLagMs, WalLastFlushOk, WalLastFlushTimestamp,
+    WalPendingBytes, WalPendingOps,
 };
 
 use crate::clock;
@@ -378,6 +380,60 @@ impl ShardWorker {
         }
     }
 
+    /// Emit this core's per-subsystem memory-budget breakdown.
+    ///
+    /// Gauges for what each subsystem's `Budget` currently authorizes and what
+    /// its limit is — every subsystem appears, so an operator can tell "not
+    /// charging anything" from "not yet converted" (an unconverted subsystem
+    /// has a zero limit). Counters for the refusals each budget handed out and
+    /// for the tracking table's shed keys: the declared `shed` disposition is
+    /// only a claim until it is observable.
+    ///
+    /// Note what is *not* here: the core's arena figure. It is a sampled upper
+    /// bound published on the sampler's own schedule, not the shard's, and
+    /// until issue 03 binds an arena there is nothing to publish.
+    pub(crate) fn collect_memory_budget_metrics(&mut self, shard_label: &str) {
+        let breakdown = self.memory.breakdown();
+        for row in &breakdown.subsystems {
+            MemoryBudgetChargedBytes::set(
+                self.observability.metrics(),
+                row.charged_bytes as f64,
+                shard_label,
+                row.subsystem.as_str(),
+            );
+            MemoryBudgetLimitBytes::set(
+                self.observability.metrics(),
+                row.limit_bytes as f64,
+                shard_label,
+                row.subsystem.as_str(),
+            );
+        }
+        for (subsystem, refusals) in self.memory.drain_refusals() {
+            MemoryBudgetRefusalsTotal::inc_by(
+                self.observability.metrics(),
+                refusals,
+                shard_label,
+                subsystem.as_str(),
+            );
+        }
+
+        let (shed_keys, declines) = self.tracking.drain_budget_shed_counters();
+        if shed_keys > 0 {
+            TrackingTableBudgetShedKeys::inc_by(
+                self.observability.metrics(),
+                shed_keys,
+                shard_label,
+            );
+        }
+        if declines > 0 {
+            TrackingTableBudgetDeclines::inc_by(
+                self.observability.metrics(),
+                declines,
+                shard_label,
+            );
+        }
+    }
+
     /// Collect and emit shard metrics periodically.
     pub(crate) fn collect_shard_metrics(&mut self) {
         let shard_label = self.shard_id().to_string();
@@ -458,6 +514,9 @@ impl ShardWorker {
             self.message_rx.len() as f64,
             &shard_label,
         );
+
+        // Per-subsystem memory-budget breakdown for this core (ADR-0006 §2).
+        self.collect_memory_budget_metrics(&shard_label);
 
         // WAL lag metrics
         if let Some(wal) = self.persistence.wal_writer() {

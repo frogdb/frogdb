@@ -267,6 +267,11 @@ pub struct ShardWorker {
     /// emitting shard's own (subscriber-less) table.
     pub(crate) keyspace_notify: KeyspaceNotificationCoordinator,
 
+    /// This core's memory broker: owns every `Budget` on the shard and reports
+    /// the per-subsystem charge breakdown. It does not yet drive eviction or
+    /// answer `maxmemory` — see `frogdb_memory::MemoryBroker`.
+    pub(crate) memory: frogdb_memory::MemoryBroker,
+
     /// Client tracking: invalidation registry, tracking table, broadcast table.
     pub(crate) tracking: ShardTracking,
 
