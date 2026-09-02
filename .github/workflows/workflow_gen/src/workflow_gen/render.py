@@ -17,6 +17,7 @@ from workflow_gen.workflows.deploy_docs import deploy_docs_workflow
 from workflow_gen.workflows.fuzz import fuzz_workflow
 from workflow_gen.workflows.jepsen_nightly import jepsen_nightly_workflow
 from workflow_gen.workflows.link_check import link_check_workflow
+from workflow_gen.workflows.mutants_weekly import mutants_weekly_workflow
 from workflow_gen.workflows.quint_verify import quint_verify_workflow
 from workflow_gen.workflows.regression_nightly import regression_nightly_workflow
 from workflow_gen.workflows.release import release_workflow
@@ -63,6 +64,7 @@ WORKFLOWS = {
     "coverage-nightly.yml": coverage_nightly_workflow,
     "jepsen-nightly.yml": jepsen_nightly_workflow,
     "regression-nightly.yml": regression_nightly_workflow,
+    "mutants-weekly.yml": mutants_weekly_workflow,
     "build.yml": build_workflow,
     "release.yml": release_workflow,
     "release-please.yml": release_please_workflow,
