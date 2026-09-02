@@ -819,4 +819,62 @@ mod quicklist_tests {
         }
         assert_eq!(list.block_count(), 1);
     }
+
+    /// Memory shape: 100k small elements must cost O(blocks) of structural
+    /// overhead, not O(elements). A `VecDeque<Bytes>` list would spend at least
+    /// `size_of::<Bytes>()` (32 bytes) per element on the handles alone, before
+    /// the per-element heap allocation; the block chain must come in under that
+    /// for the whole structure, payload included.
+    #[test]
+    fn memory_shape_is_o_blocks_not_o_elements() {
+        const N: usize = 100_000;
+        let mut list = ListValue::new();
+        for i in 0..N {
+            list.push_back(small(i));
+        }
+        assert_eq!(list.len(), N);
+        assert_eq!(
+            list.block_count(),
+            N.div_ceil(QuicklistLimits::DEFAULT_LIST.max_entries)
+        );
+
+        let per_element_handles = N * std::mem::size_of::<Bytes>();
+        assert!(
+            list.memory_size() < per_element_handles,
+            "block chain reported {} bytes, no better than {} bytes of bare Bytes handles",
+            list.memory_size(),
+            per_element_handles
+        );
+
+        // Payload is 6 bytes per element; the encoding adds a length prefix and
+        // a backlen byte, so the whole list should stay near 8 bytes/element.
+        assert!(
+            list.memory_size() < N * 12,
+            "encoding overhead too high: {} bytes for {N} elements",
+            list.memory_size()
+        );
+    }
+
+    /// MEMORY USAGE must not wobble between runs: the same list built the same
+    /// way reports the same size (the deterministic-size rule the generated
+    /// workload harness depends on).
+    #[test]
+    fn memory_size_is_run_stable() {
+        let build = || {
+            let mut list = ListValue::new();
+            for i in 0..5_000 {
+                list.push_back(small(i));
+            }
+            for _ in 0..200 {
+                list.pop_front();
+            }
+            list.insert(true, &small(4_000), Bytes::from_static(b"pivoted"));
+            list.remove(0, &small(4_500));
+            list
+        };
+        let a = build();
+        let b = build();
+        assert_eq!(a.len(), b.len());
+        assert_eq!(a.memory_size(), b.memory_size());
+    }
 }

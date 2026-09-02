@@ -134,6 +134,11 @@ path = "fuzz_targets/skiplist_ops.rs"
 doc = false
 
 [[bin]]
+name = "listpack_ops"
+path = "fuzz_targets/listpack_ops.rs"
+doc = false
+
+[[bin]]
 name = "cmd_dispatch"
 path = "fuzz_targets/cmd_dispatch.rs"
 doc = false
