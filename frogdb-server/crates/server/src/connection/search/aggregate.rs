@@ -40,6 +40,7 @@ impl ConnectionHandler {
             cursor_store: self.admin.cursor_store.clone(),
             error: None,
             partials: Vec::new(),
+            charge: crate::net_charge::open_charge(),
         });
         let request = Box::new(request);
         self.scatter_gather_with_timeout(effective_timeout)

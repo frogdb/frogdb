@@ -668,9 +668,6 @@ impl ConnectionHandler {
             conn_id = self.state.id,
             dropped, "pub/sub delivery queue overflowed"
         );
-        frogdb_telemetry::definitions::PubsubOutputBufferDisconnects::inc(
-            &*self.observability.metrics_recorder,
-        );
         // Measure now rather than reading the account: the account was zeroed by
         // the flush that preceded this check, so it would report `buffered=0`
         // for a kill caused by megabytes of undelivered messages.

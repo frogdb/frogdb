@@ -108,6 +108,7 @@ impl ConnectionHandler {
             error: None,
             all_hits: Vec::new(),
             total: 0,
+            charge: crate::net_charge::open_charge(),
         });
         self.scatter_gather_with_timeout(effective_timeout)
             .run(merge, |_shard, response_tx| CoreMsg::ScatterRequest {

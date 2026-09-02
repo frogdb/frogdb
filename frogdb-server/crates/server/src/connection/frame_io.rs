@@ -263,6 +263,16 @@ impl ConnectionHandler {
             class.as_str(),
             reason.as_str(),
         );
+        // The pubsub-specific counter lives here, on the one shed seam, not on
+        // the delivery-queue overflow latch: a slow subscriber can be shed by
+        // any verdict this seam produces (hard limit on buffered bytes, soft
+        // window, budget refusal) before the queue latch ever trips, and every
+        // one of those is "a subscriber torn down for undelivered output".
+        if class == super::output_buffer::OutputBufferClass::PubSub {
+            frogdb_telemetry::definitions::PubsubOutputBufferDisconnects::inc(
+                &*self.observability.metrics_recorder,
+            );
+        }
         std::io::Error::other(format!(
             "client-output-buffer-limit {} exceeded ({})",
             class.as_str(),

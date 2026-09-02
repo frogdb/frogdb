@@ -13,13 +13,63 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use frogdb_core::{PartialResult, StreamId};
+use frogdb_memory::Charge;
 use frogdb_protocol::Response;
 use frogdb_search::FtSearchRequest;
-use frogdb_search::aggregate::{self, AggregateStep, PartialAggregate};
+use frogdb_search::aggregate::{self, AggregateStep, PartialAggregate, PartialReducerState};
 use frogdb_search::wire::{FtShardReply, ShardSearchHit};
 
 use crate::cursor_store::AggregateCursorStore;
+use crate::net_charge;
 use crate::scatter::MergeStrategy;
+
+/// Approximate heap bytes one [`ShardSearchHit`] retains while parked in a
+/// merge accumulator (key + reply fields + struct slack).
+fn hit_bytes(hit: &ShardSearchHit) -> u64 {
+    let fields: usize = hit
+        .fields
+        .as_ref()
+        .map_or(0, |fs| fs.iter().map(|(k, v)| k.len() + v.len() + 16).sum());
+    (hit.key.len() + fields + 64) as u64
+}
+
+/// Approximate heap bytes one shard's [`PartialAggregate`] retains while
+/// parked in [`FtAggregateMerge`] (group keys + per-reducer payloads).
+fn partial_aggregate_bytes(partial: &PartialAggregate) -> u64 {
+    let mut total = 64u64;
+    for (group_key, states) in &partial.groups {
+        total += group_key
+            .iter()
+            .map(|(k, v)| (k.len() + v.len() + 16) as u64)
+            .sum::<u64>();
+        for state in states {
+            total += 32
+                + match state {
+                    PartialReducerState::CountDistinct(set) => {
+                        set.iter().map(|s| s.len() + 16).sum::<usize>() as u64
+                    }
+                    PartialReducerState::CountDistinctish(sketch) => sketch.len() as u64,
+                    PartialReducerState::Tolist(items) => {
+                        items.iter().map(|s| s.len() + 16).sum::<usize>() as u64
+                    }
+                    PartialReducerState::FirstValue {
+                        value, sort_key, ..
+                    } => {
+                        (value.as_ref().map_or(0, String::len)
+                            + sort_key.as_ref().map_or(0, String::len))
+                            as u64
+                    }
+                    PartialReducerState::Quantile { values, .. } => (values.len() * 8) as u64,
+                    PartialReducerState::RandomSample { reservoir, .. } => {
+                        reservoir.iter().map(|s| s.len() + 16).sum::<usize>() as u64
+                    }
+                    // Fixed-size numeric states.
+                    _ => 0,
+                };
+        }
+    }
+    total
+}
 
 /// Turn a reply a search merge did not expect into an error to abort on, rather
 /// than silently dropping it (issue #15 item 4).
@@ -82,10 +132,22 @@ impl MergeStrategy for OkOrFirstError {
 
 /// Union tag values across shards (dedup + sort), short-circuiting on the first
 /// embedded error. Used by FT.TAGVALS.
-#[derive(Default)]
 pub(crate) struct TagValsUnion {
     error: Option<Response>,
     values: HashSet<String>,
+    /// Accounts the accumulated tag values against this core's
+    /// `NetworkOutput` budget while the fan-out is in flight.
+    charge: Charge,
+}
+
+impl Default for TagValsUnion {
+    fn default() -> Self {
+        Self {
+            error: None,
+            values: HashSet::new(),
+            charge: net_charge::open_charge(),
+        }
+    }
 }
 
 impl MergeStrategy for TagValsUnion {
@@ -110,6 +172,10 @@ impl MergeStrategy for TagValsUnion {
                         if let Response::Bulk(Some(b)) = item
                             && let Ok(s) = std::str::from_utf8(&b)
                         {
+                            if !net_charge::try_grow(&mut self.charge, (s.len() + 16) as u64) {
+                                self.error = Some(net_charge::shed_error("FT.TAGVALS"));
+                                return;
+                            }
                             self.values.insert(s.to_string());
                         }
                     }
@@ -139,6 +205,9 @@ pub(crate) struct EsAllMerge {
     count: Option<usize>,
     error: Option<Response>,
     entries: Vec<(StreamId, Response)>,
+    /// Accounts the accumulated entries against this core's `NetworkOutput`
+    /// budget while the fan-out is in flight.
+    charge: Charge,
 }
 
 impl EsAllMerge {
@@ -147,6 +216,7 @@ impl EsAllMerge {
             count,
             error: None,
             entries: Vec::new(),
+            charge: net_charge::open_charge(),
         }
     }
 }
@@ -169,6 +239,11 @@ impl MergeStrategy for EsAllMerge {
             // spurious ES.ALL entry.
             if let Response::Error(_) = &resp {
                 self.error = Some(resp);
+                return;
+            }
+            let bytes = net_charge::approx_response_bytes(&resp) + 16;
+            if !net_charge::try_grow(&mut self.charge, bytes) {
+                self.error = Some(net_charge::shed_error("ES.ALL"));
                 return;
             }
             // Each entry is [stream_id_string, [fields...]]; parse the id to sort.
@@ -198,11 +273,23 @@ impl MergeStrategy for EsAllMerge {
 
 /// Merge FT.SPELLCHECK suggestions by unioning per-term suggestions and keeping
 /// the highest score per word, then re-sorting.
-#[derive(Default)]
 pub(crate) struct SpellcheckMerge {
     error: Option<Response>,
     /// term -> (suggestion word -> best score)
     term_map: HashMap<String, HashMap<String, f64>>,
+    /// Accounts the accumulated terms and suggestions against this core's
+    /// `NetworkOutput` budget while the fan-out is in flight.
+    charge: Charge,
+}
+
+impl Default for SpellcheckMerge {
+    fn default() -> Self {
+        Self {
+            error: None,
+            term_map: HashMap::new(),
+            charge: net_charge::open_charge(),
+        }
+    }
 }
 
 impl MergeStrategy for SpellcheckMerge {
@@ -232,6 +319,10 @@ impl MergeStrategy for SpellcheckMerge {
                             _ => continue,
                         };
                         if let Response::Array(suggestions) = &parts[2] {
+                            if !net_charge::try_grow(&mut self.charge, (term.len() + 48) as u64) {
+                                self.error = Some(net_charge::shed_error("FT.SPELLCHECK"));
+                                return;
+                            }
                             let suggestions_map = self.term_map.entry(term).or_default();
                             for sugg in suggestions {
                                 if let Response::Array(pair) = sugg
@@ -250,6 +341,13 @@ impl MergeStrategy for SpellcheckMerge {
                                         }
                                         _ => continue,
                                     };
+                                    if !net_charge::try_grow(
+                                        &mut self.charge,
+                                        (word.len() + 32) as u64,
+                                    ) {
+                                        self.error = Some(net_charge::shed_error("FT.SPELLCHECK"));
+                                        return;
+                                    }
                                     let e = suggestions_map.entry(word).or_insert(0.0);
                                     if score > *e {
                                         *e = score;
@@ -349,6 +447,9 @@ pub(crate) struct FtSearchMerge {
     /// detection sees every shard's values.
     pub(crate) all_hits: Vec<(String, ShardSearchHit)>,
     pub(crate) total: usize,
+    /// Accounts the overfetched hits against this core's `NetworkOutput`
+    /// budget while the fan-out is in flight.
+    pub(crate) charge: Charge,
 }
 
 impl FtSearchMerge {
@@ -368,6 +469,7 @@ impl FtSearchMerge {
             error: None,
             all_hits: Vec::new(),
             total: 0,
+            charge: net_charge::open_charge(),
         }
     }
 }
@@ -395,6 +497,11 @@ impl MergeStrategy for FtSearchMerge {
                     if self.sortby_active && !self.sortby_numeric && sort_key.parse::<f64>().is_ok()
                     {
                         self.sortby_numeric = true;
+                    }
+                    let bytes = sort_key.len() as u64 + hit_bytes(&hit);
+                    if !net_charge::try_grow(&mut self.charge, bytes) {
+                        self.error = Some(net_charge::shed_error("FT.SEARCH"));
+                        return;
                     }
                     self.all_hits.push((sort_key, hit));
                 }
@@ -472,6 +579,9 @@ pub(crate) struct FtHybridMerge {
     /// (SORTBY key, hit).
     pub(crate) all_hits: Vec<(String, ShardSearchHit)>,
     pub(crate) total: usize,
+    /// Accounts the collected hits against this core's `NetworkOutput`
+    /// budget while the fan-out is in flight.
+    pub(crate) charge: Charge,
 }
 
 impl MergeStrategy for FtHybridMerge {
@@ -494,6 +604,11 @@ impl MergeStrategy for FtHybridMerge {
                     } else {
                         String::new()
                     };
+                    let bytes = sort_key.len() as u64 + hit_bytes(&hit);
+                    if !net_charge::try_grow(&mut self.charge, bytes) {
+                        self.error = Some(net_charge::shed_error("FT.HYBRID"));
+                        return;
+                    }
                     self.all_hits.push((sort_key, hit));
                 }
             }
@@ -557,6 +672,9 @@ pub(crate) struct FtAggregateMerge {
     pub(crate) cursor_store: Arc<AggregateCursorStore>,
     pub(crate) error: Option<Response>,
     pub(crate) partials: Vec<PartialAggregate>,
+    /// Accounts the collected partial aggregates against this core's
+    /// `NetworkOutput` budget while the fan-out is in flight.
+    pub(crate) charge: Charge,
 }
 
 impl MergeStrategy for FtAggregateMerge {
@@ -573,7 +691,13 @@ impl MergeStrategy for FtAggregateMerge {
         match reply {
             // The typed partial aggregate crosses the shard boundary as-is —
             // no reducer-state decode.
-            PartialResult::Ft(FtShardReply::Aggregate(Ok(partial))) => self.partials.push(partial),
+            PartialResult::Ft(FtShardReply::Aggregate(Ok(partial))) => {
+                if !net_charge::try_grow(&mut self.charge, partial_aggregate_bytes(&partial)) {
+                    self.error = Some(net_charge::shed_error("FT.AGGREGATE"));
+                    return;
+                }
+                self.partials.push(partial);
+            }
             PartialResult::Ft(FtShardReply::Aggregate(Err(msg))) => {
                 self.error = Some(Response::error(msg));
             }
@@ -941,6 +1065,7 @@ mod tests {
             error: None,
             all_hits: Vec::new(),
             total: 0,
+            charge: crate::net_charge::open_charge(),
         });
         merge.absorb(0, search_reply(1, vec![hit("low", 0.2, None, None)]));
         merge.absorb(
@@ -968,6 +1093,7 @@ mod tests {
             cursor_store: Arc::new(AggregateCursorStore::new()),
             error: None,
             partials: Vec::new(),
+            charge: crate::net_charge::open_charge(),
         });
         merge.absorb(
             0,
@@ -1066,6 +1192,7 @@ mod tests {
             error: None,
             all_hits: Vec::new(),
             total: 0,
+            charge: crate::net_charge::open_charge(),
         });
         merge.absorb(
             0,
@@ -1114,6 +1241,7 @@ mod tests {
             cursor_store: Arc::new(AggregateCursorStore::new()),
             error: None,
             partials: Vec::new(),
+            charge: crate::net_charge::open_charge(),
         });
         merge.absorb(0, PartialResult::ft(FtShardReply::Aggregate(Ok(partial1))));
         merge.absorb(1, PartialResult::ft(FtShardReply::Aggregate(Ok(partial2))));
@@ -1195,6 +1323,7 @@ mod tests {
             cursor_store: Arc::new(AggregateCursorStore::new()),
             error: None,
             partials: Vec::new(),
+            charge: crate::net_charge::open_charge(),
         });
         merge.absorb(
             0,

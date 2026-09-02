@@ -213,21 +213,18 @@ ALLOWLIST: dict[str, tuple[int, str]] = {
     ),
     # --- Search
     "frogdb-server/crates/search/src/vector.rs": (2, "vector field id maps, sized by the index"),
-    # --- Per-request accumulators on the reply path. These are the network
-    # output class, explicitly out of scope for issue 05 and converted with it.
+    # --- Reply path. The frogdb-server accumulators on this path (search
+    # merges, scatter/gather merges, INFO section text) were converted by
+    # issue 18: each owns a `Charge` against the thread-local NetworkOutput
+    # budget (`net_charge.rs`). What remains here is `frogdb-protocol`'s
+    # reply builder, which cannot be converted in place: frogdb-protocol has
+    # no frogdb-memory dependency (it is the wire-format leaf crate), and its
+    # buffers are charged at feed time when they reach the connection's
+    # output buffer (`connection/output_buffer.rs`).
     "frogdb-server/crates/protocol/src/reply.rs": (2, "reply builder for one command"),
-    "frogdb-server/crates/server/src/connection/search/merge.rs": (
-        7,
-        "cross-shard search merge accumulators for one query — network output class",
-    ),
     "frogdb-server/crates/server/src/connection/state.rs": (
         1,
         "per-connection latency samples — traffic-driven",
-    ),
-    "frogdb-server/crates/server/src/info/mod.rs": (7, "INFO section text for one reply"),
-    "frogdb-server/crates/server/src/scatter/broadcast.rs": (
-        3,
-        "scatter/gather reply accumulators for one command — network output class",
     ),
     "frogdb-server/crates/server/src/slot_migration/routing.rs": (
         3,

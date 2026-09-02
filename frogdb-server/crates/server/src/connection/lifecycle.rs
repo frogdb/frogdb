@@ -308,6 +308,13 @@ impl ConnectionHandler {
         shrink(&mut self.resp3_buf, IDLE_TARGET);
 
         if !busy {
+            // Per-connection idleness is a proxy for the core's: on a mixed
+            // core, one idle connection's tick trims free lists a busy
+            // neighbour is about to lease from. Accepted deliberately: `sweep`
+            // only trims down to `CLASS_LOW_WATER` — it never empties a class —
+            // so the neighbour still leases warm buffers, and the cost is a
+            // bounded low-to-high-water refill, cheaper than plumbing a
+            // core-wide busy signal across connections.
             buffers::sweep();
         }
     }

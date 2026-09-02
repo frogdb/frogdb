@@ -46,17 +46,45 @@ use tracing::warn;
 /// Every section writes through this type, so the CRLF/section-boundary
 /// contract is one type's responsibility instead of an unwritten rule
 /// re-derived by string patchers.
+///
+/// The buffer is transient network-output material — bytes held before the
+/// assembled INFO reply reaches the connection's output buffer, where
+/// [`crate::connection::output_buffer`] charges (and, on refusal, sheds) it
+/// at feed time. The `charge` keeps that in-flight buffer visible to this
+/// core's `NetworkOutput` budget while sections are being built. A refused
+/// grow saturates the accounting (`shed` latches, nothing more is charged)
+/// rather than truncating the section: enforcement stays at the single
+/// feed-time seam, which the assembled reply still has to pass through.
 pub struct SectionWriter {
     buf: String,
     fields: usize,
+    charge: frogdb_memory::Charge,
+    shed: bool,
 }
 
 impl SectionWriter {
     /// Start a section with its `# Title` header.
     pub fn new(title: &str) -> Self {
-        Self {
+        let mut writer = Self {
             buf: format!("# {title}\r\n"),
             fields: 0,
+            charge: crate::net_charge::open_charge(),
+            shed: false,
+        };
+        writer.account();
+        writer
+    }
+
+    /// Sync the charge to the buffer's current size (see the type docs for
+    /// the saturate-on-refusal contract).
+    fn account(&mut self) {
+        if self.shed {
+            return;
+        }
+        let buffered = self.buf.len() as u64;
+        let held = self.charge.bytes();
+        if buffered > held && !crate::net_charge::try_grow(&mut self.charge, buffered - held) {
+            self.shed = true;
         }
     }
 
@@ -67,6 +95,7 @@ impl SectionWriter {
         self.buf.push_str(&value.to_string());
         self.buf.push_str("\r\n");
         self.fields += 1;
+        self.account();
         self
     }
 
@@ -88,6 +117,7 @@ impl SectionWriter {
         self.buf.push_str(line);
         self.buf.push_str("\r\n");
         self.fields += 1;
+        self.account();
         self
     }
 
