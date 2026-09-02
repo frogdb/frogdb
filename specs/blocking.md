@@ -1,5 +1,7 @@
 # Blocking commands — failure modes
 
+Status: DRAFT
+
 Every way a blocking command (`BLPOP`/`BRPOP`/`BLMOVE`/`BRPOPLPUSH`/`BLMPOP`/`BZPOPMIN`/
 `BZPOPMAX`/`XREAD BLOCK`/`WAIT`) can be resolved on the connection side, one table per mode.
 Same contract as [Transactions — failure modes](txn.md): a mutant that survives

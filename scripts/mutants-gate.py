@@ -9,7 +9,15 @@ denominator; timeouts are excluded but reported — a rising timeout share
 means the timeout multiplier in .cargo/mutants.toml is wrong, not that the
 tests are bad.
 
-Usage: mutants-gate.py <outcomes.json> --min-score 0.90
+The threshold is not typed by hand: it comes from the crate's spec header via
+`locked_areas` (`just locked-areas`), the one manifest of what is locked and at
+what gate. A hand-typed threshold is how `just mutants-gate frogdb-cluster 0.90`
+used to be accepted without complaint against an 0.80 contract. A crate no
+locked spec claims is an error rather than a default — it has no contract to
+enforce — unless `--min-score` is passed, which stays as the explicit override
+for an experiment on an unlocked crate.
+
+Usage: mutants-gate.py <outcomes.json> --crate frogdb-txn [--min-score 0.90]
 """
 
 from __future__ import annotations
@@ -20,12 +28,28 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+import locked_areas
+
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("outcomes", type=Path, help="outcomes.json from mutants.out")
-    ap.add_argument("--min-score", type=float, required=True)
+    ap.add_argument("--crate", required=True, help="the mutated crate, looked up in the manifest")
+    ap.add_argument(
+        "--min-score",
+        type=float,
+        help="override the crate's spec gate (experiments, unlocked crates)",
+    )
     args = ap.parse_args()
+
+    # Resolve the gate before reading the run: a crate outside the perimeter is
+    # refused for that reason, not for a missing outcomes file.
+    min_score = args.min_score
+    if min_score is None:
+        try:
+            min_score = locked_areas.lookup_crate(args.crate).gate
+        except locked_areas.ManifestError as exc:
+            sys.exit(f"{exc}\npass --min-score to gate an unlocked crate anyway")
 
     data = json.loads(args.outcomes.read_text())
     counts = Counter(o["summary"] for o in data["outcomes"] if o.get("scenario") != "Baseline")
@@ -54,7 +78,7 @@ def main() -> None:
         f"mutants: {total} total, {caught} caught{prev_note}, {missed} missed, "
         f"{unviable} unviable, {timeout} timeout"
     )
-    print(f"score: {score:.1%} (gate: {args.min_score:.1%})")
+    print(f"score: {score:.1%} (gate: {min_score:.1%})")
     if timeout and timeout / (denom + timeout) > 0.05:
         print(
             f"warning: {timeout} timeouts (> 5% of viable) — check "
@@ -62,7 +86,7 @@ def main() -> None:
             file=sys.stderr,
         )
 
-    if score < args.min_score:
+    if score < min_score:
         print("GATE: FAIL", file=sys.stderr)
         for o in data["outcomes"]:
             if o.get("summary") == "MissedMutant":

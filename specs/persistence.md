@@ -1,8 +1,12 @@
 # Persistence — failure modes
 
-Status: LOCKED (2026-08-02) — Phase 2 mutation gate passed (frogdb-persistence 99.1%,
-frogdb-recovery 100%, vs an 85% gate). Behavior changes to this area are spec-first: edit the
-row, update the forcing test, then the code. See CLAUDE.md "Locked core areas".
+Status: LOCKED (2026-08-02)
+Gate: 0.85
+Crates: frogdb-persistence, frogdb-recovery
+
+Phase 2 mutation gate passed (frogdb-persistence 99.1%, frogdb-recovery 100%). Behavior changes
+to this area are spec-first: edit the row, update the forcing test, then the code. See CLAUDE.md
+"Locked core areas".
 
 Every way FrogDB's durable-write path can fail, refuse, or succeed, one table per mode. This is
 the reference the mutation run is measured against: a mutant that survives is a row nothing forces.

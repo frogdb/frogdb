@@ -35,6 +35,12 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
+
+# The spec header key block is parsed by the manifest module, never by a second
+# regex here (scripts/locked_areas.py owns the shape).
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+import locked_areas  # noqa: E402
+
 SPEC_DIR = REPO_ROOT / "specs"
 OUT_DIR = REPO_ROOT / "website" / "src" / "content" / "docs" / "specifications"
 GITHUB_BLOB = "https://github.com/frogdb/frogdb/blob/main/"
@@ -59,6 +65,7 @@ AREAS: dict[str, tuple[int, str, str]] = {
     "txn": (4, "Transactions", "MULTI/EXEC transactions, WATCH, and script atomicity."),
     "vll": (5, "VLL", "Very Lightweight Locking: acquisition, continuation, and drain."),
     "blocking": (6, "Blocking", "Blocking commands: waits, wakeups, and disconnect handling."),
+    "memory": (7, "Memory", "Memory accounting: arenas, budgets, charging, and pressure."),
 }
 
 # `](target)` or `](target "title")`
@@ -92,13 +99,34 @@ def rewrite_link(target: str, *, spec_name: str) -> str:
     return GITHUB_BLOB + normalized + fragment
 
 
+def render_header_block(spec: Path, lines: list[str]) -> list[str]:
+    """The spec's header key block, as published markdown.
+
+    In the source the block is one key per line (`Status:` / `Gate:` /
+    `Crates:`, see scripts/locked_areas.py) — consecutive lines, which markdown
+    would otherwise run together into a single paragraph. Published as a small
+    table so the area's contract terms stay legible as terms. A header the
+    manifest cannot parse is left exactly as written: `just lint-locked-areas`
+    is what reports that, and the published page should not silently reshape
+    something no one has checked.
+    """
+    keys, errors = locked_areas.parse_header(spec)
+    if errors or not keys:
+        return lines[1:]
+    rows = "\n".join(f"| **{key}** | {value} |" for _line, key, value in keys)
+    remainder = lines[keys[-1][0] :]  # the key block's line numbers are 1-based
+    while remainder and not remainder[0].strip():
+        remainder.pop(0)
+    return ["", "| | |", "|---|---|", *rows.splitlines(), "", *remainder]
+
+
 def render(spec: Path) -> str:
     order, _display_name, blurb = AREAS[spec.stem]
     lines = spec.read_text().splitlines()
     if not lines or not lines[0].startswith("# "):
         sys.exit(f"spec-gen: {spec.name} does not start with an H1 title")
     title = lines[0].removeprefix("# ").strip().replace('"', "'")
-    body = "\n".join(lines[1:]).lstrip("\n")
+    body = "\n".join(render_header_block(spec, lines)).lstrip("\n")
     body = LINK_RE.sub(
         lambda m: f"]({rewrite_link(m.group(1), spec_name=spec.name)}{m.group(2)})", body
     )

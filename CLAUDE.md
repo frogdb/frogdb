@@ -195,20 +195,21 @@ Examples:
 
 ### Locked core areas
 
-Four core areas are **locked** behind failure-mode specs and mutation gates: **txn**
-(`frogdb-txn` + `frogdb-vll`, gate 0.90), **persistence** (`frogdb-persistence` +
-`frogdb-recovery`, 0.85), **replication** (`frogdb-replication` +
-`frogdb-replication-runtime`, 0.85), **cluster** (`frogdb-cluster` +
-`frogdb-cluster-runtime`, 0.80). Boundary ADRs: `adr/0002`–`0004`.
+Several core areas are **locked** behind failure-mode specs and mutation gates. Which areas,
+at what gate, over which crates is declared by each spec's header key block (`Status:` /
+`Gate:` / `Crates:` at the top of `specs/<area>.md`) and printed by **`just locked-areas`** —
+that manifest is what the tooling reads, so it is never restated here. Boundary ADRs:
+`adr/0002`–`0004`; `just lint-locked-areas` keeps the headers honest.
 
 - The specs (`specs/<area>.md`, header `Status: LOCKED`)
   are the contract: behavior changes are **spec-first** (failure-mode row → failing test →
   fix). `just lint-spec` enforces spec↔test agreement (every `FM-<AREA>-NNN` row
   names its forcing tests; every tagged test matches a row) and runs in `just lint`.
-- Before pushing changes that touch a locked crate: `just mutants-diff <crate>` (push
-  discipline, not a CI gate). Full runs: `just mutants <crate>` + `just mutants-gate
-  <crate> <gate>`. A surviving mutant no test can kill is documented *at the code* with why
-  it is unobservable — never a blanket skip.
+- Before pushing changes that touch a locked crate: `just mutants-diff <crate>` — the ratchet
+  for changes inside the perimeter (CI enforcement lands with hardening-2 issue 15). Full runs:
+  `just mutants <crate>` + `just mutants-gate <crate>` (the gate comes from the spec header). A
+  surviving mutant no test can kill is documented *at the code* with why it is unobservable —
+  never a blanket skip.
 - Put the forcing test in the mutated crate: `cargo mutants -p <crate>` runs only that
   package's own tests, so a row forced solely from `frogdb-server` integration tests
   contributes nothing to the owning crate's score.

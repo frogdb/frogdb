@@ -354,13 +354,20 @@ mutants crate *args:
 
 # Mutate only this branch's diff vs origin/main (PR-viable cost)
 mutants-diff crate:
+    ./scripts/locked_areas.py --check-crate {{crate}}
     mkdir -p target/mutants/{{crate}}-diff
     git diff $(git merge-base origin/main HEAD) > target/mutants-diff.patch
     {{dyld-env}} {{rocksdb-env}} cargo mutants -p {{crate}} --in-diff target/mutants-diff.patch --output target/mutants/{{crate}}-diff
 
-# Enforce an area's mutation score from a completed run (threshold e.g. 0.90)
-mutants-gate crate threshold:
-    ./scripts/mutants-gate.py target/mutants/{{crate}}/mutants.out/outcomes.json --min-score {{threshold}}
+# Enforce an area's mutation score from a completed run (gate from the spec
+# header — `just locked-areas`; --min-score overrides for an unlocked crate)
+mutants-gate crate *args:
+    ./scripts/mutants-gate.py target/mutants/{{crate}}/mutants.out/outcomes.json --crate {{crate}} {{args}}
+
+# The locked-areas manifest: which areas are locked, at what mutation gate,
+# over which crates. Read from the `specs/*.md` header key blocks.
+locked-areas *args:
+    ./scripts/locked_areas.py {{args}}
 
 # Run the Redis compat suite on its own (it is also part of the default `just test`)
 regression pattern="":
@@ -383,6 +390,19 @@ lint-spec: test-spec-lint
 # Unit tests for the spec lint's fixture-pinned checks
 test-spec-lint:
     ./scripts/tests/test_spec_lint.py
+
+# Gate: the locked-areas manifest — every `specs/*.md` declares a legal
+# `Status:`, a LOCKED spec declares its `Gate:` and `Crates:` (a DRAFT neither),
+# and every named crate is a workspace member claimed by exactly one spec.
+# Compile-free (markdown + Cargo.toml), so it runs on every commit.
+# Runs its own fixture test first: the real tree only ever exercises the
+# passing direction, so each rejection is pinned separately.
+lint-locked-areas: test-lint-locked-areas
+    ./scripts/lint-locked-areas.py
+
+# Unit tests for the locked-areas manifest's rejections
+test-lint-locked-areas:
+    ./scripts/tests/test_lint_locked_areas.py
 
 # Type-check the Quint design models (specs/quint/*.qnt)
 #
@@ -806,7 +826,7 @@ lint crate="": lint-gates lint-turmoil-features lint-turmoil lint-spec quint-che
 # second (see agents/seam-lints.md) and is cheap enough to run
 # unconditionally on every commit, unlike `lint` (clippy compiles the
 # workspace). Wired into lefthook pre-commit with no CLAUDECODE skip.
-lint-gates: lint-budget-growth lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-durable-ack lint-nested-config lint-error-sanitize lint-status-sanitize lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate lint-continuation-lock lint-script-write-seam lint-command-admission lint-ship-cmd-full
+lint-gates: lint-budget-growth lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-durable-ack lint-nested-config lint-error-sanitize lint-status-sanitize lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate lint-continuation-lock lint-script-write-seam lint-command-admission lint-ship-cmd-full lint-locked-areas
     @echo "OK: seam-lint gates passed"
 
 # Gate: turmoil-featured test bodies (frogdb-server/crates/server/tests/simulation.rs)
