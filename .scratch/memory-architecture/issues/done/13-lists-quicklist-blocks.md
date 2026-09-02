@@ -1,6 +1,6 @@
 # 13: lists as quicklist chains of listpack blocks
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Origin: memory-architecture PRD phase filing, 2026-09-01 — [PRD.md](../../PRD.md) R7
 Area: frogdb-types (list.rs) + commands (list family)
@@ -100,3 +100,23 @@ shard's bound arena per issue 03 — that is already the right arena).
 
 Nothing hard. Lands after the phase-3 table work ([issues 10–12 reserved](../)) only by
 sequencing convention — the block encoding itself touches neither the Dashtable nor eviction.
+
+## Resolution
+
+Landed 2026-09-01 on `mem-arch-integration` (commits `2cd246b6`..`358b19c0`, six
+cherry-picks from the implementation worktree).
+
+- New shared `frogdb-server/crates/types/src/listpack.rs`: contiguous buffer, entry format
+  `[len: LEB128][payload][backlen: reverse varint]` — O(1) tail ops and reverse iteration.
+  Documented deviations from Redis listpack: no integer encoding, no header, no EOF byte.
+- `ListValue` is now `VecDeque<Block>` with `Block::{Packed(Listpack), Plain(Bytes)}`;
+  Redis-matching caps (128 entries / 8192 bytes, plain blocks for oversized elements),
+  split on full-block LINSERT, merge of underfull neighbours on deletion. `memory_size()`
+  is a pure function of contents + partitioning (run-stable).
+- Model-based fuzz target `listpack_ops` (vs `VecDeque<Bytes>` model): 777k execs clean,
+  values straddling the plain-block threshold.
+- Review round 1 findings (fuzz model trim clamp, fuzz run evidence, oversized mid-chain
+  coverage, dead limits field, `replace` fast path) all fixed and re-review-verified.
+- Follow-ups spun out: [issue 14](../) is now a re-encode (migrate hash/set small forms
+  onto the shared module — three codecs coexist until then); `serialize_list` `to_vec`
+  materialisation noted for the zero-copy work.
