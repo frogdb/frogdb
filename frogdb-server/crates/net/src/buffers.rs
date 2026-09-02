@@ -170,16 +170,29 @@ impl BufferPool {
         }
     }
 
-    /// Give a buffer back. It is parked only when it is a pooled class, is not
-    /// still shared with outstanding slices, and the class is below its
-    /// watermark; otherwise it is freed here.
-    fn give(&mut self, mut buf: BytesMut, class: Option<usize>) {
+    /// Give a buffer back. It is parked only when its capacity is exactly a
+    /// pooled class's size, it is not still shared with outstanding slices, and
+    /// that class is below its watermark; otherwise it is freed here.
+    ///
+    /// The class comes from the buffer's *current* capacity, not from whatever
+    /// it was leased as. A caller is free to grow a lease, and parking a grown
+    /// buffer under its old class would put a megabyte in the 4 KiB list — where
+    /// `parked_bytes` under-reports it and the next caller asking for one page
+    /// is handed a megabyte it will hold for the rest of its life.
+    fn give(&mut self, mut buf: BytesMut) {
+        // Nothing to park or free: an `into_inner` lease, or a `mem::take`d slot.
+        if buf.capacity() == 0 {
+            return;
+        }
+        buf.clear();
+        // Exactly a class, or not pooled: an odd capacity parked in the class
+        // below it would make every figure the pool reports an estimate.
+        let class = class_for(buf.capacity()).filter(|&c| class_bytes(c) == buf.capacity());
         let Some(class) = class else {
             self.stats.freed_returns += 1;
             return;
         };
         let want = class_bytes(class);
-        buf.clear();
         // `try_reclaim` is the refcount check: it is false while a slice handed
         // out by `split_shared` is still alive, because the allocation is not
         // ours alone to hand to the next lease.
@@ -249,9 +262,24 @@ pub fn recycle(buf: &mut BytesMut, min_capacity: usize) {
     with_pool(|pool| {
         let (fresh, _) = pool.take(min_capacity);
         let old = std::mem::replace(buf, fresh);
-        let class = class_for(old.capacity()).filter(|&c| class_bytes(c) == old.capacity());
-        pool.give(old, class);
+        pool.give(old);
     });
+}
+
+/// Hand `buf`'s allocation to this core's pool and leave the slot empty.
+///
+/// [`recycle`] for a buffer that has no next use: a closing connection's read
+/// and write buffers, which would otherwise be freed at exactly the moment the
+/// next accept on this core wants them. Nothing is leased in return, so the slot
+/// is left with a zero-capacity `BytesMut` and any further write allocates.
+///
+/// `buf` is cleared first, so callers must only release a buffer whose contents
+/// are dead.
+pub fn release(buf: &mut BytesMut) {
+    if buf.capacity() == 0 {
+        return;
+    }
+    with_pool(|pool| pool.give(std::mem::take(buf)));
 }
 
 /// Trim this core's pools toward the low-water target, returning bytes freed.
@@ -310,7 +338,8 @@ impl PooledBuf {
     /// Take the buffer out of the lease, opting out of the pool. The allocation
     /// becomes the caller's to free.
     pub fn into_inner(mut self) -> BytesMut {
-        self.class = None;
+        // The empty slot left behind is what opts out: `give` parks by the
+        // capacity it is handed, and a taken lease has none.
         std::mem::take(&mut self.buf)
     }
 }
@@ -332,10 +361,9 @@ impl std::ops::DerefMut for PooledBuf {
 impl Drop for PooledBuf {
     fn drop(&mut self) {
         let buf = std::mem::take(&mut self.buf);
-        let class = self.class;
         // A failed borrow means we are being dropped inside `with_pool`; the
         // buffer is freed rather than parked, which is safe and rare.
-        let _ = with_pool(|pool| pool.give(buf, class));
+        let _ = with_pool(|pool| pool.give(buf));
     }
 }
 
@@ -448,6 +476,69 @@ mod tests {
                     "the grown allocation is parked for reuse, not dropped on the floor"
                 );
             });
+        });
+    }
+
+    /// A lease the caller grew goes back to the class it *became*, not the one
+    /// it was taken from — otherwise the next caller asking for a page is handed
+    /// the megabyte someone else grew, and holds it for its whole life.
+    #[test]
+    fn a_grown_lease_returns_to_the_class_it_grew_into() {
+        on_fresh_core(|| {
+            {
+                let mut leased = lease(MIN_CLASS_BYTES);
+                assert_eq!(leased.class_bytes(), Some(MIN_CLASS_BYTES));
+                // Grow it a whole way up the ladder, as a big reply would.
+                leased.reserve(MAX_CLASS_BYTES);
+                assert_eq!(leased.capacity(), MAX_CLASS_BYTES);
+            }
+
+            with_pool(|pool| {
+                assert_eq!(
+                    pool.parked(0),
+                    0,
+                    "a megabyte must not be parked in the 4 KiB class"
+                );
+                assert_eq!(pool.parked(CLASS_COUNT - 1), 1);
+                assert_eq!(
+                    pool.parked_bytes(),
+                    MAX_CLASS_BYTES,
+                    "the pool's own footprint must be what it actually holds"
+                );
+            });
+
+            let reused = lease(MIN_CLASS_BYTES);
+            assert_eq!(
+                reused.capacity(),
+                MIN_CLASS_BYTES,
+                "a small lease gets a small buffer, not the grown one"
+            );
+        });
+    }
+
+    /// A closing connection's buffers go to the pool, not to the allocator: the
+    /// next accept on this core is the reuse this pool exists for.
+    #[test]
+    fn release_parks_a_dead_buffer_without_leasing_a_replacement() {
+        on_fresh_core(|| {
+            let mut buf = BytesMut::with_capacity(MIN_CLASS_BYTES);
+            buf.extend_from_slice(b"a half-read command");
+
+            release(&mut buf);
+
+            assert_eq!(buf.capacity(), 0, "the slot is left empty, not re-leased");
+            with_pool(|pool| {
+                assert_eq!(pool.parked(0), 1);
+                assert_eq!(
+                    pool.stats().hits + pool.stats().misses,
+                    0,
+                    "releasing must not take a buffer back out of the pool"
+                );
+            });
+
+            // Empty slot, nothing to do, no stats moved.
+            release(&mut buf);
+            with_pool(|pool| assert_eq!(pool.parked(0), 1));
         });
     }
 

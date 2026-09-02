@@ -981,6 +981,18 @@ impl ConnectionHandler {
                     "ReplicationHandshake gates handler presence before yielding a handoff",
                 );
 
+            // ACCOUNTING GAP: the socket leaves output-buffer accounting here.
+            // `OutputBufferAccount`'s `Charge` is dropped with `self` at the end
+            // of this branch, which correctly releases the bytes this connection
+            // still held, but nothing takes over: from this point the
+            // replication feed's buffering is charged to no `NetworkOutput`
+            // budget and judged against no `client-output-buffer-limit` class,
+            // so the `replica` class governs only the pre-handoff connection.
+            // Closing this means charging inside the replication crates, which
+            // is spec-first work under `specs/replication.md`; it is filed
+            // separately and recorded in `specs/memory.md` FM-MEMORY-001's
+            // "NOT observable" and in the `client-output-buffer-limit` docs.
+            //
             // Extract the ConnectionStream from the Framed codec and type-erase
             // it for the replication handler (`handle_psync` takes a
             // `BoxedStream`). Non-turmoil: `into_boxed` preserves TLS if
@@ -1020,6 +1032,14 @@ impl ConnectionHandler {
 
         // Cleanup: notify all shards that this connection is closed
         self.notify_connection_closed().await;
+
+        // Return this connection's buffers to the core's pool instead of freeing
+        // them. A closing connection is exactly when the next one is likely to
+        // be accepted on this core, and its read buffer is the right size for
+        // that connection's first command. Both buffers are dead here, so the
+        // usual "only trim what is empty" guard does not apply — anything still
+        // in them is bytes we are never going to write.
+        self.release_buffers_to_pool();
 
         debug!(conn_id = self.state.id, "Connection handler finished");
         Ok(())

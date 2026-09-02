@@ -104,6 +104,7 @@ impl ConnectionHandler {
         &mut self,
         response: frogdb_protocol::WireResponse,
     ) -> std::io::Result<()> {
+        self.drain_other_protocol_buffer().await?;
         match self.state.protocol_version {
             ProtocolVersion::Resp2 => {
                 // Narrow to the codec's outbound item and buffer it without
@@ -137,10 +138,41 @@ impl ConnectionHandler {
         self.account_buffered_output()
     }
 
+    /// Put whatever is buffered under the *other* protocol version on the wire
+    /// before appending to this one's buffer.
+    ///
+    /// Two buffers share one socket — the codec's write buffer for RESP2 and
+    /// `resp3_buf` for RESP3 — so a `HELLO` in the middle of a pipeline would
+    /// otherwise leave replies in both with no ordering between them that
+    /// `flush_responses` could recover: after `RESP2, HELLO 3, HELLO 2` the codec
+    /// buffer holds bytes from both before and after the RESP3 ones.
+    ///
+    /// Draining here keeps the invariant that **at most one of the two buffers
+    /// is ever non-empty**, which makes the order well defined: whatever is held
+    /// under the other version is strictly older than the frame about to be fed,
+    /// so it goes out first. The cost is one length check per reply and a flush
+    /// only on the reply that follows a protocol switch.
+    async fn drain_other_protocol_buffer(&mut self) -> std::io::Result<()> {
+        match self.state.protocol_version {
+            ProtocolVersion::Resp2 if !self.resp3_buf.is_empty() => {
+                self.framed.get_mut().write_all(&self.resp3_buf).await?;
+                self.resp3_buf.clear();
+            }
+            ProtocolVersion::Resp3 if !self.framed.write_buffer().is_empty() => {
+                SinkExt::<redis_protocol::resp2::types::BytesFrame>::flush(&mut self.framed)
+                    .await
+                    .map_err(std::io::Error::other)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     /// Flush all buffered responses to the client.
     pub(super) async fn flush_responses(&mut self) -> std::io::Result<()> {
-        // RESP3 first: its buffer holds frames fed before anything the codec is
-        // holding could have been, and both share one socket.
+        // Either buffer may hold the pending replies, but never both with bytes
+        // that interleave: `drain_other_protocol_buffer` puts the older one on
+        // the wire at the protocol switch, so the order here is free.
         if !self.resp3_buf.is_empty() {
             self.framed.get_mut().write_all(&self.resp3_buf).await?;
             self.resp3_buf.clear();

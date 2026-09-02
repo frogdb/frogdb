@@ -578,15 +578,10 @@ impl Server {
             });
         }
 
-        // Redis's `client-output-buffer-limit`, read once for every connection
-        // this server will accept. Parsed here, where a bad value can still
-        // refuse the boot: a limit that failed to parse and was quietly replaced
-        // by a default is a limit the operator believes they set and does not
-        // have.
-        let output_buffer_limits = crate::connection::output_buffer::OutputBufferLimits::parse(
-            &self.config.server.client_output_buffer_limit,
-        )
-        .map_err(|e| anyhow::anyhow!("server.client-output-buffer-limit: {e}"))?;
+        // Redis's `client-output-buffer-limit`, parsed once at construction
+        // (`Server::with_listeners`) so a malformed spec refuses the boot before
+        // any listener is bound.
+        let output_buffer_limits = self.output_buffer_limits;
 
         // Shared dependencies for every acceptor (main, admin, TLS ports).
         // Built once here; only the per-listener `PortSpec` (listener,

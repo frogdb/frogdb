@@ -188,13 +188,43 @@ async fn test_network_output_budget_is_published_for_resp2_and_resp3() {
 /// A malformed `client-output-buffer-limit` must refuse the boot rather than be
 /// silently replaced by the default: a limit the operator believes they set and
 /// does not have is worse than no limit at all.
-#[test]
-fn test_a_malformed_limit_spec_is_a_configuration_error() {
-    use frogdb_server::connection::output_buffer::OutputBufferLimits;
+///
+/// The parser's own rejections are unit-tested in `connection::output_buffer`;
+/// what this pins is that the rejection actually reaches startup — that the
+/// parse sits on the boot path rather than beside it, so a typo in a config file
+/// is a failure to start and not a server running wide open.
+// FM-MEMORY-001
+#[tokio::test]
+async fn test_a_malformed_limit_spec_is_a_configuration_error() {
+    let started = TestServer::try_start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        // An incomplete triple: a class, a hard limit, a soft limit and no
+        // soft-seconds.
+        client_output_buffer_limit: Some("normal 1 2".to_string()),
+        ..Default::default()
+    })
+    .await;
 
-    assert!(OutputBufferLimits::parse("normal 1 2 3").is_ok());
+    let err = match started {
+        Ok(server) => {
+            server.shutdown().await;
+            panic!("a malformed client-output-buffer-limit must refuse the boot");
+        }
+        Err(e) => format!("{e:#}"),
+    };
     assert!(
-        OutputBufferLimits::parse("normal 1 2").is_err(),
-        "an incomplete triple must not be accepted"
+        err.contains("client-output-buffer-limit"),
+        "the operator must be told which parameter refused the boot; got: {err}"
     );
+
+    // The same server boots when the spec is well formed, so the refusal is the
+    // spec's doing and not an unrelated startup failure.
+    let server = TestServer::try_start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        client_output_buffer_limit: Some("normal 1 2 3".to_string()),
+        ..Default::default()
+    })
+    .await
+    .expect("a well-formed spec must boot");
+    server.shutdown().await;
 }

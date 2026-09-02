@@ -39,7 +39,7 @@
 
 use std::time::{Duration, Instant};
 
-use frogdb_memory::{Budget, Charge, Disposition, Subsystem};
+use frogdb_memory::{Budget, Charge};
 
 /// The `client-output-buffer-limit` classes, as Redis names them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -458,6 +458,8 @@ impl OutputBufferAccount {
 
 #[cfg(test)]
 mod tests {
+    use frogdb_memory::{Disposition, Subsystem};
+
     use super::*;
 
     fn budget(limit: u64) -> Budget {
@@ -510,7 +512,7 @@ mod tests {
             "a partial flush releases the difference"
         );
 
-        acct.set_buffered(0, now);
+        assert_eq!(acct.set_buffered(0, now), OutputVerdict::Keep);
         assert_eq!(budget.charged(), 0, "a full flush releases them");
 
         drop(acct);

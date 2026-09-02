@@ -312,6 +312,21 @@ impl ConnectionHandler {
         }
     }
 
+    /// Hand this connection's buffers to the core's pool on the way out.
+    ///
+    /// The pool's whole point is that a core's buffers outlive the connections
+    /// that used them: without this, every close frees allocations the next
+    /// accept immediately asks for again. The pool decides what it can actually
+    /// park — an odd capacity, or one still shared with an outstanding slice, is
+    /// freed there rather than mislabelled.
+    pub(super) fn release_buffers_to_pool(&mut self) {
+        use frogdb_net::buffers;
+
+        buffers::release(self.framed.read_buffer_mut());
+        buffers::release(self.framed.write_buffer_mut());
+        buffers::release(&mut self.resp3_buf);
+    }
+
     /// Compute the current memory usage of this connection.
     pub(crate) fn compute_client_memory(&mut self) -> ClientMemoryUsage {
         // Query buffer: access inner BytesMut length from Framed codec
@@ -939,6 +954,213 @@ mod tracking_redirect_tests {
         assert!(
             aborted,
             "re-enabling REDIRECT to the same id must abort the previous forwarding task"
+        );
+    }
+}
+
+/// The housekeeping tick, over a real connection.
+///
+/// What the unit tests in [`output_buffer`](super::output_buffer) cannot show is
+/// that anything *calls* the seam when a connection is doing nothing — which is
+/// exactly when a client that has stopped reading must be judged. These build a
+/// real `ConnectionHandler` over a loopback socket and drive `on_idle_tick`
+/// directly: the function the `select!` loop's timer arm calls.
+///
+/// # Why the soft limit is not forced end to end
+///
+/// It cannot be, over a socket. The reply path applies backpressure at the
+/// codec's boundary instead of accumulating, so the only way to hold a
+/// connection above a soft mark is a client that has stopped reading — and such
+/// a connection is parked inside `write_all`, where no `select!` arm runs at
+/// all, this tick included. When the client does read, the buffers drain in the
+/// same breath. Forcing the window end to end would need a non-blocking
+/// feed-and-poll write path, which is a different change. So it is forced here,
+/// at the seam the timer actually drives.
+#[cfg(all(test, not(feature = "turmoil")))]
+mod idle_tick_tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use frogdb_core::{
+        AclManager, ClientRegistry, CommandRegistry, NoopSnapshotCoordinator, ShardSender,
+        SharedFunctionRegistry, persistence::SnapshotCoordinator,
+    };
+    use frogdb_net::buffers;
+    use tokio::net::{TcpListener, TcpStream};
+    use tokio::sync::mpsc;
+
+    use crate::connection::ConnectionHandler;
+    use crate::connection::builder::standalone_config;
+    use crate::connection::deps::{AdminDeps, ClusterDeps, CoreDeps, ObservabilityDeps};
+    use crate::connection::output_buffer::{OutputBufferLimit, OutputBufferLimits};
+    use crate::runtime_config::ConfigManager;
+
+    /// A connection handler over a real loopback socket, with `limits` in force.
+    ///
+    /// The peer end and the shard receiver come back with it: dropping either
+    /// would make the connection fail for a reason that has nothing to do with
+    /// what is under test.
+    async fn handler_with_limits(
+        limits: OutputBufferLimits,
+    ) -> (
+        ConnectionHandler,
+        TcpStream,
+        mpsc::Receiver<frogdb_core::shard::Envelope>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+        let peer = TcpStream::connect(addr).await.expect("connect");
+        let (server_side, client_addr) = listener.accept().await.expect("accept");
+
+        let (shard_tx, shard_rx) = mpsc::channel(1);
+        let client_registry = Arc::new(ClientRegistry::new());
+        let client_handle = client_registry.register(1, client_addr, None);
+        let snapshot_coordinator: Arc<dyn SnapshotCoordinator> =
+            Arc::new(NoopSnapshotCoordinator::new());
+
+        let mut config = standalone_config(1);
+        config.output_buffer_limits = limits;
+
+        let handler = ConnectionHandler::from_deps(
+            crate::tls::MaybeTlsStream::Plain { inner: server_side },
+            client_addr,
+            1,
+            0,
+            client_handle,
+            CoreDeps {
+                registry: Arc::new(CommandRegistry::new()),
+                shard_senders: Arc::new(vec![ShardSender::new(shard_tx)]),
+                acl_manager: AclManager::new(Default::default()),
+            },
+            AdminDeps {
+                client_registry,
+                config_manager: Arc::new(ConfigManager::new(&crate::config::Config::default())),
+                snapshot_coordinator,
+                function_registry: SharedFunctionRegistry::default(),
+                cursor_store: Arc::new(crate::cursor_store::AggregateCursorStore::new()),
+                recovery_stats: Default::default(),
+            },
+            ClusterDeps::default(),
+            config,
+            ObservabilityDeps::default(),
+        );
+        (handler, peer, shard_rx)
+    }
+
+    /// Output that stays above the soft mark across ticks is shed once the
+    /// window has elapsed — and not before.
+    ///
+    /// This is the finding the tick exists for: with nothing calling the seam,
+    /// the soft limit was unreachable however long a client stayed behind.
+    // FM-MEMORY-001
+    #[tokio::test]
+    async fn the_idle_tick_sheds_a_connection_that_stays_above_the_soft_mark() {
+        let limits = OutputBufferLimits {
+            normal: OutputBufferLimit {
+                hard_bytes: 0,
+                soft_bytes: 1024,
+                soft_seconds: 1,
+            },
+            ..Default::default()
+        };
+        let (mut handler, _peer, _shard_rx) = handler_with_limits(limits).await;
+
+        // Buffered output a flush would not clear: bytes staged for a client
+        // that is not reading, in the RESP3 staging buffer the seam measures.
+        handler.resp3_buf.extend_from_slice(&vec![b'x'; 4096]);
+
+        // The first tick opens the window rather than shedding: a burst that
+        // drains promptly must not be a kill.
+        handler
+            .on_idle_tick()
+            .expect("a connection inside its window is kept");
+
+        // The window is judged against the clock, so wait it out rather than
+        // reaching behind the seam.
+        tokio::time::sleep(Duration::from_millis(1_100)).await;
+        assert!(
+            handler.on_idle_tick().is_err(),
+            "output above the soft mark for longer than soft-seconds must be shed"
+        );
+        assert_eq!(
+            handler.resp3_buf.len(),
+            0,
+            "a shed connection's buffered output is discarded, not written"
+        );
+    }
+
+    /// A connection whose buffers grew for one big reply gives that capacity
+    /// back once it goes idle, rather than holding it for the whole session.
+    #[tokio::test]
+    async fn an_idle_connection_decays_its_buffers_to_the_pool() {
+        let (mut handler, _peer, _shard_rx) =
+            handler_with_limits(OutputBufferLimits::default()).await;
+
+        // A megabyte of reply staging, as a large GET would leave behind, and
+        // then drained: empty, but still holding its capacity.
+        handler.resp3_buf.reserve(buffers::MAX_CLASS_BYTES);
+        let grown = handler.resp3_buf.capacity();
+        assert!(grown >= buffers::MAX_CLASS_BYTES);
+
+        handler.on_idle_tick().expect("an empty buffer is not shed");
+
+        assert_eq!(
+            handler.resp3_buf.capacity(),
+            buffers::MIN_CLASS_BYTES,
+            "an idle connection must decay to the pool's smallest class; still holding {}",
+            handler.resp3_buf.capacity()
+        );
+    }
+
+    /// Closing hands the buffers to this core's pool, where the next accept can
+    /// lease them, instead of freeing them back to the allocator.
+    #[tokio::test]
+    async fn a_closing_connection_returns_its_buffers_to_the_pool() {
+        let (mut handler, _peer, _shard_rx) =
+            handler_with_limits(OutputBufferLimits::default()).await;
+        handler.resp3_buf.reserve(buffers::MIN_CLASS_BYTES);
+
+        let before = buffers::with_pool(|pool| pool.parked_bytes()).expect("pool");
+        handler.release_buffers_to_pool();
+        let after = buffers::with_pool(|pool| pool.parked_bytes()).expect("pool");
+
+        assert!(
+            after > before,
+            "a closing connection's buffers must land in the pool ({before} -> {after})"
+        );
+        assert_eq!(
+            handler.resp3_buf.capacity(),
+            0,
+            "and it must not lease a replacement on its way out"
+        );
+    }
+
+    /// A connection shed at the tick leaves nothing charged behind it.
+    // FM-MEMORY-002
+    #[tokio::test]
+    async fn a_shed_connection_releases_its_charge() {
+        let limits = OutputBufferLimits {
+            normal: OutputBufferLimit {
+                hard_bytes: 1024,
+                soft_bytes: 0,
+                soft_seconds: 0,
+            },
+            ..Default::default()
+        };
+        let (mut handler, _peer, _shard_rx) = handler_with_limits(limits).await;
+
+        let budget = frogdb_memory::network_output::current();
+        let before = budget.charged();
+
+        handler.resp3_buf.extend_from_slice(&vec![b'x'; 4096]);
+        assert!(
+            handler.on_idle_tick().is_err(),
+            "output past the hard limit is shed at the tick too"
+        );
+        assert_eq!(
+            budget.charged(),
+            before,
+            "the shed connection's bytes are released from the budget"
         );
     }
 }
