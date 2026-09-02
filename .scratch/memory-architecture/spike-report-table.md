@@ -390,6 +390,12 @@ Studied before building; each deviation is deliberate and stated with its reason
 - **No TTL, no expiry, no eviction, no persistence hooks.** `KeyMetadata` is replicated
   in the baseline for sizing only; the prototype's slots carry no metadata at all, which
   is a real gap — see follow-up 4.
+- **The insert comparison is not like-for-like, and it favours neither side cleanly.**
+  The baseline insert builds a full `Entry` — including an `Instant::now()` for
+  `last_access` — while the prototype's insert stores only two words. That inflates
+  griddle's insert number by a clock read; it also means the prototype is not yet doing
+  the work follow-up 4 will give it. Read the insert column as "same order of
+  magnitude", nothing finer.
 - **`stats.allocated` includes size-class rounding**, which is the honest number for a
   budget (that memory is unavailable to anything else) but slightly flatters designs
   that allocate fewer, larger objects — i.e. it flatters ours over griddle's. The
