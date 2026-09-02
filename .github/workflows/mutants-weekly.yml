@@ -120,6 +120,8 @@ jobs:
     - name: Set up mise toolchain
       if: (github.event.inputs.crate == '' || github.event.inputs.crate == matrix.crate)
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: python uv just cargo:cargo-mutants cargo:cargo-nextest
@@ -217,6 +219,8 @@ jobs:
     - name: Set up mise toolchain
       if: (github.event.inputs.crate == '' || github.event.inputs.crate == matrix.crate)
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: python uv

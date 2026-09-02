@@ -200,7 +200,15 @@ def mise_setup_step(install_args: str | None = None) -> Step:
         w["install_args"] = install_args
     w["cache"] = SQ("true")
     w["experimental"] = SQ("true")  # enables cargo: and ubi: backends
-    return Step(name="Set up mise toolchain", uses=MISE_ACTION, with_=w)
+    # rust is unconfigured for mise (see RUST_TOOLCHAIN above), so a cargo:
+    # tool's declared `rust` install dependency must fall back to ambient PATH
+    # instead of failing mise's install-dependency check.
+    return Step(
+        name="Set up mise toolchain",
+        uses=MISE_ACTION,
+        with_=w,
+        env=omap(MISE_DISABLE_TOOLS="rust"),
+    )
 
 
 def rust_toolchain_step(components: str | None = None, targets: str | None = None) -> Step:
