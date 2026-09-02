@@ -103,7 +103,7 @@ def locked_crates_touched_step(crate_paths: dict[str, str]) -> Step:
         run=script(
             "\n".join(
                 [
-                    "set -uo pipefail",
+                    "set -euo pipefail",
                     "crates=()",
                     *checks,
                     # `${a[@]+"${a[@]}"}` keeps an empty array from tripping `set -u`;
@@ -165,23 +165,28 @@ def mutants_diff_job() -> Job:
                     EVENT_NAME="${{ github.event_name }}",
                     BEFORE="${{ github.event.before }}",
                 ),
+                # `-e` matters here: an unresolvable base must fail the job, not
+                # write an empty `sha=` that the next step reads as its own
+                # first argument (`just mutants-diff <crate> --jobs 2`).
                 run=script("""\
-                    set -uo pipefail
+                    set -euo pipefail
                     if [ "${EVENT_NAME}" = "pull_request" ]; then
-                      echo "sha=$(git merge-base origin/main HEAD)" >> "$GITHUB_OUTPUT"
-                      exit 0
+                      sha=$(git merge-base origin/main HEAD)
+                    else
+                      if [ -z "${BEFORE}" ] || [ "${BEFORE}" = "0000000000000000000000000000000000000000" ]; then
+                        echo "skip=true" >> "$GITHUB_OUTPUT"
+                        echo "This push created the branch (no before-SHA); nothing to diff against."
+                        exit 0
+                      fi
+                      if ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+                        echo "skip=true" >> "$GITHUB_OUTPUT"
+                        echo "before-SHA ${BEFORE} is unreachable (force push); nothing to diff against."
+                        exit 0
+                      fi
+                      sha="${BEFORE}"
                     fi
-                    if [ -z "${BEFORE}" ] || [ "${BEFORE}" = "0000000000000000000000000000000000000000" ]; then
-                      echo "skip=true" >> "$GITHUB_OUTPUT"
-                      echo "This push created the branch (no before-SHA); nothing to diff against."
-                      exit 0
-                    fi
-                    if ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
-                      echo "skip=true" >> "$GITHUB_OUTPUT"
-                      echo "before-SHA ${BEFORE} is unreachable (force push); nothing to diff against."
-                      exit 0
-                    fi
-                    echo "sha=${BEFORE}" >> "$GITHUB_OUTPUT"
+                    [ -n "${sha}" ] || { echo "mutants-diff: could not resolve a base commit"; exit 1; }
+                    echo "sha=${sha}" >> "$GITHUB_OUTPUT"
                     """),
             ),
             Step(
@@ -191,7 +196,10 @@ def mutants_diff_job() -> Job:
             ),
             Step(
                 name="Summarize the run",
-                if_="always() && steps.base.outputs.skip != 'true'",
+                # `steps.base.outcome`: without it a setup step failing leaves
+                # `skip` empty and this reports "no mutants" for a job that
+                # never mutated anything.
+                if_="always() && steps.base.outcome == 'success' && steps.base.outputs.skip != 'true'",
                 env=omap(CRATE="${{ matrix.crate }}"),
                 run=script("""\
                     set -uo pipefail

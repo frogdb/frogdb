@@ -113,7 +113,7 @@ jobs:
         LOCKED_FROGDB_TXN: ${{ steps.filter.outputs['locked-frogdb-txn'] }}
         LOCKED_FROGDB_VLL: ${{ steps.filter.outputs['locked-frogdb-vll'] }}
       run: |
-        set -uo pipefail
+        set -euo pipefail
         crates=()
         if [ "$LOCKED_FROGDB_CLUSTER" = "true" ]; then crates+=(frogdb-cluster); fi
         if [ "$LOCKED_FROGDB_CLUSTER_RUNTIME" = "true" ]; then crates+=(frogdb-cluster-runtime); fi
@@ -304,27 +304,29 @@ jobs:
         EVENT_NAME: ${{ github.event_name }}
         BEFORE: ${{ github.event.before }}
       run: |
-        set -uo pipefail
+        set -euo pipefail
         if [ "${EVENT_NAME}" = "pull_request" ]; then
-          echo "sha=$(git merge-base origin/main HEAD)" >> "$GITHUB_OUTPUT"
-          exit 0
+          sha=$(git merge-base origin/main HEAD)
+        else
+          if [ -z "${BEFORE}" ] || [ "${BEFORE}" = "0000000000000000000000000000000000000000" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "This push created the branch (no before-SHA); nothing to diff against."
+            exit 0
+          fi
+          if ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "before-SHA ${BEFORE} is unreachable (force push); nothing to diff against."
+            exit 0
+          fi
+          sha="${BEFORE}"
         fi
-        if [ -z "${BEFORE}" ] || [ "${BEFORE}" = "0000000000000000000000000000000000000000" ]; then
-          echo "skip=true" >> "$GITHUB_OUTPUT"
-          echo "This push created the branch (no before-SHA); nothing to diff against."
-          exit 0
-        fi
-        if ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
-          echo "skip=true" >> "$GITHUB_OUTPUT"
-          echo "before-SHA ${BEFORE} is unreachable (force push); nothing to diff against."
-          exit 0
-        fi
-        echo "sha=${BEFORE}" >> "$GITHUB_OUTPUT"
+        [ -n "${sha}" ] || { echo "mutants-diff: could not resolve a base commit"; exit 1; }
+        echo "sha=${sha}" >> "$GITHUB_OUTPUT"
     - name: Mutate the diff
       if: steps.base.outputs.skip != 'true'
       run: just mutants-diff ${{ matrix.crate }} ${{ steps.base.outputs.sha }} --jobs 2
     - name: Summarize the run
-      if: always() && steps.base.outputs.skip != 'true'
+      if: always() && steps.base.outcome == 'success' && steps.base.outputs.skip != 'true'
       env:
         CRATE: ${{ matrix.crate }}
       run: |
