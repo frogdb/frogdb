@@ -1,6 +1,6 @@
 # 10: R5 slot-layout spike — segmented-table prototype with inline values
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Origin: memory-architecture PRD phase filing, 2026-09-01 — PRD.md R5/R6/R9; scoped by the
 Dashtable grill (spike-first; table + inline word + reserved eviction-bit space; griddle
@@ -69,3 +69,24 @@ single-threaded by R2/R3, so the spike is single-threaded too.
 
 Nothing — the shipped table is untouched. Blocks issues 11 and 12, which are deliberately
 not drafted until this reports.
+
+## Resolution
+
+Landed 2026-09-01 on `mem-arch-integration` (picks `9c807ea2`..`74c0e523`, 8 commits).
+Deliverable: [`spike-report-table.md`](../../spike-report-table.md); prototype crate at
+`spike-table/` (throwaway, in-scratch).
+
+Verdict: **8-byte tagged slot word wins on memory** — 33.6/67.1/41.9 struct B/e at
+allocated (nallocx) class vs griddle's 203.4 B/e table term; whole-workload 65–145 B/e vs
+416–480. 16-byte word loses. Reverse-binary cursor at segment local depth gives
+exactly-once scans under splits (strided directory rewrite, invariant test pinned).
+Lookup is **CONDITIONAL**: 2.0×/2.4×/3.2× vs griddle at hasher parity with an
+uninstrumented probe path (~45% of the originally reported gap was SipHash-vs-ahash);
+residual attributed to the scalar fingerprint loop + 4-cache-line bucket, unsplit; ship
+gate 1.25× with a mandated Linux re-measure. Review round 1 (hasher mismatch, undecomposed
+NO-GO, size-class rounding, inverted directory claim, unreconstructable baseline, split
+cost misstatement) all fixed and re-review-verified; issue-11 gate ruled **yes**.
+
+Follow-ups carried into issue 11's draft: vectorised fingerprint match (NEON/SSE2), store
+16 fp bits so splits skip rehashing, size-class-aware segment sizing, insert column
+re-measure on a quiet box.
