@@ -25,6 +25,9 @@ A red run is read and acted on by hand, like the other scheduled tiers; nothing
 auto-files an issue.
 """
 
+from dataclasses import replace
+from typing import TYPE_CHECKING
+
 from ruamel.yaml.comments import CommentedMap
 from ruamel.yaml.scalarstring import SingleQuotedScalarString as SQ
 
@@ -50,6 +53,11 @@ from workflow_gen.schema import (
     Trigger,
     Workflow,
 )
+
+if TYPE_CHECKING:
+    # `scripts/` is only on sys.path once `locked_areas()` puts it there, so
+    # `Spec` is a name in annotations and nowhere else — see helpers.py.
+    from locked_areas import Spec
 
 # cargo-mutants shells out to the test tool named in .cargo/mutants.toml, which
 # is nextest — so a mutation job needs both binaries. Same set `test.py`'s
@@ -103,10 +111,15 @@ def only_selected(steps: list[Step]) -> list[Step]:
     `just workflow-gen` time from the manifest, so there is no earlier job whose
     output could narrow it. A leg for a crate nobody asked for therefore runs no
     steps and finishes green in seconds instead of mutating that crate anyway.
+
+    Returns copies rather than editing the steps it is handed: the builders in
+    `helpers.py` are shared across workflows, and binding this workflow's filter
+    onto a step object a caller still holds is a surprise waiting to happen.
     """
-    for step in steps:
-        step.if_ = SELECTED if step.if_ is None else f"({step.if_}) && {SELECTED}"
-    return steps
+    return [
+        replace(step, if_=SELECTED if step.if_ is None else f"({step.if_}) && {SELECTED}")
+        for step in steps
+    ]
 
 
 OUTPUT_DIR = "target/mutants/${{ matrix.crate }}"
@@ -129,35 +142,70 @@ def _shards(crate: str) -> int:
     return SHARDS.get(crate, DEFAULT_SHARDS)
 
 
-def mutate_matrix() -> MatrixInclude:
+def _crates(specs: list["Spec"]) -> list[str]:
+    return [crate for spec in specs for crate in spec.crates]
+
+
+def mutate_matrix(specs: list["Spec"]) -> MatrixInclude:
     """One leg per (locked crate, shard), generated from the manifest.
 
-    `gate` rides along per leg: GitHub renders a matrix leg's values in its
-    display name, so the run page says which contract each leg is feeding
-    without anyone opening the spec. It is not a threshold anyone typed and no
-    step reads it — the gate script resolves `Gate:` from the header itself.
+    No threshold rides along: the crate's `Gate:` lives in its spec header and is
+    read there by `scripts/mutants-gate.py` in the score job, so no number in
+    this workflow can disagree with the contract.
     """
     legs = []
-    for spec in locked_areas():
-        for crate in spec.crates:
-            n = _shards(crate)
-            for k in range(n):
-                legs.append(omap(crate=crate, shard=SQ(f"{k}/{n}"), gate=SQ(f"{spec.gate:.2f}")))
+    for crate in _crates(specs):
+        n = _shards(crate)
+        for k in range(n):
+            legs.append(omap(crate=crate, shard=SQ(f"{k}/{n}")))
     return MatrixInclude(includes=legs)
 
 
-def score_matrix() -> MatrixInclude:
+def score_matrix(specs: list["Spec"]) -> MatrixInclude:
     """One leg per locked crate, carrying the shard count it must find."""
     return MatrixInclude(
-        includes=[
-            omap(crate=crate, shards=SQ(str(_shards(crate))))
-            for spec in locked_areas()
-            for crate in spec.crates
-        ]
+        includes=[omap(crate=crate, shards=SQ(str(_shards(crate)))) for crate in _crates(specs)]
     )
 
 
-def mutate_job() -> Job:
+def gate_job(specs: list["Spec"]) -> Job:
+    """The shared change gate, plus a check that the dispatch input names a real crate.
+
+    A `workflow_dispatch` with a typo (`frogb-txn`) matches no leg of either
+    matrix, so every job's steps skip and the run goes green having measured
+    nothing — the one outcome this workflow exists to prevent. The crate list is
+    baked in at `just workflow-gen` time from the same manifest the matrices come
+    from, so it drifts the same way they do: by failing `workflow-gen --check`.
+    """
+    job = change_gate_job(workflow_file=WORKFLOW_FILE)
+    # First: a typo should cost seconds, not a round trip to the Actions API.
+    job.steps.insert(
+        0,
+        Step(
+            name="Validate the requested crate",
+            env=omap(CRATE=f"${{{{ {CRATE_INPUT} }}}}"),
+            run=script(f"""\
+            set -uo pipefail
+            crates="{" ".join(_crates(specs))}"
+            if [ -z "${{CRATE}}" ]; then
+              echo "no crate requested; every locked crate will run."
+              exit 0
+            fi
+            for c in ${{crates}}; do
+              if [ "${{c}}" = "${{CRATE}}" ]; then
+                echo "running ${{CRATE}} only."
+                exit 0
+              fi
+            done
+            echo "mutants-weekly: unknown locked crate '${{CRATE}}'; expected one of: ${{crates}}" >&2
+            exit 1
+            """),
+        ),
+    )
+    return job
+
+
+def mutate_job(specs: list["Spec"]) -> Job:
     """Mutate one shard of one locked crate and publish its outcomes file."""
     return Job(
         name="Mutate ${{ matrix.crate }} (shard ${{ matrix.shard }})",
@@ -165,7 +213,7 @@ def mutate_job() -> Job:
         needs="gate",
         if_="needs.gate.outputs.skip != 'true'",
         timeout_minutes=LEG_TIMEOUT_MINUTES,
-        strategy=Strategy(matrix=mutate_matrix(), fail_fast=False),
+        strategy=Strategy(matrix=mutate_matrix(specs), fail_fast=False),
         steps=only_selected(
             [
                 checkout_step(),
@@ -220,6 +268,10 @@ def mutate_job() -> Job:
                     {OUTPUT_DIR}/mutants.out/missed.txt
                     {OUTPUT_DIR}/mutants.out/previously_caught.txt
                     """),
+                    # A red Monday is read by hand, and the next weekly run starts
+                    # seven days later: the default 7-day retention would expire the
+                    # evidence exactly when someone goes looking for it.
+                    retention_days=30,
                     if_no_files_found="error",
                 ),
             ]
@@ -227,20 +279,22 @@ def mutate_job() -> Job:
     )
 
 
-def score_job() -> Job:
+def score_job(specs: list["Spec"]) -> Job:
     """Score one crate's shards as a single run against its spec-header gate.
 
     `always()`: a leg that fails or is cancelled must still reach this job, which
     reports the crate incomplete rather than letting a partial upload silently
-    become a score. The dispatch filter matches the mutate job's — without it a
-    run targeting one crate would fail the seven crates it never mutated.
+    become a score. It is qualified by `needs.gate.result == 'success'` so that a
+    run rejected by the gate (unknown dispatch crate) fails there once instead of
+    once per crate here. The dispatch filter matches the mutate job's — without it
+    a run targeting one crate would fail the seven crates it never mutated.
     """
     return Job(
         name="Score ${{ matrix.crate }}",
         runs_on=RUNS_ON,
         needs=["gate", "mutate"],
-        if_="always() && needs.gate.outputs.skip != 'true'",
-        strategy=Strategy(matrix=score_matrix(), fail_fast=False),
+        if_="always() && needs.gate.result == 'success' && needs.gate.outputs.skip != 'true'",
+        strategy=Strategy(matrix=score_matrix(specs), fail_fast=False),
         steps=only_selected(
             [
                 # The gate script resolves the crate's threshold from its spec header,
@@ -273,9 +327,9 @@ def score_job() -> Job:
                     shopt -s nullglob
                     outcomes=("${OUT}"/*/outcomes.json)
                     if [ "${#outcomes[@]}" -ne "${SHARDS}" ]; then
-                      echo "incomplete run: expected ${SHARDS} shards, got ${#outcomes[@]}"
+                      echo "incomplete run: expected ${SHARDS} shard(s), got ${#outcomes[@]}"
                       echo "### mutants-weekly: ${CRATE}" >> "$GITHUB_STEP_SUMMARY"
-                      echo "incomplete run: expected ${SHARDS} shards, got ${#outcomes[@]} — not a score." >> "$GITHUB_STEP_SUMMARY"
+                      echo "incomplete run: expected ${SHARDS} shard(s), got ${#outcomes[@]} — not a score." >> "$GITHUB_STEP_SUMMARY"
                       exit 1
                     fi
                     # Streams are captured apart and replayed in order: the gate
@@ -322,8 +376,10 @@ def mutants_weekly_workflow() -> Workflow:
         ),
     )
 
-    w.job("gate", change_gate_job(workflow_file=WORKFLOW_FILE))
-    w.job("mutate", mutate_job())
-    w.job("score", score_job())
+    specs = locked_areas()
+
+    w.job("gate", gate_job(specs))
+    w.job("mutate", mutate_job(specs))
+    w.job("score", score_job(specs))
 
     return w

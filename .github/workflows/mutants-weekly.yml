@@ -25,6 +25,24 @@ jobs:
     outputs:
       skip: ${{ steps.gate.outputs.skip }}
     steps:
+    - name: Validate the requested crate
+      env:
+        CRATE: ${{ github.event.inputs.crate }}
+      run: |
+        set -uo pipefail
+        crates="frogdb-cluster frogdb-cluster-runtime frogdb-persistence frogdb-recovery frogdb-replication frogdb-replication-runtime frogdb-txn frogdb-vll"
+        if [ -z "${CRATE}" ]; then
+          echo "no crate requested; every locked crate will run."
+          exit 0
+        fi
+        for c in ${crates}; do
+          if [ "${c}" = "${CRATE}" ]; then
+            echo "running ${CRATE} only."
+            exit 0
+          fi
+        done
+        echo "mutants-weekly: unknown locked crate '${CRATE}'; expected one of: ${crates}" >&2
+        exit 1
     - id: gate
       name: Check for new commits since last successful run
       env:
@@ -62,55 +80,38 @@ jobs:
         include:
         - crate: frogdb-cluster
           shard: '0/4'
-          gate: '0.80'
         - crate: frogdb-cluster
           shard: '1/4'
-          gate: '0.80'
         - crate: frogdb-cluster
           shard: '2/4'
-          gate: '0.80'
         - crate: frogdb-cluster
           shard: '3/4'
-          gate: '0.80'
         - crate: frogdb-cluster-runtime
           shard: '0/1'
-          gate: '0.80'
         - crate: frogdb-persistence
           shard: '0/4'
-          gate: '0.85'
         - crate: frogdb-persistence
           shard: '1/4'
-          gate: '0.85'
         - crate: frogdb-persistence
           shard: '2/4'
-          gate: '0.85'
         - crate: frogdb-persistence
           shard: '3/4'
-          gate: '0.85'
         - crate: frogdb-recovery
           shard: '0/1'
-          gate: '0.85'
         - crate: frogdb-replication
           shard: '0/4'
-          gate: '0.85'
         - crate: frogdb-replication
           shard: '1/4'
-          gate: '0.85'
         - crate: frogdb-replication
           shard: '2/4'
-          gate: '0.85'
         - crate: frogdb-replication
           shard: '3/4'
-          gate: '0.85'
         - crate: frogdb-replication-runtime
           shard: '0/1'
-          gate: '0.85'
         - crate: frogdb-txn
           shard: '0/1'
-          gate: '0.90'
         - crate: frogdb-vll
           shard: '0/1'
-          gate: '0.90'
       fail-fast: false
     steps:
     - name: Checkout
@@ -180,13 +181,13 @@ jobs:
           target/mutants/${{ matrix.crate }}/mutants.out/outcomes.json
           target/mutants/${{ matrix.crate }}/mutants.out/missed.txt
           target/mutants/${{ matrix.crate }}/mutants.out/previously_caught.txt
-        retention-days: '7'
+        retention-days: '30'
         if-no-files-found: error
   score:
     needs:
     - gate
     - mutate
-    if: always() && needs.gate.outputs.skip != 'true'
+    if: always() && needs.gate.result == 'success' && needs.gate.outputs.skip != 'true'
     name: Score ${{ matrix.crate }}
     runs-on: ubuntu-latest
     strategy:
@@ -238,9 +239,9 @@ jobs:
         shopt -s nullglob
         outcomes=("${OUT}"/*/outcomes.json)
         if [ "${#outcomes[@]}" -ne "${SHARDS}" ]; then
-          echo "incomplete run: expected ${SHARDS} shards, got ${#outcomes[@]}"
+          echo "incomplete run: expected ${SHARDS} shard(s), got ${#outcomes[@]}"
           echo "### mutants-weekly: ${CRATE}" >> "$GITHUB_STEP_SUMMARY"
-          echo "incomplete run: expected ${SHARDS} shards, got ${#outcomes[@]} — not a score." >> "$GITHUB_STEP_SUMMARY"
+          echo "incomplete run: expected ${SHARDS} shard(s), got ${#outcomes[@]} — not a score." >> "$GITHUB_STEP_SUMMARY"
           exit 1
         fi
         # Streams are captured apart and replayed in order: the gate
