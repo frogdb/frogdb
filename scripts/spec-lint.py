@@ -241,6 +241,10 @@ NEXTEST_CRATES = [
     "frogdb-cluster-runtime",
     "frogdb-config",
     "frogdb-telemetry",
+    # frogdb-memory carries the budget-side rows of specs/memory.md (the
+    # per-core `NetworkOutput` budget); its test binary is tiny and compiles in
+    # about a second.
+    "frogdb-memory",
 ]
 
 # Feature-gated suites a row may also name, listed separately because their
