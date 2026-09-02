@@ -1,8 +1,10 @@
 //! Stream value types.
 
+use super::stream_segments::SegmentedEntries;
 use crate::clock;
 use bytes::Bytes;
 use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::ops::Bound;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 // ============================================================================
@@ -1109,8 +1111,8 @@ impl Default for IdempotencyState {
 /// Stream value - an append-only log of entries with consumer groups.
 #[derive(Debug, Clone)]
 pub struct StreamValue {
-    /// Entries ordered by ID.
-    entries: BTreeMap<StreamId, Vec<(Bytes, Bytes)>>,
+    /// Entries ordered by ID, in packed segments.
+    entries: SegmentedEntries,
     /// Last generated/added ID (for auto-generation).
     last_id: StreamId,
     /// Consumer groups.
@@ -1142,7 +1144,7 @@ impl StreamValue {
     /// Create a new empty stream.
     pub fn new() -> Self {
         Self {
-            entries: BTreeMap::new(),
+            entries: SegmentedEntries::new(),
             last_id: StreamId::default(),
             groups: BTreeMap::new(),
             first_id: None,
@@ -1201,15 +1203,15 @@ impl StreamValue {
     /// Get the first entry.
     pub fn first_entry(&self) -> Option<StreamEntry> {
         self.entries
-            .first_key_value()
-            .map(|(id, fields)| StreamEntry::new(*id, fields.clone()))
+            .first()
+            .map(|(id, fields)| StreamEntry::new(id, fields))
     }
 
     /// Get the last entry.
     pub fn last_entry(&self) -> Option<StreamEntry> {
         self.entries
-            .last_key_value()
-            .map(|(id, fields)| StreamEntry::new(*id, fields.clone()))
+            .last()
+            .map(|(id, fields)| StreamEntry::new(id, fields))
     }
 
     /// Add an entry to the stream.
@@ -1243,7 +1245,7 @@ impl StreamValue {
             }
         };
 
-        self.entries.insert(id, fields);
+        self.entries.append(id, &fields);
         self.last_id = id;
         self.total_appended += 1;
         self.entries_added += 1;
@@ -1358,13 +1360,13 @@ impl StreamValue {
         let mut results = Vec::new();
         let limit = count.unwrap_or(usize::MAX);
 
-        for (id, fields) in &self.entries {
+        for (id, fields) in self.entries.iter() {
             version += 1;
             if version > end || results.len() >= limit {
                 break;
             }
             if version >= start {
-                results.push((version, StreamEntry::new(*id, fields.clone())));
+                results.push((version, StreamEntry::new(id, fields)));
             }
         }
 
@@ -1377,7 +1379,7 @@ impl StreamValue {
     pub fn delete(&mut self, ids: &[StreamId]) -> usize {
         let mut count = 0;
         for id in ids {
-            if self.entries.remove(id).is_some() {
+            if self.entries.remove(id) {
                 count += 1;
                 // Track the highest deleted ID
                 if self.max_deleted_id.is_none_or(|m| *id > m) {
@@ -1388,7 +1390,7 @@ impl StreamValue {
 
         // Update first_id if needed
         if count > 0 {
-            self.first_id = self.entries.first_key_value().map(|(id, _)| *id);
+            self.first_id = self.entries.first_id();
         }
 
         count
@@ -1425,7 +1427,7 @@ impl StreamValue {
         let mut any_deleted = false;
 
         for id in ids {
-            if !self.entries.contains_key(id) {
+            if !self.entries.contains(id) {
                 results.push(-1);
                 continue;
             }
@@ -1464,7 +1466,7 @@ impl StreamValue {
         }
 
         if any_deleted {
-            self.first_id = self.entries.first_key_value().map(|(id, _)| *id);
+            self.first_id = self.entries.first_id();
         }
 
         results
@@ -1487,7 +1489,7 @@ impl StreamValue {
         let mut any_deleted = false;
 
         for id in ids {
-            if !self.entries.contains_key(id) {
+            if !self.entries.contains(id) {
                 // Still ack in the group even if entry doesn't exist (matching XACK behavior)
                 if let Some(group) = self.groups.get_mut(group_name) {
                     group.ack(&[*id]);
@@ -1536,7 +1538,7 @@ impl StreamValue {
         }
 
         if any_deleted {
-            self.first_id = self.entries.first_key_value().map(|(id, _)| *id);
+            self.first_id = self.entries.first_id();
         }
 
         Ok(results)
@@ -1549,17 +1551,25 @@ impl StreamValue {
         end: StreamRangeBound,
         count: Option<usize>,
     ) -> Vec<StreamEntry> {
+        // Seek to the lower bound; IDs ascend, so the upper bound is an
+        // early-exit (`satisfies_max` is monotone over the iteration order).
+        let lower = match start {
+            StreamRangeBound::Inclusive(id) => Bound::Included(id),
+            StreamRangeBound::Exclusive(id) => Bound::Excluded(id),
+            StreamRangeBound::Min | StreamRangeBound::Max => Bound::Unbounded,
+        };
         let iter = self
             .entries
-            .iter()
-            .filter(|(id, _)| start.satisfies_min(id) && end.satisfies_max(id));
+            .iter_from(lower)
+            .take_while(|(id, _)| end.satisfies_max(id))
+            .filter(|(id, _)| start.satisfies_min(id));
 
         let entries: Vec<_> = if let Some(count) = count {
             iter.take(count)
-                .map(|(id, fields)| StreamEntry::new(*id, fields.clone()))
+                .map(|(id, fields)| StreamEntry::new(id, fields))
                 .collect()
         } else {
-            iter.map(|(id, fields)| StreamEntry::new(*id, fields.clone()))
+            iter.map(|(id, fields)| StreamEntry::new(id, fields))
                 .collect()
         };
 
@@ -1573,19 +1583,26 @@ impl StreamValue {
         end: StreamRangeBound,
         count: Option<usize>,
     ) -> Vec<StreamEntry> {
-        // For reverse range, start and end are swapped (end is the "start" bound)
+        // For reverse range, start and end are swapped (end is the "start" bound).
+        // Seek to the upper bound; IDs descend, so the lower bound is an
+        // early-exit (`satisfies_min` is monotone over the iteration order).
+        let upper = match start {
+            StreamRangeBound::Inclusive(id) => Bound::Included(id),
+            StreamRangeBound::Exclusive(id) => Bound::Excluded(id),
+            StreamRangeBound::Min | StreamRangeBound::Max => Bound::Unbounded,
+        };
         let iter = self
             .entries
-            .iter()
-            .rev()
-            .filter(|(id, _)| end.satisfies_min(id) && start.satisfies_max(id));
+            .iter_rev_from(upper)
+            .take_while(|(id, _)| end.satisfies_min(id))
+            .filter(|(id, _)| start.satisfies_max(id));
 
         let entries: Vec<_> = if let Some(count) = count {
             iter.take(count)
-                .map(|(id, fields)| StreamEntry::new(*id, fields.clone()))
+                .map(|(id, fields)| StreamEntry::new(id, fields))
                 .collect()
         } else {
-            iter.map(|(id, fields)| StreamEntry::new(*id, fields.clone()))
+            iter.map(|(id, fields)| StreamEntry::new(id, fields))
                 .collect()
         };
 
@@ -1594,17 +1611,14 @@ impl StreamValue {
 
     /// Read entries after a given ID (for XREAD).
     pub fn read_after(&self, after: &StreamId, count: Option<usize>) -> Vec<StreamEntry> {
-        let iter = self.entries.range((
-            std::ops::Bound::Excluded(*after),
-            std::ops::Bound::Unbounded,
-        ));
+        let iter = self.entries.iter_from(Bound::Excluded(*after));
 
         let entries: Vec<_> = if let Some(count) = count {
             iter.take(count)
-                .map(|(id, fields)| StreamEntry::new(*id, fields.clone()))
+                .map(|(id, fields)| StreamEntry::new(id, fields))
                 .collect()
         } else {
-            iter.map(|(id, fields)| StreamEntry::new(*id, fields.clone()))
+            iter.map(|(id, fields)| StreamEntry::new(id, fields))
                 .collect()
         };
 
@@ -1615,7 +1629,7 @@ impl StreamValue {
     ///
     /// Returns the number of entries removed.
     pub fn trim(&mut self, options: StreamTrimOptions) -> usize {
-        let mut removed = 0;
+        let removed;
         let limit = if options.limit == 0 {
             usize::MAX
         } else {
@@ -1638,44 +1652,29 @@ impl StreamValue {
                     }
                 }
 
-                while self.entries.len() > max_len && removed < limit {
-                    if let Some((id, _)) = self.entries.pop_first() {
-                        removed += 1;
-                        // Note: trim does NOT update max_deleted_id — only XDEL does (Redis compat)
-                        // Update first_id
-                        if Some(id) == self.first_id {
-                            self.first_id = self.entries.first_key_value().map(|(id, _)| *id);
-                        }
-                    } else {
-                        break;
-                    }
+                // Note: trim does NOT update max_deleted_id — only XDEL does (Redis compat)
+                removed = self.entries.drain_front(excess.min(limit));
+                if removed > 0 {
+                    self.first_id = self.entries.first_id();
                 }
             }
             StreamTrimStrategy::MinId(min_id) => {
+                // IDs ascend, so the entries below min_id are exactly the
+                // first `excess` entries.
+                let excess = self.entries.count_below(&min_id);
+
                 // Approximate mode with LIMIT: simulate node granularity.
                 if options.mode == StreamTrimMode::Approximate && options.limit > 0 {
                     const APPROX_NODE_SIZE: usize = 100;
-                    let excess = self.entries.range(..min_id).count();
                     if self.entries.len() < APPROX_NODE_SIZE && options.limit < excess {
                         return 0;
                     }
                 }
 
-                // Remove all entries with ID < min_id
-                let to_remove: Vec<StreamId> = self
-                    .entries
-                    .range(..min_id)
-                    .take(limit)
-                    .map(|(id, _)| *id)
-                    .collect();
-                for id in to_remove {
-                    self.entries.remove(&id);
-                    removed += 1;
-                    // Note: trim does NOT update max_deleted_id — only XDEL does (Redis compat)
-                }
-                // Update first_id
+                // Note: trim does NOT update max_deleted_id — only XDEL does (Redis compat)
+                removed = self.entries.drain_front(excess.min(limit));
                 if removed > 0 {
-                    self.first_id = self.entries.first_key_value().map(|(id, _)| *id);
+                    self.first_id = self.entries.first_id();
                 }
             }
         }
@@ -1841,26 +1840,19 @@ impl StreamValue {
     pub fn get(&self, id: &StreamId) -> Option<StreamEntry> {
         self.entries
             .get(id)
-            .map(|fields| StreamEntry::new(*id, fields.clone()))
+            .map(|fields| StreamEntry::new(*id, fields))
     }
 
     /// Check if an entry exists.
     pub fn contains(&self, id: &StreamId) -> bool {
-        self.entries.contains_key(id)
+        self.entries.contains(id)
     }
 
     /// Calculate memory size of this stream.
     pub fn memory_size(&self) -> usize {
         let base = std::mem::size_of::<Self>();
 
-        let entries_size: usize = self
-            .entries
-            .values()
-            .map(|fields| {
-                let fields_size: usize = fields.iter().map(|(k, v)| k.len() + v.len() + 16).sum();
-                std::mem::size_of::<StreamId>() + fields_size + 32
-            })
-            .sum();
+        let entries_size = self.entries.memory_size();
 
         let groups_size: usize = self.groups.values().map(|g| g.memory_size()).sum();
 
@@ -1871,7 +1863,7 @@ impl StreamValue {
     pub fn to_vec(&self) -> Vec<StreamEntry> {
         self.entries
             .iter()
-            .map(|(id, fields)| StreamEntry::new(*id, fields.clone()))
+            .map(|(id, fields)| StreamEntry::new(id, fields))
             .collect()
     }
 }

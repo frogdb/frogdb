@@ -5,6 +5,7 @@ mod list;
 mod set;
 mod sorted_set;
 mod stream;
+mod stream_segments;
 mod string_value;
 
 pub use hash::*;
