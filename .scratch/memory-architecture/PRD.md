@@ -29,10 +29,15 @@ are encouraged.
 - Data plane: per-shard single-threaded tokio task owning `griddle::HashMap<Bytes,
   Entry>`; values are `Arc<Value>` with `make_mut` COW; `Bytes` everywhere; hand-rolled
   listpacks for small hash/set; lists are `VecDeque<Bytes>` (one heap alloc per
-  element); JSON is a full serde tree; arena skiplist for zsets.
+  element, despite a stale linked-list doc comment at `list.rs:11`); JSON is a full
+  serde tree; zsets use an index-based skiplist (safe indices, not a raw-pointer
+  arena) plus a selectable BTree score-index backend (`SCORE_INDEX_BACKEND`); streams
+  are a `VecDeque<Bytes>` order list with a BTreeMap PEL.
 - Network: tokio-util `Framed`, 8KB buffers that never shrink; RESP decode is zero-copy
   but `ParsedCommand::try_from` memcpys every arg; no output-buffer limit for normal
   clients; RESP2 write-buffer bytes invisible to client accounting.
+  *(Partially stale since issue 05 landed: `Subsystem::NetworkOutput` and
+  `Subsystem::TxnBuffering` budget classes exist, unwired — issues 18/21 wire them.)*
 - Persistence: bounded flume channel (8192, blocks-not-drops) → per-shard flush thread
   → RocksDB WriteBatch; full-copy serialization, no streaming encode; checkpoints are
   cheap (hardlink); MULTI/EXEC write-groups deliberately un-size-capped
@@ -222,8 +227,6 @@ that sim tests logic, not execution shape.
 - Exact inline-value threshold in table slots (needs slot-layout prototype).
 - Cross-slot txn interaction between VLL lock tables and copy-at-boundary arg
   ownership (design detail for the R3 hop protocol).
-- Whether replicas/AOF-style consumers get their own budget class or share the
-  replication Budget.
 - Per-type small→block promotion thresholds (default to Redis values initially).
 - How turmoil tests model per-core pinning (simulation fidelity for R2/R3).
 
@@ -238,3 +241,7 @@ Session decisions layered on the R1–R15 rulings above; D-numbers are cited by 
   merge commits.
 - D3: drafts 10, 13–22 bulk-approved as filed; promoted to `issues/open/`. Per-issue
   ambiguity resolved at dispatch time.
+- D4: replica feed buffers account under `Subsystem::NetworkOutput` with issue 18's
+  `replica` output-limit class (Redis semantics); backlog stays `ReplicationBacklog`, WAL
+  stays `WalChannel`. Closes the replica/AOF budget-class open question — already split
+  correctly, no new class.
