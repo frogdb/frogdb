@@ -150,6 +150,131 @@ impl OutputBufferLimits {
             OutputBufferClass::PubSub => self.pubsub,
         }
     }
+
+    /// A mutable handle on one class's limit.
+    fn class_mut(&mut self, class: OutputBufferClass) -> &mut OutputBufferLimit {
+        match class {
+            OutputBufferClass::Normal => &mut self.normal,
+            OutputBufferClass::Replica => &mut self.replica,
+            OutputBufferClass::PubSub => &mut self.pubsub,
+        }
+    }
+
+    /// Parse Redis's `client-output-buffer-limit` value: whitespace-separated
+    /// groups of `<class> <hard> <soft> <soft-seconds>`, one group per class, in
+    /// any order. A class the spec does not mention keeps its default, which is
+    /// how Redis's config file behaves when only one directive is given.
+    ///
+    /// Byte counts accept Redis's suffixes — `1k` = 1000, `1kb` = 1024, and the
+    /// same for `m`/`mb`/`g`/`gb` — so a config lifted verbatim from a
+    /// `redis.conf` means here exactly what it meant there. `slave` is accepted
+    /// as an alias for `replica`, again as Redis does.
+    pub fn parse(spec: &str) -> Result<Self, OutputBufferLimitsParseError> {
+        let mut limits = Self::default();
+        let mut tokens = spec.split_whitespace();
+
+        while let Some(class_token) = tokens.next() {
+            let class = match class_token.to_ascii_lowercase().as_str() {
+                "normal" => OutputBufferClass::Normal,
+                "replica" | "slave" => OutputBufferClass::Replica,
+                "pubsub" => OutputBufferClass::PubSub,
+                other => {
+                    return Err(OutputBufferLimitsParseError(format!(
+                        "unknown client-output-buffer-limit class '{other}' \
+                         (expected normal, replica or pubsub)"
+                    )));
+                }
+            };
+
+            let mut next_value = |what: &str| -> Result<&str, OutputBufferLimitsParseError> {
+                tokens.next().ok_or_else(|| {
+                    OutputBufferLimitsParseError(format!(
+                        "client-output-buffer-limit class '{class}' is missing its {what}; \
+                         each class needs '<hard> <soft> <soft-seconds>'"
+                    ))
+                })
+            };
+            let hard = next_value("hard limit")?.to_string();
+            let soft = next_value("soft limit")?.to_string();
+            let seconds = next_value("soft-limit seconds")?.to_string();
+
+            *limits.class_mut(class) = OutputBufferLimit {
+                hard_bytes: parse_bytes(&hard, class, "hard limit")?,
+                soft_bytes: parse_bytes(&soft, class, "soft limit")?,
+                soft_seconds: seconds.parse().map_err(|_| {
+                    OutputBufferLimitsParseError(format!(
+                        "client-output-buffer-limit {class}: '{seconds}' is not a number of seconds"
+                    ))
+                })?,
+            };
+        }
+
+        Ok(limits)
+    }
+
+    /// Render back to the parseable spelling, the way `CONFIG GET` reports it.
+    pub fn to_config_string(&self) -> String {
+        let mut out = String::new();
+        for class in [
+            OutputBufferClass::Normal,
+            OutputBufferClass::Replica,
+            OutputBufferClass::PubSub,
+        ] {
+            let limit = self.for_class(class);
+            if !out.is_empty() {
+                out.push(' ');
+            }
+            out.push_str(&format!(
+                "{class} {} {} {}",
+                limit.hard_bytes, limit.soft_bytes, limit.soft_seconds
+            ));
+        }
+        out
+    }
+}
+
+/// Why a `client-output-buffer-limit` spec could not be read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputBufferLimitsParseError(String);
+
+impl std::fmt::Display for OutputBufferLimitsParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for OutputBufferLimitsParseError {}
+
+/// Redis's memory-size spelling: a bare count, or a count with a `k`/`m`/`g`
+/// (powers of 1000) or `kb`/`mb`/`gb` (powers of 1024) suffix.
+fn parse_bytes(
+    raw: &str,
+    class: OutputBufferClass,
+    what: &str,
+) -> Result<u64, OutputBufferLimitsParseError> {
+    let lowered = raw.to_ascii_lowercase();
+    let (digits, multiplier) = match lowered.as_str() {
+        s if s.ends_with("kb") => (&s[..s.len() - 2], 1024),
+        s if s.ends_with("mb") => (&s[..s.len() - 2], 1024 * 1024),
+        s if s.ends_with("gb") => (&s[..s.len() - 2], 1024 * 1024 * 1024),
+        s if s.ends_with('k') => (&s[..s.len() - 1], 1_000),
+        s if s.ends_with('m') => (&s[..s.len() - 1], 1_000_000),
+        s if s.ends_with('g') => (&s[..s.len() - 1], 1_000_000_000),
+        s if s.ends_with('b') => (&s[..s.len() - 1], 1),
+        s => (s, 1),
+    };
+
+    let bad = || {
+        OutputBufferLimitsParseError(format!(
+            "client-output-buffer-limit {class}: '{raw}' is not a valid {what} \
+             (a byte count, optionally suffixed k/kb/m/mb/g/gb)"
+        ))
+    };
+    digits
+        .parse::<u64>()
+        .map_err(|_| bad())?
+        .checked_mul(multiplier)
+        .ok_or_else(bad)
 }
 
 /// Why the seam is closing a connection.
@@ -557,6 +682,75 @@ mod tests {
         acct.note_drained();
         assert_eq!(acct.buffered_bytes(), 0);
         assert_eq!(budget.charged(), 0);
+    }
+
+    #[test]
+    fn the_default_spec_round_trips() {
+        let rendered = OutputBufferLimits::default().to_config_string();
+        assert_eq!(
+            rendered, "normal 0 0 0 replica 268435456 67108864 60 pubsub 33554432 8388608 60",
+            "CONFIG GET reports the same three triples Redis reports"
+        );
+        assert_eq!(
+            OutputBufferLimits::parse(&rendered).expect("its own rendering parses"),
+            OutputBufferLimits::default()
+        );
+    }
+
+    #[test]
+    fn a_spec_overrides_only_the_classes_it_names() {
+        let limits = OutputBufferLimits::parse("normal 1mb 512kb 30").expect("valid");
+        assert_eq!(
+            limits.normal,
+            OutputBufferLimit {
+                hard_bytes: 1024 * 1024,
+                soft_bytes: 512 * 1024,
+                soft_seconds: 30,
+            }
+        );
+        assert_eq!(
+            limits.replica,
+            OutputBufferLimit::REPLICA_DEFAULT,
+            "an unmentioned class keeps Redis's default"
+        );
+        assert_eq!(limits.pubsub, OutputBufferLimit::PUBSUB_DEFAULT);
+    }
+
+    #[test]
+    fn redis_size_suffixes_mean_what_redis_means() {
+        let limits = OutputBufferLimits::parse("normal 1k 1kb 0 pubsub 1g 2mb 1").expect("valid");
+        assert_eq!(limits.normal.hard_bytes, 1_000, "'k' is 1000 in redis.conf");
+        assert_eq!(limits.normal.soft_bytes, 1024, "'kb' is 1024");
+        assert_eq!(limits.pubsub.hard_bytes, 1_000_000_000);
+        assert_eq!(limits.pubsub.soft_bytes, 2 * 1024 * 1024);
+    }
+
+    #[test]
+    fn slave_is_an_alias_for_replica() {
+        let limits = OutputBufferLimits::parse("slave 10 5 1").expect("valid");
+        assert_eq!(
+            limits.replica,
+            OutputBufferLimit {
+                hard_bytes: 10,
+                soft_bytes: 5,
+                soft_seconds: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn a_malformed_spec_is_rejected_rather_than_ignored() {
+        for spec in [
+            "bogus 1 2 3",
+            "normal 1 2",
+            "normal 1 2 abc",
+            "normal 1 nonsense 3",
+        ] {
+            assert!(
+                OutputBufferLimits::parse(spec).is_err(),
+                "'{spec}' must not parse: a silently-dropped limit is a limit that does not exist"
+            );
+        }
     }
 
     #[test]
