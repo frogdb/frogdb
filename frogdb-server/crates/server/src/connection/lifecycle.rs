@@ -279,10 +279,11 @@ impl ConnectionHandler {
     /// swapped: a buffer with bytes in it is mid-conversation, and there is
     /// nothing to reclaim from it.
     ///
-    /// `busy` says whether this connection did anything since the last tick.
-    /// The core-wide sweep rides an idle tick only, because sweeping on a busy
-    /// one would trim the free lists the busy connections are about to lease
-    /// from.
+    /// `busy` says whether *this connection* did anything since the last tick,
+    /// and the core-wide sweep rides an idle tick only. That is a proxy for the
+    /// core being idle, not a guarantee — a busy neighbour on the same core can
+    /// still have its free lists trimmed; see the comment at the `sweep()` call
+    /// for why that is accepted.
     pub(super) fn trim_idle_buffers(&mut self, busy: bool) {
         use frogdb_net::buffers;
 
