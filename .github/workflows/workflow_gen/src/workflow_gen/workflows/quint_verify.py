@@ -92,7 +92,7 @@ from workflow_gen.helpers import (
 )
 from workflow_gen.schema import Job, ScheduleTrigger, Trigger, Workflow
 
-MISE_JUST_QUINT = "just npm:@informalsystems/quint"
+MISE_JUST_QUINT = "just node npm:@informalsystems/quint"
 
 # Free unmetered GitHub-hosted runner — same reasoning as the other nightlies
 # in this package (single-machine SMT solve, no need for anything heavier).

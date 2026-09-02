@@ -50,13 +50,13 @@ RUNS_ON = "ubuntu-latest"
 MISE_JUST = "just"
 MISE_JUST_DENY = "just cargo:cargo-deny"
 MISE_JUST_NEXTEST = "just cargo:cargo-nextest"
-MISE_JUST_QUINT = "just npm:@informalsystems/quint"
+MISE_JUST_QUINT = "just node npm:@informalsystems/quint"
 # `unit-tests` runs `cargo nextest run --all`, which picks up
 # frogdb-cluster's quint_conformance test binary (see that job's comment) —
 # it needs both cargo-nextest and the quint CLI quint-connect shells out to.
 # python/uv are for the `uv run --script` shebang on scripts/spec-lint.py and
 # scripts/tests/test_spec_lint.py, which the job's `just lint-spec` step runs.
-MISE_UNIT_TESTS = "python uv just cargo:cargo-nextest npm:@informalsystems/quint"
+MISE_UNIT_TESTS = "python uv just cargo:cargo-nextest node npm:@informalsystems/quint"
 MISE_PYTHON_WORKFLOW_GEN = "python uv just"
 MISE_PYTHON_LINT = "python uv ruff"
 MISE_HELM = "helm"
