@@ -15,6 +15,11 @@ full twenty-one (plus the turmoil lints) as part of `just check`/CI's `lint` job
 `lint-gates` rather than re-listing its members, because the two hand-maintained lists had
 already drifted (three gates ran on every commit but not under `just lint`).
 
+`lint-gates` also runs the self-tests of the scripts the gates lean on — `test-lint-locked-areas`
+(via `lint-locked-areas`) and `test-mutants-gate` — since a gate is only as trustworthy as the
+manifest parser and score arithmetic underneath it, and both suites are fixture-driven and finish
+in well under a second.
+
 ## The family
 
 | recipe | invariant | in `lint-gates` |

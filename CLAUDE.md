@@ -207,7 +207,9 @@ that manifest is what the tooling reads, so it is never restated here. Boundary 
   names its forcing tests; every tagged test matches a row) and runs in `just lint`.
 - CI runs `just mutants-diff` for every locked crate a PR or a push to main touches and fails on
   any missed mutant; run it locally to iterate faster. Full runs:
-  `just mutants <crate>` + `just mutants-gate <crate>` (the gate comes from the spec header). A
+  `just mutants <crate>` + `just mutants-gate <crate>` (the gate comes from the spec header);
+  `mutants-weekly.yml` re-runs that full gate for every locked crate weekly, so an area that
+  drifts below its gate surfaces without anyone remembering to re-measure. A
   surviving mutant no test can kill is documented *at the code* with why it is unobservable —
   never a blanket skip.
 - Put the forcing test in the mutated crate: `cargo mutants -p <crate>` runs only that

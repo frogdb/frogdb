@@ -1,0 +1,274 @@
+# =============================================================================
+# GENERATED FILE - DO NOT EDIT DIRECTLY
+# =============================================================================
+# Source: .github/workflows/workflow_gen/
+# Regenerate with: just workflow-gen
+# =============================================================================
+
+name: Mutants Weekly
+'on':
+  schedule:
+  - cron: '17 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      crate:
+        description: one locked crate to run; empty = all
+        required: false
+        default: ''
+        type: string
+jobs:
+  gate:
+    name: Change Gate
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      skip: ${{ steps.gate.outputs.skip }}
+    steps:
+    - name: Validate the requested crate
+      env:
+        CRATE: ${{ github.event.inputs.crate }}
+      run: |
+        set -uo pipefail
+        crates="frogdb-cluster frogdb-cluster-runtime frogdb-persistence frogdb-recovery frogdb-replication frogdb-replication-runtime frogdb-txn frogdb-vll"
+        if [ -z "${CRATE}" ]; then
+          echo "no crate requested; every locked crate will run."
+          exit 0
+        fi
+        for c in ${crates}; do
+          if [ "${c}" = "${CRATE}" ]; then
+            echo "running ${CRATE} only."
+            exit 0
+          fi
+        done
+        echo "mutants-weekly: unknown locked crate '${CRATE}'; expected one of: ${crates}" >&2
+        exit 1
+    - id: gate
+      name: Check for new commits since last successful run
+      env:
+        GH_TOKEN: ${{ github.token }}
+        EVENT_NAME: ${{ github.event_name }}
+        CURRENT_SHA: ${{ github.sha }}
+        WORKFLOW_FILE: mutants-weekly.yml
+      run: |
+        set -uo pipefail
+        if [ "${EVENT_NAME}" != "schedule" ]; then
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "Not a scheduled run (event: ${EVENT_NAME}); proceeding."
+          exit 0
+        fi
+        last_sha=$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow "${WORKFLOW_FILE}" \
+          --status success --limit 1 --json headSha --jq '.[0].headSha // empty')
+        if [ -z "${last_sha}" ]; then
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "No previous successful run found; proceeding."
+        elif [ "${last_sha}" = "${CURRENT_SHA}" ]; then
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+          echo "No new commits since last successful run (${last_sha}); skipping."
+        else
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "New commits since last successful run (${last_sha} -> ${CURRENT_SHA}); proceeding."
+        fi
+  mutate:
+    needs: gate
+    if: needs.gate.outputs.skip != 'true'
+    name: Mutate ${{ matrix.crate }} (shard ${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      matrix:
+        include:
+        - crate: frogdb-cluster
+          shard: '0/4'
+        - crate: frogdb-cluster
+          shard: '1/4'
+        - crate: frogdb-cluster
+          shard: '2/4'
+        - crate: frogdb-cluster
+          shard: '3/4'
+        - crate: frogdb-cluster-runtime
+          shard: '0/1'
+        - crate: frogdb-persistence
+          shard: '0/4'
+        - crate: frogdb-persistence
+          shard: '1/4'
+        - crate: frogdb-persistence
+          shard: '2/4'
+        - crate: frogdb-persistence
+          shard: '3/4'
+        - crate: frogdb-recovery
+          shard: '0/1'
+        - crate: frogdb-replication
+          shard: '0/4'
+        - crate: frogdb-replication
+          shard: '1/4'
+        - crate: frogdb-replication
+          shard: '2/4'
+        - crate: frogdb-replication
+          shard: '3/4'
+        - crate: frogdb-replication-runtime
+          shard: '0/1'
+        - crate: frogdb-txn
+          shard: '0/1'
+        - crate: frogdb-vll
+          shard: '0/1'
+      fail-fast: false
+    steps:
+    - name: Checkout
+      if: (github.event.inputs.crate == '' || github.event.inputs.crate == matrix.crate)
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+    - name: Set up mise toolchain
+      if: (github.event.inputs.crate == '' || github.event.inputs.crate == matrix.crate)
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      with:
+        install: 'true'
+        install_args: python uv just cargo:cargo-mutants cargo:cargo-nextest
+        cache: 'true'
+        experimental: 'true'
+    - name: Install Rust 1.92.0
+      if: (github.event.inputs.crate == '' || github.event.inputs.crate == matrix.crate)
+      uses: dtolnay/rust-toolchain@1.92.0
+    - name: Install libclang
+      if: (github.event.inputs.crate == '' || github.event.inputs.crate == matrix.crate)
+      run: sudo apt-get install -y libclang-dev
+    - name: Cache Rust build artifacts
+      if: (github.event.inputs.crate == '' || github.event.inputs.crate == matrix.crate)
+      uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+      with:
+        shared-key: mutants
+    - name: Mutate this shard
+      if: (github.event.inputs.crate == '' || github.event.inputs.crate == matrix.crate)
+      env:
+        CRATE: ${{ matrix.crate }}
+        SHARD: ${{ matrix.shard }}
+      run: |
+        set -uo pipefail
+        status=0
+        just mutants "${CRATE}" --shard "${SHARD}" --jobs 2 || status=$?
+        # cargo-mutants exits 2 for missed mutants and 3 for timed-out
+        # ones. Neither is this leg's verdict: the score job sums every
+        # shard's outcomes.json and gates the crate's ratio against its
+        # spec header, where a survivor costs score and a timeout is
+        # excluded but reported. Any other non-zero (usage error, a
+        # failing baseline build) means there is no run to score, so it
+        # fails the leg — and the score job then reports the crate
+        # incomplete rather than scoring a fraction of it.
+        case "${status}" in
+          0|2|3) exit 0 ;;
+          *) exit "${status}" ;;
+        esac
+    - id: artifact
+      name: Name this shard's artifact
+      if: (github.event.inputs.crate == '' || github.event.inputs.crate == matrix.crate)
+      env:
+        CRATE: ${{ matrix.crate }}
+        SHARD: ${{ matrix.shard }}
+      run: |
+        set -euo pipefail
+        # `k/n` is cargo-mutants' shard spelling; an artifact name
+        # cannot contain `/`, so the name carries k alone. The
+        # `-shard-` separator is what keeps the score job's
+        # `mutants-<crate>-shard-*` pattern from matching a
+        # longer crate name: `frogdb-cluster-*` would otherwise
+        # swallow `frogdb-cluster-runtime`'s shard too.
+        echo "name=mutants-${CRATE}-shard-${SHARD%%/*}" >> "$GITHUB_OUTPUT"
+    - name: Upload ${{ steps.artifact.outputs.name }}
+      if: (github.event.inputs.crate == '' || github.event.inputs.crate == matrix.crate)
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+      with:
+        name: ${{ steps.artifact.outputs.name }}
+        path: |
+          target/mutants/${{ matrix.crate }}/mutants.out/outcomes.json
+          target/mutants/${{ matrix.crate }}/mutants.out/missed.txt
+          target/mutants/${{ matrix.crate }}/mutants.out/previously_caught.txt
+        retention-days: '30'
+        if-no-files-found: error
+  score:
+    needs:
+    - gate
+    - mutate
+    if: always() && needs.gate.result == 'success' && needs.gate.outputs.skip != 'true'
+    name: Score ${{ matrix.crate }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+        - crate: frogdb-cluster
+          shards: '4'
+        - crate: frogdb-cluster-runtime
+          shards: '1'
+        - crate: frogdb-persistence
+          shards: '4'
+        - crate: frogdb-recovery
+          shards: '1'
+        - crate: frogdb-replication
+          shards: '4'
+        - crate: frogdb-replication-runtime
+          shards: '1'
+        - crate: frogdb-txn
+          shards: '1'
+        - crate: frogdb-vll
+          shards: '1'
+      fail-fast: false
+    steps:
+    - name: Checkout
+      if: (github.event.inputs.crate == '' || github.event.inputs.crate == matrix.crate)
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+    - name: Set up mise toolchain
+      if: (github.event.inputs.crate == '' || github.event.inputs.crate == matrix.crate)
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      with:
+        install: 'true'
+        install_args: python uv
+        cache: 'true'
+        experimental: 'true'
+    - name: Download this crate's shards
+      if: (github.event.inputs.crate == '' || github.event.inputs.crate == matrix.crate)
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      with:
+        pattern: mutants-${{ matrix.crate }}-shard-*
+        path: target/mutants/${{ matrix.crate }}
+    - name: Score the crate against its spec gate
+      if: (always()) && (github.event.inputs.crate == '' || github.event.inputs.crate == matrix.crate)
+      env:
+        CRATE: ${{ matrix.crate }}
+        SHARDS: ${{ matrix.shards }}
+        OUT: target/mutants/${{ matrix.crate }}
+      run: |
+        set -uo pipefail
+        shopt -s nullglob
+        outcomes=("${OUT}"/*/outcomes.json)
+        if [ "${#outcomes[@]}" -ne "${SHARDS}" ]; then
+          echo "incomplete run: expected ${SHARDS} shard(s), got ${#outcomes[@]}"
+          echo "### mutants-weekly: ${CRATE}" >> "$GITHUB_STEP_SUMMARY"
+          echo "incomplete run: expected ${SHARDS} shard(s), got ${#outcomes[@]} — not a score." >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+        fi
+        # Streams are captured apart and replayed in order: the gate
+        # script's verdict goes to stderr and its counts to stdout,
+        # which one merged redirect interleaves by buffer, not by
+        # line.
+        status=0
+        ./scripts/mutants-gate.py "${outcomes[@]}" --crate "${CRATE}" \
+          > gate.out 2> gate.err || status=$?
+        cat gate.out
+        cat gate.err >&2
+        # Every shard's survivors, merged. A shard that caught
+        # everything writes an empty missed.txt, and an older run
+        # may not have uploaded one at all — neither is a failure,
+        # so the glob is read through nullglob rather than `cat`.
+        missed=("${OUT}"/*/missed.txt)
+        survivors=""
+        if [ "${#missed[@]}" -gt 0 ]; then survivors=$(cat "${missed[@]}"); fi
+        {
+          echo "### mutants-weekly: ${CRATE}"
+          echo
+          sed 's/^/    /' gate.out gate.err
+          if [ -n "${survivors}" ]; then
+            echo
+            echo "Surviving mutants — each needs a forcing test or a documented-equivalent exclusion:"
+            echo
+            sed 's/^/- /' "${missed[@]}"
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
+        exit "${status}"
