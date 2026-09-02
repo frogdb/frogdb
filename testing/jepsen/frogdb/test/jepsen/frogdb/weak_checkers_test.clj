@@ -167,9 +167,10 @@
 
 (defn- lin-check [ops]
   ;; The per-field register model, as jepsen.independent/checker runs it on each
-  ;; unwrapped subhistory.
+  ;; unwrapped subhistory. :algorithm must track hash.clj's independent-checker
+  ;; or these tests validate a configuration that no longer ships.
   (checker/check (checker/linearizable {:model (model/register)
-                                        :algorithm :linear})
+                                        :algorithm :competition})
                  {} (h/history ops) {}))
 
 (deftest per-field-register-linearizable-valid
