@@ -39,7 +39,18 @@
 
 use std::time::{Duration, Instant};
 
-use frogdb_memory::{Budget, Charge};
+use frogdb_memory::{Budget, Charge, Disposition, Subsystem};
+
+/// An unlimited `NetworkOutput` budget, for a connection built outside a shard
+/// runtime — unit tests, and the fallback path where no per-core budget was
+/// handed down.
+///
+/// Unlimited rather than absent so the accounting seam is unconditional: a
+/// connection always has somewhere to charge, and the only thing that varies is
+/// whether anything is watching. The class limits still apply.
+pub fn detached_budget() -> Budget {
+    Budget::new(Subsystem::NetworkOutput, Disposition::Shed, u64::MAX)
+}
 
 /// The `client-output-buffer-limit` classes, as Redis names them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -327,7 +338,6 @@ impl OutputBufferAccount {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use frogdb_memory::{Budget, Disposition, Subsystem};
 
     fn budget(limit: u64) -> Budget {
         Budget::new(Subsystem::NetworkOutput, Disposition::Shed, limit)

@@ -17,6 +17,7 @@ turmoil = ["dep:turmoil"]
 
 [dependencies]
 bytes.workspace = true
+frogdb-memory.workspace = true
 tokio.workspace = true
 socket2.workspace = true
 tracing.workspace = true

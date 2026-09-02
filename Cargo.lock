@@ -1880,6 +1880,7 @@ name = "frogdb-net"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "frogdb-memory",
  "libc",
  "socket2",
  "tokio",

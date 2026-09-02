@@ -229,6 +229,10 @@ pub struct ConnectionConfig {
     /// `0` disables the bound. Sourced from `server.pubsub-output-buffer-hard-limit`.
     pub pubsub_output_buffer_hard_limit: usize,
 
+    /// The `client-output-buffer-limit` triples enforced against the connection,
+    /// by class.
+    pub output_buffer_limits: crate::connection::output_buffer::OutputBufferLimits,
+
     /// Chaos testing configuration (turmoil simulation only).
     #[cfg(feature = "turmoil")]
     pub chaos_config: std::sync::Arc<crate::config::ChaosConfig>,
@@ -249,6 +253,7 @@ impl ConnectionConfig {
             is_replica: Arc::new(AtomicBool::new(false)),
             enable_debug_command: true,
             pubsub_output_buffer_hard_limit: frogdb_core::DEFAULT_PUBSUB_OUTPUT_BUFFER_HARD_LIMIT,
+            output_buffer_limits: Default::default(),
             #[cfg(feature = "turmoil")]
             chaos_config: std::sync::Arc::new(crate::config::ChaosConfig::default()),
         }
