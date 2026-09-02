@@ -317,15 +317,24 @@ impl Server {
         // against, so it has to exist whether or not anyone is scraping. Runs
         // only where there are arenas to read — under simulation this spawns
         // nothing at all.
+        // The rate is budgeted against the arena count, not taken as configured:
+        // sampling cost is `hz × arenas × epoch-cost`, so a rate that is free on
+        // an eight-shard box is not free on a sixty-four-shard one.
+        let arena_sample_rate = frogdb_telemetry::ArenaSampleRate::for_arena_count(
+            self.config.memory.arena_sample_hz,
+            self.shard_arenas.len(),
+        );
         let arena_sampler_handle = frogdb_telemetry::ArenaSampler::spawn(
             self.shard_arenas.clone(),
-            frogdb_telemetry::ArenaSampleRate::new(self.config.memory.arena_sample_hz),
+            arena_sample_rate,
+            self.metrics_recorder.clone(),
         );
         if arena_sampler_handle.is_some() {
             info!(
                 shards = self.shard_arenas.len(),
-                hz =
-                    frogdb_telemetry::ArenaSampleRate::new(self.config.memory.arena_sample_hz).hz(),
+                hz = arena_sample_rate.hz(),
+                configured_hz = self.config.memory.arena_sample_hz,
+                arenas_per_tick = frogdb_telemetry::arena_stride(self.shard_arenas.len(), 0).len(),
                 "Per-shard arena sampler started"
             );
         }

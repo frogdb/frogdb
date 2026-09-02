@@ -454,6 +454,44 @@ define_metrics! {
         labels: [shard: &str],
     }
 
+    /// Bytes in the active pages of one shard's arena
+    /// (`stats.arenas.<i>.pactive` × page size). The gap up from
+    /// `frogdb_allocator_shard_allocated_bytes` is within-page fragmentation.
+    gauge AllocatorShardActiveBytes("frogdb_allocator_shard_active_bytes") {
+        labels: [shard: &str],
+    }
+
+    /// Bytes in one shard arena's dirty pages (`stats.arenas.<i>.pdirty` ×
+    /// page size) — freed, still resident, awaiting `dirty_decay_ms`. Rising
+    /// here while allocated bytes hold steady is reclamation lag rather than
+    /// growth, which is the distinction PRD R13 asks an operator to be able to
+    /// make without an active defragmenter.
+    gauge AllocatorShardDirtyBytes("frogdb_allocator_shard_dirty_bytes") {
+        labels: [shard: &str],
+    }
+
+    /// Bytes in one shard arena's muzzy pages (`stats.arenas.<i>.pmuzzy` ×
+    /// page size) — madvised away but still mapped. Zero under the server's
+    /// `muzzy_decay_ms:0` default, and non-zero only where that was retuned.
+    gauge AllocatorShardMuzzyBytes("frogdb_allocator_shard_muzzy_bytes") {
+        labels: [shard: &str],
+    }
+
+    /// Address space one shard's arena keeps mapped rather than returning to
+    /// the OS (`stats.arenas.<i>.retained`). Costs address space, not physical
+    /// memory, so it is deliberately outside the resident figure.
+    gauge AllocatorShardRetainedBytes("frogdb_allocator_shard_retained_bytes") {
+        labels: [shard: &str],
+    }
+
+    /// Sampler ticks that woke up on a thread bound to a shard's arena.
+    ///
+    /// The arena sampler is a utility-thread job; a tick running on a pinned
+    /// shard core steals time from request handling and shows up only as tail
+    /// latency. Debug builds fail fast on it, release builds count it here, so
+    /// the condition is never merely invisible. Any non-zero value is a bug.
+    counter ArenaSamplerOnShardThreadTotal("frogdb_arena_sampler_on_shard_thread_total") {}
+
     /// Total keys evicted
     counter EvictionKeysTotal("frogdb_eviction_keys_total") {
         labels: [shard: &str, policy: &str],
