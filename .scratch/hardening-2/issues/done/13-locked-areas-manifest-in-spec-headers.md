@@ -1,6 +1,6 @@
 # LOCKED is prose in three places — make the spec header the one machine-read manifest
 
-Status: ready-for-agent
+Status: done
 Type: mechanism (single source of truth)
 Severity: likelihood 3/3 (already drifted once: 15 rows carry a locked area's badge without a
 mutation run; `mutants-gate` threshold is typed by hand), consequence 2/3 (a wrong or stale gate
@@ -100,3 +100,12 @@ CI paths filter from it). No second regex anywhere.
 crate that is not a workspace member; a `crate/path` entry (rejected as reserved). Each must
 fail with a message naming the spec and the key. `just mutants-gate frogdb-cluster` must print
 `gate: 80.0%` without an argument; `just mutants-gate frogdb-server` must refuse.
+
+## Resolution
+
+Landed as `feat(spec): spec headers are the locked-areas manifest`. `scripts/locked_areas.py`
+owns the header parser; `just lint-locked-areas` (in `lint-gates`), `just mutants-gate <crate>`,
+`just mutants-diff <crate>`, `just locked-areas`, and `website/scripts/spec-gen.py` read it.
+`blocking.md` and `memory.md` carry `Status: DRAFT`; `CLAUDE.md` no longer restates crates or
+gates. Deferred: `spec-lint.py` still derives the area from the filename (it needs nothing from
+the header); the `mutants-diff` downgrade to advice in `CLAUDE.md` waits on issue 15.
