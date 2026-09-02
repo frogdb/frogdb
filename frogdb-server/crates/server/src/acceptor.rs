@@ -151,10 +151,6 @@ pub struct AcceptorContext {
     /// Scatter-gather timeout in milliseconds.
     pub scatter_gather_timeout_ms: u64,
 
-    /// Hard limit (bytes) on pub/sub messages buffered for a slow subscriber
-    /// before it is disconnected. `0` disables the bound.
-    pub pubsub_output_buffer_hard_limit: usize,
-
     /// `client-output-buffer-limit` triples, by class.
     pub output_buffer_limits: crate::connection::output_buffer::OutputBufferLimits,
 
@@ -225,7 +221,6 @@ impl Acceptor {
             per_request_spans: ctx.admin.config_manager.per_request_spans_flag(),
             is_replica: ctx.is_replica,
             enable_debug_command: ctx.admin.config_manager.enable_debug_command(),
-            pubsub_output_buffer_hard_limit: ctx.pubsub_output_buffer_hard_limit,
             output_buffer_limits: ctx.output_buffer_limits,
             #[cfg(feature = "turmoil")]
             chaos_config: ctx.chaos_config,
@@ -529,7 +524,6 @@ mod tests {
             memory_diag_config: frogdb_debug::MemoryDiagConfig::default(),
             max_clients: Arc::new(AtomicU64::new(0)),
             is_replica: Arc::new(AtomicBool::new(false)),
-            pubsub_output_buffer_hard_limit: frogdb_core::DEFAULT_PUBSUB_OUTPUT_BUFFER_HARD_LIMIT,
             output_buffer_limits: Default::default(),
             conn_monitor: None,
             shard_placement: ShardPlacement::unpinned(),

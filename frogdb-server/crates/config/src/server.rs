@@ -87,20 +87,6 @@ pub struct ServerConfig {
     #[param]
     pub enable_debug_command: bool,
 
-    /// Hard limit, in bytes, on the pub/sub messages buffered server-side for a
-    /// single slow / non-reading subscriber. Once a connection's pending
-    /// delivery queue would exceed this, further messages are dropped and the
-    /// connection is torn down, so a stalled subscriber cannot force unbounded
-    /// memory growth. Mirrors Redis's `client-output-buffer-limit pubsub` hard
-    /// limit (default 32mb). `0` disables the bound (legacy unbounded delivery).
-    ///
-    /// Startup-fixed: consumed when a connection lazily allocates its pub/sub
-    /// channel, so `CONFIG GET` reports the honest startup value and `CONFIG
-    /// SET` is rejected (immutable), matching the `json-max-size` treatment.
-    #[serde(default = "default_pubsub_output_buffer_hard_limit")]
-    #[param(name = "pubsub-output-buffer-hard-limit")]
-    pub pubsub_output_buffer_hard_limit: usize,
-
     /// Per-class limits on the reply bytes buffered for one client, in Redis's
     /// `client-output-buffer-limit` spelling: whitespace-separated groups of
     /// `<class> <hard> <soft> <soft-seconds>` over the classes `normal`,
@@ -111,7 +97,11 @@ pub struct ServerConfig {
     ///
     /// Startup-fixed: a connection reads the limits once when it is built, so
     /// `CONFIG GET` reports the honest startup value and `CONFIG SET` is
-    /// rejected, matching `pubsub-output-buffer-hard-limit`.
+    /// rejected, matching the `json-max-size` treatment.
+    ///
+    /// This is the *only* client output-buffer knob: the `pubsub` triple bounds
+    /// a subscriber's undelivered delivery queue as well as its socket buffers,
+    /// which is what Redis's one `pubsub` class has always meant.
     #[serde(default = "default_client_output_buffer_limit")]
     #[param(name = "client-output-buffer-limit")]
     pub client_output_buffer_limit: String,
@@ -122,9 +112,6 @@ pub const DEFAULT_PORT: u16 = 6379;
 pub const DEFAULT_NUM_SHARDS: usize = 1;
 pub const DEFAULT_SCATTER_GATHER_TIMEOUT_MS: u64 = 5000;
 pub const DEFAULT_MAX_CLIENTS: u32 = 10000;
-/// Default pub/sub output-buffer hard limit (32 MiB), matching Redis's
-/// `client-output-buffer-limit pubsub 32mb` hard limit.
-pub const DEFAULT_PUBSUB_OUTPUT_BUFFER_HARD_LIMIT: usize = 32 * 1024 * 1024;
 /// Default `client-output-buffer-limit`: Redis's three shipped triples, spelled
 /// in bytes so `CONFIG GET` and this default agree character for character.
 pub const DEFAULT_CLIENT_OUTPUT_BUFFER_LIMIT: &str =
@@ -166,10 +153,6 @@ fn default_enable_debug_command() -> bool {
     false
 }
 
-fn default_pubsub_output_buffer_hard_limit() -> usize {
-    DEFAULT_PUBSUB_OUTPUT_BUFFER_HARD_LIMIT
-}
-
 fn default_client_output_buffer_limit() -> String {
     DEFAULT_CLIENT_OUTPUT_BUFFER_LIMIT.to_string()
 }
@@ -186,7 +169,6 @@ impl Default for ServerConfig {
             sorted_set_index: default_sorted_set_index(),
             max_clients: default_max_clients(),
             enable_debug_command: default_enable_debug_command(),
-            pubsub_output_buffer_hard_limit: default_pubsub_output_buffer_hard_limit(),
             client_output_buffer_limit: default_client_output_buffer_limit(),
         }
     }

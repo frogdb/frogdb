@@ -41,17 +41,6 @@ use std::time::{Duration, Instant};
 
 use frogdb_memory::{Budget, Charge, Disposition, Subsystem};
 
-/// An unlimited `NetworkOutput` budget, for a connection built outside a shard
-/// runtime — unit tests, and the fallback path where no per-core budget was
-/// handed down.
-///
-/// Unlimited rather than absent so the accounting seam is unconditional: a
-/// connection always has somewhere to charge, and the only thing that varies is
-/// whether anything is watching. The class limits still apply.
-pub fn detached_budget() -> Budget {
-    Budget::new(Subsystem::NetworkOutput, Disposition::Shed, u64::MAX)
-}
-
 /// The `client-output-buffer-limit` classes, as Redis names them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OutputBufferClass {
@@ -380,6 +369,14 @@ impl OutputBufferAccount {
         self.limits.for_class(self.class)
     }
 
+    /// All three classes' limits, for the one place that needs a class this
+    /// connection is not currently in: the pub/sub delivery queue is sized from
+    /// the `pubsub` hard limit when it is allocated, before the connection has
+    /// become a subscriber.
+    pub fn limits(&self) -> OutputBufferLimits {
+        self.limits
+    }
+
     /// **The seam.** Tell the account how many bytes are buffered for this
     /// connection *right now*, and get the verdict on it.
     ///
@@ -409,20 +406,19 @@ impl OutputBufferAccount {
         self.judge(now)
     }
 
-    /// The whole buffer reached the socket. Releases every charged byte and
-    /// stops the soft-limit timer; a connection with nothing buffered is by
-    /// definition not behind.
-    pub fn note_drained(&mut self) {
+    /// The connection is being torn down: drop every charged byte and forget
+    /// the soft-limit window.
+    ///
+    /// Only for a connection whose buffers have been *discarded*
+    /// (`shed_output`). A successful flush does **not** call this — it
+    /// re-measures through [`set_buffered`](Self::set_buffered) instead, so a
+    /// flush that leaves bytes still queued for this client (a subscriber's
+    /// delivery queue) keeps its soft-limit window running rather than being
+    /// credited with a drain that did not happen.
+    pub fn release_all(&mut self) {
         let held = self.charge.bytes();
         self.charge.shrink(held);
         self.soft_since = None;
-    }
-
-    /// Re-rule on a connection whose buffer has not grown — this is what makes
-    /// the soft limit a *timer* rather than a threshold only checked on write.
-    /// Called from the connection's periodic sync.
-    pub fn tick(&mut self, now: Instant) -> OutputVerdict {
-        self.judge(now)
     }
 
     /// The class limit applied to the bytes currently held.
@@ -514,7 +510,7 @@ mod tests {
             "a partial flush releases the difference"
         );
 
-        acct.note_drained();
+        acct.set_buffered(0, now);
         assert_eq!(budget.charged(), 0, "a full flush releases them");
 
         drop(acct);
@@ -585,12 +581,12 @@ mod tests {
             "crossing the soft limit starts the timer, it does not kill"
         );
         assert_eq!(
-            acct.tick(start + Duration::from_secs(59)),
+            acct.set_buffered(1_000, start + Duration::from_secs(59)),
             OutputVerdict::Keep,
             "still inside the window"
         );
         assert_eq!(
-            acct.tick(start + Duration::from_secs(60)),
+            acct.set_buffered(1_000, start + Duration::from_secs(60)),
             OutputVerdict::Shed(ShedReason::SoftLimit),
             "above the soft limit for the whole window"
         );
@@ -612,7 +608,7 @@ mod tests {
 
         assert_eq!(acct.set_buffered(1_200, start), OutputVerdict::Keep);
         assert_eq!(
-            acct.tick(start + Duration::from_secs(59)),
+            acct.set_buffered(1_200, start + Duration::from_secs(59)),
             OutputVerdict::Keep
         );
 
@@ -623,7 +619,7 @@ mod tests {
             OutputVerdict::Keep
         );
         assert_eq!(
-            acct.tick(start + Duration::from_secs(61)),
+            acct.set_buffered(700, start + Duration::from_secs(61)),
             OutputVerdict::Keep,
             "the window restarts from zero once output falls back under"
         );
@@ -633,12 +629,12 @@ mod tests {
             OutputVerdict::Keep
         );
         assert_eq!(
-            acct.tick(start + Duration::from_secs(121)),
+            acct.set_buffered(1_200, start + Duration::from_secs(121)),
             OutputVerdict::Keep,
             "only 59s of the new window have passed"
         );
         assert_eq!(
-            acct.tick(start + Duration::from_secs(122)),
+            acct.set_buffered(1_200, start + Duration::from_secs(122)),
             OutputVerdict::Shed(ShedReason::SoftLimit)
         );
     }
@@ -666,12 +662,12 @@ mod tests {
         acct.set_class(OutputBufferClass::PubSub);
         assert_eq!(acct.class(), OutputBufferClass::PubSub);
         assert_eq!(
-            acct.tick(start + Duration::from_secs(60)),
+            acct.set_buffered(2_000, start + Duration::from_secs(60)),
             OutputVerdict::Keep,
             "seconds accrued under the normal class are not evidence against pubsub"
         );
         assert_eq!(
-            acct.tick(start + Duration::from_secs(121)),
+            acct.set_buffered(2_000, start + Duration::from_secs(121)),
             OutputVerdict::Shed(ShedReason::SoftLimit)
         );
     }
@@ -686,7 +682,7 @@ mod tests {
         assert_eq!(acct.set_buffered(2_048, now), OutputVerdict::Keep);
         assert_eq!(acct.set_buffered(4_096, now), OutputVerdict::Keep);
 
-        acct.note_drained();
+        acct.release_all();
         assert_eq!(acct.buffered_bytes(), 0);
         assert_eq!(budget.charged(), 0);
     }

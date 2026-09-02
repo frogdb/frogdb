@@ -452,9 +452,6 @@ pub struct StaticConfig {
     pub repl_ack_interval_ms: u64,
     /// Allowed TLS ciphersuites (rustls IANA names; empty = rustls defaults).
     pub tls_ciphersuites: Vec<String>,
-    /// Hard limit (bytes) on the per-connection pub/sub output buffer for a slow
-    /// subscriber before messages are dropped and the connection is torn down.
-    pub pubsub_output_buffer_hard_limit: usize,
     /// Per-class limits on the reply bytes buffered for one client, in Redis's
     /// `client-output-buffer-limit <class> <hard> <soft> <soft-seconds>`
     /// spelling. Consumed when a connection is built.
@@ -575,7 +572,6 @@ impl StaticConfig {
             json_max_size: config.json.max_size,
             repl_ack_interval_ms: config.replication.ack_interval_ms,
             tls_ciphersuites: config.tls.ciphersuites.clone(),
-            pubsub_output_buffer_hard_limit: config.server.pubsub_output_buffer_hard_limit,
             client_output_buffer_limit: config.server.client_output_buffer_limit.clone(),
             // --- config-mutability round: newly-exposed immutable params ---
             tls_watch_certs: config.tls.watch_certs,
@@ -1672,19 +1668,6 @@ impl ConfigManager {
                 name: id.name(),
                 getter: |mgr| mgr.static_config.repl_ack_interval_ms.to_string(),
                 toml_getter: |mgr| mgr.static_config.repl_ack_interval_ms.to_toml_value(),
-            },
-            PubsubOutputBufferHardLimit => ParamMeta {
-                name: id.name(),
-                getter: |mgr| {
-                    mgr.static_config
-                        .pubsub_output_buffer_hard_limit
-                        .to_string()
-                },
-                toml_getter: |mgr| {
-                    mgr.static_config
-                        .pubsub_output_buffer_hard_limit
-                        .to_toml_value()
-                },
             },
             ClientOutputBufferLimit => ParamMeta {
                 name: id.name(),

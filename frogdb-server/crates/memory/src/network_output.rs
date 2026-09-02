@@ -1,10 +1,18 @@
 //! This core's [`Subsystem::NetworkOutput`] budget.
 //!
-//! Per-core for the same reason `frogdb_net::buffers` is: a connection runs on
-//! its shard's thread, so the bytes it buffers for its client are *this core's*
-//! network output. The budget is a thread local, which makes that true by
-//! construction — there is no handle to pass down, and no way to charge a
-//! foreign core's allowance.
+//! A thread local. On FrogDB's default deployment that is the same thing as
+//! per-core: `colocate-connections` (on by default) pins every connection to
+//! its shard's thread, so the bytes a connection buffers for its client are
+//! *this core's* network output, and there is no handle to pass down and no way
+//! to charge a foreign core's allowance.
+//!
+//! **With `colocate-connections = false`** connections run on the ambient
+//! multi-threaded runtime instead, and this becomes per *worker thread*: each
+//! worker gets its own budget, the ceiling applies per worker rather than per
+//! core, and no shard broker adopts those budgets — the bytes are still capped
+//! and still enforced, but they do not appear in the per-subsystem breakdown.
+//! That is the honest cost of unpinning connections, and it is why the pinned
+//! layout is the default.
 //!
 //! It lives here, in the zero-dependency memory crate, rather than beside the
 //! buffer pool in `frogdb-net`, because both of its callers must reach it and
@@ -24,8 +32,8 @@
 //!   `frogdb_memory_budget_*` metrics.
 //!
 //! The broker must adopt from *its own* thread for that to be the same budget
-//! the connections charge — which it is, since the shard's run loop and its
-//! connections share a thread.
+//! the connections charge — which it is under the pinned layout, since the
+//! shard's run loop and its connections share a thread.
 //!
 //! # Disposition
 //!
@@ -34,38 +42,26 @@
 //! connection that asked for the bytes, which is also what Redis's
 //! `client-output-buffer-limit` does to a client that will not read.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use crate::{Budget, Disposition, Subsystem};
 
-/// Default per-core ceiling on buffered client output.
+/// The per-core ceiling on buffered client output.
 ///
 /// Generous on purpose: it is a backstop against a core's worth of connections
 /// collectively pinning memory, not the mechanism that disciplines one slow
 /// client — that is `client-output-buffer-limit`, which is per connection and
 /// per class. A limit tight enough to matter per connection would shed innocent
 /// clients on a busy core.
-pub const DEFAULT_NETWORK_OUTPUT_BYTES: u64 = 512 * 1024 * 1024;
-
-/// Process-wide configured ceiling, applied to each core's budget.
-static CONFIGURED_LIMIT: AtomicU64 = AtomicU64::new(DEFAULT_NETWORK_OUTPUT_BYTES);
-
-/// Set the per-core ceiling. Takes effect on a core the next time
-/// [`current`] is called there.
-pub fn set_limit(bytes: u64) {
-    CONFIGURED_LIMIT.store(bytes, Ordering::Relaxed);
-}
-
-/// The configured per-core ceiling.
-pub fn limit() -> u64 {
-    CONFIGURED_LIMIT.load(Ordering::Relaxed)
-}
+///
+/// Not configurable: nothing in the config surface drives it, and a setter no
+/// parameter reaches is a seam that rots. `client-output-buffer-limit` is the
+/// knob operators actually have, and it is the one that disciplines a client.
+pub const NETWORK_OUTPUT_BYTES: u64 = 512 * 1024 * 1024;
 
 thread_local! {
     static BUDGET: Budget = Budget::new(
         Subsystem::NetworkOutput,
         Disposition::Shed,
-        CONFIGURED_LIMIT.load(Ordering::Relaxed),
+        NETWORK_OUTPUT_BYTES,
     );
 }
 
@@ -73,16 +69,8 @@ thread_local! {
 ///
 /// The returned [`Budget`] is a handle onto the same allowance every other
 /// caller on this thread gets; cloning it is how a connection keeps one.
-/// Re-reads the configured limit so a `CONFIG SET` reaches a core without
-/// having to walk the runtimes.
 pub fn current() -> Budget {
-    BUDGET.with(|budget| {
-        let configured = CONFIGURED_LIMIT.load(Ordering::Relaxed);
-        if budget.limit() != configured {
-            budget.set_limit(configured);
-        }
-        budget.clone()
-    })
+    BUDGET.with(|budget| budget.clone())
 }
 
 #[cfg(test)]
@@ -119,26 +107,5 @@ mod tests {
             "another core's buffered output is not charged to this one"
         );
         assert_eq!(mine.charged(), 4_096);
-    }
-
-    #[test]
-    fn a_reconfigured_limit_reaches_the_core() {
-        std::thread::spawn(|| {
-            let before = current();
-            assert_eq!(before.limit(), DEFAULT_NETWORK_OUTPUT_BYTES);
-
-            set_limit(8_192);
-            let after = current();
-            assert_eq!(after.limit(), 8_192);
-            assert_eq!(
-                before.limit(),
-                8_192,
-                "the handle already held names the same budget, so it sees the new limit"
-            );
-
-            set_limit(DEFAULT_NETWORK_OUTPUT_BYTES);
-        })
-        .join()
-        .expect("thread");
     }
 }

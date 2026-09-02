@@ -244,6 +244,33 @@ impl ConnectionHandler {
         }
     }
 
+    /// The connection's housekeeping tick, driven by the `select!` loop's timer
+    /// arm.
+    ///
+    /// Two jobs, both of which only exist because a connection can sit still:
+    ///
+    /// 1. **Judge the output buffer.** `client-output-buffer-limit`'s soft limit
+    ///    is a stopwatch — "above the soft mark continuously for N seconds" — so
+    ///    something has to look while nothing is being written. This is that
+    ///    something, and it goes through the same
+    ///    [`account_buffered_output`](Self::account_buffered_output) seam the
+    ///    write path uses, judging freshly measured bytes rather than a stale
+    ///    figure.
+    /// 2. **Give buffers back.** A connection that served one huge reply and
+    ///    then went quiet keeps that capacity for the rest of its session
+    ///    otherwise; the command path's trim never runs again for it.
+    ///
+    /// An `Err` means the seam condemned the connection (it has already released
+    /// the buffer, logged and counted); the caller drops the connection.
+    pub(super) fn on_idle_tick(&mut self) -> std::io::Result<()> {
+        self.account_buffered_output()?;
+        // A connection that produced nothing since the last stats sync is idle
+        // by the same definition `maybe_sync_stats` uses.
+        let busy = self.state.local_stats.has_data();
+        self.trim_idle_buffers(busy);
+        Ok(())
+    }
+
     /// Hand oversized read/write buffers back to this core's pool.
     ///
     /// A connection that once served a megabyte reply otherwise keeps a
@@ -259,19 +286,26 @@ impl ConnectionHandler {
     pub(super) fn trim_idle_buffers(&mut self, busy: bool) {
         use frogdb_net::buffers;
 
-        /// What an idle connection is re-leased down to — the pool's smallest
-        /// class, which is also a sensible size for the next command.
+        /// What an idle connection's *reply* buffers are re-leased down to — the
+        /// pool's smallest class, which is also a sensible size for the next
+        /// reply.
         const IDLE_TARGET: usize = buffers::MIN_CLASS_BYTES;
 
-        fn shrink(buf: &mut bytes::BytesMut) {
-            if buf.is_empty() && buf.capacity() > IDLE_TARGET {
-                buffers::recycle(buf, IDLE_TARGET);
+        /// The read buffer's floor is tokio-util's own initial capacity for a
+        /// `Framed` (`INITIAL_CAPACITY`, 8 KiB). Trimming below it would hand
+        /// the codec less than it starts every connection with, so the very
+        /// next command would grow it straight back — churn, not reclamation.
+        const READ_IDLE_TARGET: usize = 8 * 1024;
+
+        fn shrink(buf: &mut bytes::BytesMut, target: usize) {
+            if buf.is_empty() && buf.capacity() > target {
+                buffers::recycle(buf, target);
             }
         }
 
-        shrink(self.framed.read_buffer_mut());
-        shrink(self.framed.write_buffer_mut());
-        shrink(&mut self.resp3_buf);
+        shrink(self.framed.read_buffer_mut(), READ_IDLE_TARGET);
+        shrink(self.framed.write_buffer_mut(), IDLE_TARGET);
+        shrink(&mut self.resp3_buf, IDLE_TARGET);
 
         if !busy {
             buffers::sweep();

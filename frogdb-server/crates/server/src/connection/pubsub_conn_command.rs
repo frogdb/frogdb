@@ -256,9 +256,12 @@ pub(crate) struct PubSubIo<'a> {
     num_shards: usize,
     /// Scatter-gather deadline for PUBSUB introspection.
     scatter_gather_timeout: Duration,
-    /// Hard byte limit for the per-connection pub/sub output buffer (0 = off).
-    /// Applied when the channel is lazily created on first subscribe.
-    pubsub_output_buffer_hard_limit: usize,
+    /// Hard byte limit for this connection's pub/sub delivery queue, taken from
+    /// `client-output-buffer-limit pubsub`'s hard figure (`0` = off). Applied
+    /// when the channel is lazily created on first subscribe: the queue and the
+    /// socket buffers are two halves of one Redis limit, so they are bounded by
+    /// one number.
+    pubsub_queue_hard_limit: usize,
 }
 
 impl<'a> PubSubIo<'a> {
@@ -272,7 +275,7 @@ impl<'a> PubSubIo<'a> {
         cluster: &'a ClusterDeps,
         num_shards: usize,
         scatter_gather_timeout: Duration,
-        pubsub_output_buffer_hard_limit: usize,
+        pubsub_queue_hard_limit: usize,
     ) -> Self {
         Self {
             state,
@@ -282,7 +285,7 @@ impl<'a> PubSubIo<'a> {
             cluster,
             num_shards,
             scatter_gather_timeout,
-            pubsub_output_buffer_hard_limit,
+            pubsub_queue_hard_limit,
         }
     }
 
@@ -293,7 +296,7 @@ impl<'a> PubSubIo<'a> {
         if let Some(tx) = self.pubsub_tx.as_ref() {
             return tx.clone();
         }
-        let (tx, rx) = PubSubSender::channel(self.pubsub_output_buffer_hard_limit);
+        let (tx, rx) = PubSubSender::channel(self.pubsub_queue_hard_limit);
         *self.pubsub_tx = Some(tx.clone());
         *self.pubsub_rx = Some(rx);
         tx
@@ -1090,7 +1093,7 @@ impl ConnectionHandler {
             &self.cluster,
             self.num_shards,
             self.scatter_gather_timeout,
-            self.pubsub_output_buffer_hard_limit,
+            self.output_buffer.limits().pubsub.hard_bytes as usize,
         );
         let mut ctx = Self::base_ctx(
             &self.admin,

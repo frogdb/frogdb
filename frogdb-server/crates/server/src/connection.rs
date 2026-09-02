@@ -101,6 +101,15 @@ pub use crate::server::next_txid;
 // Re-export utility functions used by connection submodules and internally
 pub(crate) use util::{estimate_command_size, estimate_resp2_frame_size};
 
+/// How often an otherwise-idle connection wakes to judge its output buffer and
+/// return buffers it no longer needs.
+///
+/// One second, matching Redis's `serverCron` cadence for the same job and the
+/// granularity of `client-output-buffer-limit`'s `soft-seconds` — a finer tick
+/// would buy no accuracy the configuration can express, and every open
+/// connection pays for this timer.
+const IDLE_TICK: Duration = Duration::from_secs(1);
+
 /// Connection handler that processes client commands.
 pub struct ConnectionHandler {
     // -- Connection I/O --
@@ -147,11 +156,6 @@ pub struct ConnectionHandler {
     /// Receiver for pub/sub messages from shards.
     /// Lazily initialized on first pub/sub command.
     pubsub_rx: Option<PubSubReceiver>,
-
-    /// Hard limit (bytes) applied to this connection's pub/sub delivery queue
-    /// when it is lazily allocated. `0` disables the bound. A slow subscriber
-    /// that exceeds it has further messages dropped and is disconnected.
-    pubsub_output_buffer_hard_limit: usize,
 
     /// Client-tracking IO plumbing (invalidation channel + REDIRECT forwarding
     /// task). Grouped so the CLIENT executor can borrow it mutably as a
@@ -337,7 +341,6 @@ impl ConnectionHandler {
             scatter_gather_timeout: config.scatter_gather_timeout,
             pubsub_tx: None,
             pubsub_rx: None,
-            pubsub_output_buffer_hard_limit: config.pubsub_output_buffer_hard_limit,
             tracking_io: TrackingIo::default(),
             pending_track_reads: false,
             pending_slot_fence: None,
@@ -668,13 +671,29 @@ impl ConnectionHandler {
         frogdb_telemetry::definitions::PubsubOutputBufferDisconnects::inc(
             &*self.observability.metrics_recorder,
         );
-        let buffered = self.output_buffer.buffered_bytes();
+        // Measure now rather than reading the account: the account was zeroed by
+        // the flush that preceded this check, so it would report `buffered=0`
+        // for a kill caused by megabytes of undelivered messages.
+        let buffered = self.buffered_output_bytes();
         let _ = self.shed_output(output_buffer::ShedReason::HardLimit, buffered);
     }
 
     /// Run the connection handling loop.
     pub async fn run(mut self) -> Result<()> {
         debug!(conn_id = self.state.id, "Connection handler started");
+
+        // The connection's own housekeeping tick. Everything a connection must
+        // do *when nothing is happening to it* hangs off this one timer: judge
+        // the output-buffer limits (the soft limit is a clock, not a threshold,
+        // so without a tick it can only ever fire on a write), and hand buffers
+        // grown by a past burst back to the core's pool. A connection that
+        // buffered a megabyte and then went quiet is precisely the case neither
+        // the command path nor the write path can reach.
+        let mut idle_tick =
+            tokio::time::interval_at(tokio::time::Instant::now() + IDLE_TICK, IDLE_TICK);
+        // Delay, not Burst: a connection descheduled for a while must not then
+        // run a backlog of ticks it gained nothing from.
+        idle_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         loop {
             // `biased;` (determinism audit R7/A52): fixes the poll order so a
@@ -699,6 +718,11 @@ impl ConnectionHandler {
             //      correctness problem. Relative order among these three is
             //      untouched (pub/sub, invalidation, MONITOR) — no
             //      asymmetry between them is called out by the audit.
+            //   6. Housekeeping tick — output-buffer judgment and idle buffer
+            //      trimming. Last because it serves the server, not the client,
+            //      and losing a tick to real traffic costs nothing: the next
+            //      one is a second away, and a busy connection is judged on
+            //      every write anyway.
             tokio::select! {
                 biased;
 
@@ -916,6 +940,17 @@ impl ConnectionHandler {
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                             self.monitor_rx = None;
                         }
+                    }
+                }
+
+                // 6. Housekeeping tick. Last on purpose: it is the only arm that
+                // does no work for the client, so any real traffic outranks it.
+                _ = idle_tick.tick() => {
+                    if self.on_idle_tick().is_err() {
+                        // The output-buffer seam condemned this connection while
+                        // it sat idle (the soft window ran out). `on_idle_tick`
+                        // has already released the buffer, logged and counted.
+                        break;
                     }
                 }
             }

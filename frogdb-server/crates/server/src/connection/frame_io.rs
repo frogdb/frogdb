@@ -151,11 +151,13 @@ impl ConnectionHandler {
             .await
             .map_err(std::io::Error::other)?;
         self.framed.get_mut().flush().await?;
-        // Everything buffered reached the socket: release the whole charge and
-        // stop the soft-limit clock. A client with nothing buffered is not
-        // behind, whatever it was a moment ago.
-        self.output_buffer.note_drained();
-        Ok(())
+        // Re-measure rather than assume the client is caught up: the socket
+        // buffers are empty now, but a subscriber's delivery queue may still
+        // hold messages this flush did not reach. Crediting a drain here would
+        // reset the soft-limit window on every flush and the soft limit could
+        // never fire. `account_buffered_output` releases what actually drained
+        // and keeps the window running on what did not.
+        self.account_buffered_output()
     }
 
     /// **The write-path seam.** Charge what is buffered for this client right
@@ -170,12 +172,30 @@ impl ConnectionHandler {
     /// needs no new control flow, and a caller cannot accidentally keep serving
     /// a connection the seam has condemned.
     pub(super) fn account_buffered_output(&mut self) -> std::io::Result<()> {
-        let buffered = (self.framed.write_buffer().len() + self.resp3_buf.len()) as u64;
+        let buffered = self.buffered_output_bytes();
         self.output_buffer.set_class(self.output_class());
         match self.output_buffer.set_buffered(buffered, clock::now()) {
             OutputVerdict::Keep => Ok(()),
             OutputVerdict::Shed(reason) => Err(self.shed_output(reason, buffered)),
         }
+    }
+
+    /// Everything the server is currently holding *for* this client: the codec's
+    /// write buffer, the RESP3 encode buffer, and a subscriber's undelivered
+    /// pub/sub messages.
+    ///
+    /// The queue counts because Redis counts it: `client-output-buffer-limit
+    /// pubsub` is one limit over everything owed to a subscriber, not a separate
+    /// bound on a separate queue. Including it here is also what makes the soft
+    /// window observable — the socket buffers are empty after every flush, so a
+    /// figure built from them alone can never stay above the soft mark.
+    pub(super) fn buffered_output_bytes(&self) -> u64 {
+        let queued = self
+            .pubsub_rx
+            .as_ref()
+            .map(|rx| rx.queued_bytes())
+            .unwrap_or(0);
+        (self.framed.write_buffer().len() + self.resp3_buf.len() + queued) as u64
     }
 
     /// Release, log, count and describe a connection the output-buffer seam is
@@ -190,14 +210,20 @@ impl ConnectionHandler {
     pub(super) fn shed_output(&mut self, reason: ShedReason, buffered: u64) -> std::io::Error {
         self.framed.write_buffer_mut().clear();
         self.resp3_buf.clear();
-        self.output_buffer.note_drained();
+        self.output_buffer.release_all();
 
         let class = self.output_class();
+        let limit = self.output_buffer.limit();
+        // `buffered` is the caller's *triggering* figure — measured before the
+        // buffers above were cleared. Reading it here instead would report 0 on
+        // every kill and tell an operator nothing.
         tracing::warn!(
             conn_id = self.state.id,
             class = class.as_str(),
             reason = reason.as_str(),
             buffered,
+            hard_limit = limit.hard_bytes,
+            soft_limit = limit.soft_bytes,
             "client output buffer limit exceeded; disconnecting"
         );
         frogdb_telemetry::definitions::ClientOutputBufferDisconnects::inc(

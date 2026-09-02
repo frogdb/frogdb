@@ -265,8 +265,6 @@ param_id_enum! {
         JsonMaxDepth => "json-max-depth",
         JsonMaxSize => "json-max-size",
         ReplAckIntervalMs => "repl-ack-interval-ms",
-        // === issue-29: pub/sub slow-subscriber output-buffer bound (immutable) ===
-        PubsubOutputBufferHardLimit => "pubsub-output-buffer-hard-limit",
         // === config-mutability round: 2 newly-exposed immutable params ===
         // The cert watcher's existence and poll cadence are both fixed when the
         // task is spawned at startup, so both are GET-only.
@@ -378,13 +376,15 @@ mod tests {
         // justify as dead config) + 20 promote-immutable startup-consumed params
         // added by 13-01 Pass 2b + 7 promote-immutable params added by the
         // issue-14 wire pass (metrics OTLP ×3, json limits ×2, replica ACK
-        // cadence, TLS ciphersuites) + 1 promote-immutable param added by
-        // issue-29 (`pubsub-output-buffer-hard-limit`) + 2 added by the
+        // cadence, TLS ciphersuites) + 2 added by the
         // config-mutability round (`tls-watch-*`), minus the 23 that same round
         // promoted to `MutableParamId` + 2 added by the persistence hardening
         // round (`recovery-on-decode-failure`, `require-existing-data`).
         // + 1 added by memory-architecture issue 18
-        // (`client-output-buffer-limit`, consumed when a connection is built).
-        assert_eq!(ImmutableParamId::ALL.len(), 48);
+        // (`client-output-buffer-limit`, consumed when a connection is built),
+        // which also *retired* issue-29's `pubsub-output-buffer-hard-limit`:
+        // the pub/sub delivery queue is now bounded by that value's `pubsub`
+        // class, so the two knobs became one.
+        assert_eq!(ImmutableParamId::ALL.len(), 47);
     }
 }
