@@ -6,7 +6,7 @@ Severity: likelihood 2/3 (a diff run cannot see a deleted or weakened test — t
 `exclude_globs` — and 15 rows already postdate their area's last run), consequence 2/3 (an area
 drifts below its gate while still carrying the LOCKED badge) — score 4
 Area: campaign mechanism / CI
-Blocked by: 13
+Blocked by: 13, 17
 
 ## Problem
 

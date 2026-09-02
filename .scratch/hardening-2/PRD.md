@@ -612,3 +612,10 @@ Original questions kept for the record; ruling appended to each.
 7. **Coverage pipeline.** Left broken at campaign-1 exit. *Recommendation:* fix it in W0 or turn it
    off; a coverage number nobody trusts is worse than none.
    **Ruling: fix it in W0.** Issues 27/28/31 join wave 0 alongside c2-06.
+
+## Decisions — locked-areas-mechanical dispatch (2026-09-02)
+
+Grill-and-dispatch ledger for issues 13–16. Appended per answer; lines never edited.
+
+- D1: scope = issues 14, 15, 16; integration branch `locked-areas-mechanical/impl` off `worktree-locked-areas-mechanical` (13 unmerged on main); fu-a/b/c stay unfiled.
+- D2: gate command = `just workflow-gen --check && just lint-gates && just lint-py && just fmt-py-check && just scratch-check` (compile-free; per-issue extras live in that issue's acceptance criteria).

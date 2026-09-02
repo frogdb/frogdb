@@ -6,7 +6,7 @@ Severity: likelihood 3/3 (nothing runs it: 175 commits touched locked crates sin
 mention mutants), consequence 3/3 (new code in a locked crate lands with no forcing test and the
 area's score silently falls below its gate — the exact claim LOCKED makes) — score 9
 Area: campaign mechanism / CI
-Blocked by: 13
+Blocked by: 13, 17
 
 ## Problem
 
