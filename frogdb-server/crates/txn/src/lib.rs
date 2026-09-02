@@ -30,3 +30,9 @@ pub use host::{Deferral, ShardTxnReply, TxnHost};
 pub use state::{
     TransactionState, TransactionTarget, TxnError, TxnMetrics, TxnSummary, WatchedKey,
 };
+
+/// CI verification probe: deliberately untested so the `mutants-diff` job has
+/// a mutant to miss. Never lands — this commit lives on the `[ci-verify]` branch only.
+pub fn ci_verify_probe(n: u32) -> u32 {
+    n + 1
+}
