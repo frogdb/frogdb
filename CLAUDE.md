@@ -204,7 +204,8 @@ that manifest is what the tooling reads, so it is never restated here. Boundary 
 - The specs (`specs/<area>.md`, header `Status: LOCKED`)
   are the contract: behavior changes are **spec-first** (failure-mode row → failing test →
   fix). `just lint-spec` enforces spec↔test agreement (every `FM-<AREA>-NNN` row
-  names its forcing tests; every tagged test matches a row) and runs in `just lint`.
+  names its forcing tests; every tagged test matches a row) and runs in `just lint` and in
+  CI's `Unit Tests` job, which already has the compiled test binaries it needs.
 - CI runs `just mutants-diff` for every locked crate a PR or a push to main touches and fails on
   any missed mutant; run it locally to iterate faster. Full runs:
   `just mutants <crate>` + `just mutants-gate <crate>` (the gate comes from the spec header);

@@ -219,7 +219,7 @@ jobs:
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
         install: 'true'
-        install_args: just cargo:cargo-nextest npm:@informalsystems/quint
+        install_args: python uv just cargo:cargo-nextest npm:@informalsystems/quint
         cache: 'true'
         experimental: 'true'
     - name: Install Rust 1.92.0
@@ -297,7 +297,7 @@ jobs:
     - name: Cache Rust build artifacts
       uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
       with:
-        shared-key: stable
+        shared-key: mutants
     - id: base
       name: Resolve the diff base
       env:
@@ -324,11 +324,15 @@ jobs:
         echo "sha=${sha}" >> "$GITHUB_OUTPUT"
     - name: Mutate the diff
       if: steps.base.outputs.skip != 'true'
-      run: just mutants-diff ${{ matrix.crate }} ${{ steps.base.outputs.sha }} --jobs 2
+      env:
+        CRATE: ${{ matrix.crate }}
+        BASE: ${{ steps.base.outputs.sha }}
+      run: just mutants-diff "${CRATE}" "${BASE}" --jobs 2
     - name: Summarize the run
       if: always() && steps.base.outcome == 'success' && steps.base.outputs.skip != 'true'
       env:
         CRATE: ${{ matrix.crate }}
+        BASE: ${{ steps.base.outputs.sha }}
       run: |
         set -uo pipefail
         out="target/mutants/${CRATE}-diff/mutants.out"
@@ -341,7 +345,12 @@ jobs:
         {
           echo "### mutants-diff: ${CRATE}"
           echo
-          if [ "${total}" -eq 0 ]; then
+          if [ ! -d "${out}" ]; then
+            # The recipe exits 0 before mutating when the crate-scoped
+            # patch is empty, so no mutants.out exists — a different
+            # outcome from "mutated, found nothing to mutate".
+            echo "No changes under \`${CRATE}\` since \`${BASE}\`; nothing to mutate."
+          elif [ "${total}" -eq 0 ]; then
             echo "No mutants in this crate's share of the diff."
           else
             echo "${total} total, ${caught} caught, ${missed} missed, ${unviable} unviable, ${timeout} timeout"

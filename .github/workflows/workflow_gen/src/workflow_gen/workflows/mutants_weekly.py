@@ -33,6 +33,7 @@ from ruamel.yaml.scalarstring import SingleQuotedScalarString as SQ
 
 from workflow_gen.constants import DOWNLOAD_ARTIFACT
 from workflow_gen.helpers import (
+    MISE_JUST_MUTANTS,
     cargo_cache_step,
     change_gate_job,
     checkout_step,
@@ -59,12 +60,9 @@ if TYPE_CHECKING:
     # `Spec` is a name in annotations and nowhere else — see helpers.py.
     from locked_areas import Spec
 
-# cargo-mutants shells out to the test tool named in .cargo/mutants.toml, which
-# is nextest — so a mutation job needs both binaries. Same set `test.py`'s
-# `mutants-diff` job installs, for the same reasons: python/uv are for the
-# `uv run --script` shebang on scripts/locked_areas.py, which `just mutants`'
-# siblings call to resolve the perimeter.
-MISE_JUST_MUTANTS = "python uv just cargo:cargo-mutants cargo:cargo-nextest"
+# The mutation legs' install set is `helpers.MISE_JUST_MUTANTS`, shared with
+# `test.py`'s `mutants-diff` job.
+#
 # The scoring job compiles nothing: it downloads outcomes files and runs
 # scripts/mutants-gate.py, a `uv run --script` shebang over stdlib.
 MISE_PYTHON = "python uv"

@@ -74,6 +74,14 @@ RUST_VERSION = _read_rust_version()
 # `cargo` is actually missing from PATH.
 RUST_TOOLCHAIN = f"dtolnay/rust-toolchain@{RUST_VERSION}"
 
+# mise install_args for a mutation job, shared by `test.py`'s per-PR
+# `mutants-diff` and `mutants_weekly.py`'s full runs so the two cannot drift.
+# cargo-mutants shells out to the test tool named in .cargo/mutants.toml, which
+# is nextest — so a mutation job needs both binaries, not just cargo-mutants.
+# python/uv are for the `uv run --script` shebang on scripts/locked_areas.py,
+# which the `just mutants*` recipes call to resolve the crate's perimeter and path.
+MISE_JUST_MUTANTS = "python uv just cargo:cargo-mutants cargo:cargo-nextest"
+
 
 # --- Locked-areas manifest ---
 
@@ -365,9 +373,16 @@ def change_gate_job(*, workflow_file: str) -> Job:
 
     Nightly workflows burn CI minutes every night regardless of whether anything
     changed. This job compares the current commit against the head SHA of this same
-    workflow's last successful run (via `gh run list`) and exposes a `skip` output;
-    downstream jobs add `needs: gate` plus `if: needs.gate.outputs.skip != 'true'` to
-    honor it.
+    workflow's last successful *scheduled* run (via `gh run list --event schedule`)
+    and exposes a `skip` output; downstream jobs add `needs: gate` plus
+    `if: needs.gate.outputs.skip != 'true'` to honor it.
+
+    The `--event schedule` filter is what makes the comparison mean "since the last
+    time the full scheduled run measured this tree". Without it a `workflow_dispatch`
+    — which may deliberately run a *narrower* slice, e.g. `mutants-weekly.yml`'s
+    one-crate input — becomes the last successful run at its sha, and the next
+    scheduled run at that same sha skips entirely, so the rest of the slice goes
+    unmeasured that cycle.
 
     The check only ever applies to `schedule`-triggered runs — `workflow_dispatch`
     (someone explicitly asked for a run) and any other trigger always proceed, so a
@@ -390,7 +405,7 @@ def change_gate_job(*, workflow_file: str) -> Job:
         steps=[
             Step(
                 id="gate",
-                name="Check for new commits since last successful run",
+                name="Check for new commits since last successful scheduled run",
                 env=omap(
                     GH_TOKEN="${{ github.token }}",
                     EVENT_NAME="${{ github.event_name }}",
@@ -405,16 +420,16 @@ def change_gate_job(*, workflow_file: str) -> Job:
                       exit 0
                     fi
                     last_sha=$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow "${WORKFLOW_FILE}" \\
-                      --status success --limit 1 --json headSha --jq '.[0].headSha // empty')
+                      --event schedule --status success --limit 1 --json headSha --jq '.[0].headSha // empty')
                     if [ -z "${last_sha}" ]; then
                       echo "skip=false" >> "$GITHUB_OUTPUT"
-                      echo "No previous successful run found; proceeding."
+                      echo "No previous successful scheduled run found; proceeding."
                     elif [ "${last_sha}" = "${CURRENT_SHA}" ]; then
                       echo "skip=true" >> "$GITHUB_OUTPUT"
-                      echo "No new commits since last successful run (${last_sha}); skipping."
+                      echo "No new commits since last successful scheduled run (${last_sha}); skipping."
                     else
                       echo "skip=false" >> "$GITHUB_OUTPUT"
-                      echo "New commits since last successful run (${last_sha} -> ${CURRENT_SHA}); proceeding."
+                      echo "New commits since last successful scheduled run (${last_sha} -> ${CURRENT_SHA}); proceeding."
                     fi
                     """),
             ),
