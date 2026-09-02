@@ -902,6 +902,14 @@
           "mutable": false
         },
         {
+          "name": "client-output-buffer-limit",
+          "type": "string",
+          "default": "normal 0 0 0 replica 268435456 67108864 60 pubsub 33554432 8388608 60",
+          "description": "Per-class limits on the reply bytes buffered for one client, in Redis's\n`client-output-buffer-limit` spelling: whitespace-separated groups of\n`<class> <hard> <soft> <soft-seconds>` over the classes `normal`,\n`replica` (alias `slave`) and `pubsub`. `0` disables a limit; byte counts\ntake Redis's `k`/`kb`/`m`/`mb`/`g`/`gb` suffixes. A class the value does\nnot name keeps its default, so `normal 0 0 0 replica 268435456 67108864\n60 pubsub 33554432 8388608 60` is what the default means.\n\nStartup-fixed: a connection reads the limits once when it is built, so\n`CONFIG GET` reports the honest startup value and `CONFIG SET` is\nrejected, matching `pubsub-output-buffer-hard-limit`.",
+          "config_param": "client-output-buffer-limit",
+          "mutable": false
+        },
+        {
           "name": "colocate-connections",
           "type": "boolean",
           "default": true,

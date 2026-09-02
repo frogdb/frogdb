@@ -100,6 +100,21 @@ pub struct ServerConfig {
     #[serde(default = "default_pubsub_output_buffer_hard_limit")]
     #[param(name = "pubsub-output-buffer-hard-limit")]
     pub pubsub_output_buffer_hard_limit: usize,
+
+    /// Per-class limits on the reply bytes buffered for one client, in Redis's
+    /// `client-output-buffer-limit` spelling: whitespace-separated groups of
+    /// `<class> <hard> <soft> <soft-seconds>` over the classes `normal`,
+    /// `replica` (alias `slave`) and `pubsub`. `0` disables a limit; byte counts
+    /// take Redis's `k`/`kb`/`m`/`mb`/`g`/`gb` suffixes. A class the value does
+    /// not name keeps its default, so `normal 0 0 0 replica 268435456 67108864
+    /// 60 pubsub 33554432 8388608 60` is what the default means.
+    ///
+    /// Startup-fixed: a connection reads the limits once when it is built, so
+    /// `CONFIG GET` reports the honest startup value and `CONFIG SET` is
+    /// rejected, matching `pubsub-output-buffer-hard-limit`.
+    #[serde(default = "default_client_output_buffer_limit")]
+    #[param(name = "client-output-buffer-limit")]
+    pub client_output_buffer_limit: String,
 }
 
 pub const DEFAULT_BIND: &str = "127.0.0.1";
@@ -110,6 +125,10 @@ pub const DEFAULT_MAX_CLIENTS: u32 = 10000;
 /// Default pub/sub output-buffer hard limit (32 MiB), matching Redis's
 /// `client-output-buffer-limit pubsub 32mb` hard limit.
 pub const DEFAULT_PUBSUB_OUTPUT_BUFFER_HARD_LIMIT: usize = 32 * 1024 * 1024;
+/// Default `client-output-buffer-limit`: Redis's three shipped triples, spelled
+/// in bytes so `CONFIG GET` and this default agree character for character.
+pub const DEFAULT_CLIENT_OUTPUT_BUFFER_LIMIT: &str =
+    "normal 0 0 0 replica 268435456 67108864 60 pubsub 33554432 8388608 60";
 
 fn default_bind() -> String {
     DEFAULT_BIND.to_string()
@@ -151,6 +170,10 @@ fn default_pubsub_output_buffer_hard_limit() -> usize {
     DEFAULT_PUBSUB_OUTPUT_BUFFER_HARD_LIMIT
 }
 
+fn default_client_output_buffer_limit() -> String {
+    DEFAULT_CLIENT_OUTPUT_BUFFER_LIMIT.to_string()
+}
+
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
@@ -164,6 +187,7 @@ impl Default for ServerConfig {
             max_clients: default_max_clients(),
             enable_debug_command: default_enable_debug_command(),
             pubsub_output_buffer_hard_limit: default_pubsub_output_buffer_hard_limit(),
+            client_output_buffer_limit: default_client_output_buffer_limit(),
         }
     }
 }

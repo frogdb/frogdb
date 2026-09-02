@@ -572,6 +572,12 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
             "replica-serve-stale-data",
         ));
 
+        // --- memory-architecture issue 18 (per-class output-buffer limits):
+        // appended last so the golden snapshot's first 126 rows stay
+        // byte-identical. Immutable: a connection reads the limits once when it
+        // is built, so GET reports the startup value and SET has no seam. ---
+        rows.push(pick(ServerConfig::PARAMS, "client-output-buffer-limit"));
+
         rows
     });
 
@@ -1480,6 +1486,14 @@ mod tests {
             mutable: true,
             noop: false,
         },
+        // memory-architecture issue 18: per-class output-buffer limits (immutable).
+        ConfigParamInfo {
+            name: "client-output-buffer-limit",
+            section: Some("server"),
+            field: Some("client-output-buffer-limit"),
+            mutable: false,
+            noop: false,
+        },
     ];
 
     #[test]
@@ -1530,7 +1544,10 @@ mod tests {
         // giving 125. Redis-feel issue 17 appended the mutable
         // `replica-serve-stale-data` (the stale-read gate, defaulted to `no`
         // where Redis defaults `yes`), giving 126.
-        assert_eq!(GOLDEN_SNAPSHOT.len(), 126);
+        // Memory-architecture issue 18 appended the immutable
+        // `client-output-buffer-limit` (Redis's per-class buffered-reply
+        // limits), giving 127.
+        assert_eq!(GOLDEN_SNAPSHOT.len(), 127);
     }
 
     #[test]

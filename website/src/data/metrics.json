@@ -4,7 +4,7 @@
     "source": "frogdb-server/crates/telemetry/src/definitions.rs",
     "regenerate": "just docs-gen"
   },
-  "count": 114,
+  "count": 115,
   "metrics": [
     {
       "name": "frogdb_active_version",
@@ -150,6 +150,22 @@
       "labels": [
         {
           "name": "shard",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_client_output_buffer_disconnects_total",
+      "type": "counter",
+      "help": "Total client connections disconnected by the `client-output-buffer-limit` seam. `class` is the Redis limit class (`normal`, `replica`, `pubsub`); `reason` is `hard_limit`, `soft_limit`, or `budget_refused` (the core's `NetworkOutput` budget shed the connection).",
+      "group": "client",
+      "labels": [
+        {
+          "name": "class",
+          "type": "string"
+        },
+        {
+          "name": "reason",
           "type": "string"
         }
       ]

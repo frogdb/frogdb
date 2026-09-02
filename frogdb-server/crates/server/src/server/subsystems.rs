@@ -578,6 +578,16 @@ impl Server {
             });
         }
 
+        // Redis's `client-output-buffer-limit`, read once for every connection
+        // this server will accept. Parsed here, where a bad value can still
+        // refuse the boot: a limit that failed to parse and was quietly replaced
+        // by a default is a limit the operator believes they set and does not
+        // have.
+        let output_buffer_limits = crate::connection::output_buffer::OutputBufferLimits::parse(
+            &self.config.server.client_output_buffer_limit,
+        )
+        .map_err(|e| anyhow::anyhow!("server.client-output-buffer-limit: {e}"))?;
+
         // Shared dependencies for every acceptor (main, admin, TLS ports).
         // Built once here; only the per-listener `PortSpec` (listener,
         // is_admin, TLS manager) differs between the three ports below.
@@ -629,17 +639,7 @@ impl Server {
             allow_cross_slot: self.config.server.allow_cross_slot_standalone,
             scatter_gather_timeout_ms: self.config.server.scatter_gather_timeout_ms,
             pubsub_output_buffer_hard_limit: self.config.server.pubsub_output_buffer_hard_limit,
-            // One limit source for pub/sub: `server.pubsub-output-buffer-hard-limit`
-            // already *is* Redis's `client-output-buffer-limit pubsub` hard
-            // limit, so the seam reads it rather than growing a second knob that
-            // could disagree with the queue bound built from the same number.
-            output_buffer_limits: crate::connection::output_buffer::OutputBufferLimits {
-                pubsub: crate::connection::output_buffer::OutputBufferLimit {
-                    hard_bytes: self.config.server.pubsub_output_buffer_hard_limit as u64,
-                    ..crate::connection::output_buffer::OutputBufferLimit::PUBSUB_DEFAULT
-                },
-                ..Default::default()
-            },
+            output_buffer_limits,
             admin_enabled,
             memory_diag_config: self.config.memory.to_diag_config(),
             max_clients: self.config_manager.max_clients_flag(),

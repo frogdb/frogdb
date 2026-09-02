@@ -221,6 +221,13 @@ pub struct TestServerConfig {
     /// tests to hit the limit with a small, non-OOMing publish volume.
     pub pubsub_output_buffer_hard_limit: Option<usize>,
 
+    // --- Client output buffers ---
+    /// Override `server.client-output-buffer-limit` (Redis's
+    /// `<class> <hard> <soft> <soft-seconds>` groups). None = server default
+    /// (Redis's shipped triples). Used by the output-buffer-limit tests to make
+    /// the normal and replica classes reachable without buffering 256 MiB.
+    pub client_output_buffer_limit: Option<String>,
+
     // --- Memory / eviction ---
     /// Override `memory.maxmemory` (byte limit; 0 = unlimited). `None` keeps the
     /// server default (unlimited). Set a small value together with a `tiered-*`
@@ -292,6 +299,7 @@ impl Clone for TestServerConfig {
             json_max_depth: self.json_max_depth,
             json_max_size: self.json_max_size,
             pubsub_output_buffer_hard_limit: self.pubsub_output_buffer_hard_limit,
+            client_output_buffer_limit: self.client_output_buffer_limit.clone(),
             maxmemory: self.maxmemory,
             maxmemory_policy: self.maxmemory_policy.clone(),
             tiered_storage_enabled: self.tiered_storage_enabled,
@@ -645,6 +653,9 @@ impl TestServer {
         }
         if let Some(limit) = test_config.pubsub_output_buffer_hard_limit {
             config.server.pubsub_output_buffer_hard_limit = limit;
+        }
+        if let Some(ref spec) = test_config.client_output_buffer_limit {
+            config.server.client_output_buffer_limit = spec.clone();
         }
 
         // Memory / eviction knobs (drive spill/eviction under memory pressure).

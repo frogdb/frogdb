@@ -455,6 +455,10 @@ pub struct StaticConfig {
     /// Hard limit (bytes) on the per-connection pub/sub output buffer for a slow
     /// subscriber before messages are dropped and the connection is torn down.
     pub pubsub_output_buffer_hard_limit: usize,
+    /// Per-class limits on the reply bytes buffered for one client, in Redis's
+    /// `client-output-buffer-limit <class> <hard> <soft> <soft-seconds>`
+    /// spelling. Consumed when a connection is built.
+    pub client_output_buffer_limit: String,
 
     // --- config-mutability round: newly-exposed immutable params ---
     /// Whether the certificate file watcher is running. Immutable: the watcher
@@ -572,6 +576,7 @@ impl StaticConfig {
             repl_ack_interval_ms: config.replication.ack_interval_ms,
             tls_ciphersuites: config.tls.ciphersuites.clone(),
             pubsub_output_buffer_hard_limit: config.server.pubsub_output_buffer_hard_limit,
+            client_output_buffer_limit: config.server.client_output_buffer_limit.clone(),
             // --- config-mutability round: newly-exposed immutable params ---
             tls_watch_certs: config.tls.watch_certs,
             tls_watch_debounce_ms: config.tls.watch_debounce_ms,
@@ -1680,6 +1685,11 @@ impl ConfigManager {
                         .pubsub_output_buffer_hard_limit
                         .to_toml_value()
                 },
+            },
+            ClientOutputBufferLimit => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.client_output_buffer_limit.clone(),
+                toml_getter: |mgr| mgr.static_config.client_output_buffer_limit.to_toml_value(),
             },
             // --- config-mutability round: newly-exposed immutable params ---
             // The cert watcher is a task spawned once at startup from these two

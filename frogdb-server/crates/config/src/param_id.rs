@@ -280,6 +280,11 @@ param_id_enum! {
         // Same reason: the empty-data-dir refusal is decided in recovery phase 0,
         // before any client exists. GET reports the startup value.
         RequireExistingData => "require-existing-data",
+        // === memory-architecture issue 18: per-class output-buffer limits ===
+        // Read once when a connection is built (`OutputBufferAccount::new`), so
+        // an existing connection keeps the limits it started with and a SET has
+        // no seam to act on; GET reports the startup value.
+        ClientOutputBufferLimit => "client-output-buffer-limit",
     }
 }
 
@@ -378,6 +383,8 @@ mod tests {
         // config-mutability round (`tls-watch-*`), minus the 23 that same round
         // promoted to `MutableParamId` + 2 added by the persistence hardening
         // round (`recovery-on-decode-failure`, `require-existing-data`).
-        assert_eq!(ImmutableParamId::ALL.len(), 47);
+        // + 1 added by memory-architecture issue 18
+        // (`client-output-buffer-limit`, consumed when a connection is built).
+        assert_eq!(ImmutableParamId::ALL.len(), 48);
     }
 }
