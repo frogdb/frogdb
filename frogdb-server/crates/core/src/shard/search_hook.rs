@@ -160,7 +160,7 @@ impl ShardWorker {
             Some(value) => {
                 let value_ref: &crate::types::Value = &value;
                 match value_ref.as_json() {
-                    Some(jv) => jv.data().clone(),
+                    Some(jv) => jv.to_json_data(),
                     None => return,
                 }
             }
