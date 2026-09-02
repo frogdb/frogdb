@@ -1,6 +1,6 @@
 # 14: block-packed large forms for hash and set
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Origin: memory-architecture PRD phase filing, 2026-09-01 — [PRD.md](../../PRD.md) R7
 Area: frogdb-types (hash.rs, set.rs)
@@ -99,3 +99,33 @@ promotion thresholds, per-value compression.
 harness. The index-over-blocks design here does not depend on the phase-3 Dashtable work
 ([issues 10–12 reserved](../)); the keyspace table and per-value byte storage are
 separate structures.
+
+## Resolution
+
+Landed 2026-09-02 on `mem-arch-integration` (picks `3e7fe83b`..`b603871a`, 3 commits).
+
+What shipped: `BlockStore` (`types/src/blockstore.rs`) — append-only block arena with
+per-block compaction: handles are `(block, offset, len)`, block capacities ramp 512 B →
+16 KiB (oversized records get exactly-sized dedicated blocks), `remove` marks a fully-dead
+or mostly-dead (≥4 KiB and ≥half dead, non-tail) block as the compaction candidate, and
+`compact` moves at most one block's live bytes (≤8 KiB for ratio victims; zero for
+fully-dead ones), recycling freed slots so churn never grows the block table. `BlockHash`
+and `BlockSet` replace `HashMap<Bytes,Bytes>`/`HashSet<Bytes>` as the large forms: dense
+entry vec + hashbrown index of handles, swap-remove with index repointing, same-length
+updates overwritten in place. Set-op results (`SUNION`/`SINTER`/`SDIFF`) build the block
+form from sorted members so MEMORY USAGE is run-stable. HRANDFIELD/SRANDMEMBER read
+positionally — no full-value materialization. Small forms re-encoded onto the shared
+`Listpack` module per the issue-13 amendment, retiring both bespoke u16 codecs.
+
+Review round 1 (6 Important, 5 Minor) fixed; re-review clean (all findings addressed, no
+new Critical/Important). Gates: frogdb-types 440/440, frogdb-server 2152/2154 (2
+replication load flakes, both pass isolated — no replication code touched), workspace
+clippy `-D warnings` 0, lint-spec + quint-check, seam gates.
+
+**Flagged for human decision (review finding 6):** small-form reads lost zero-copy. The
+old bespoke codecs returned refcounted `Bytes` slices; the shared `Listpack` stores
+`Vec<u8>`, so every HGET/HGETALL/SMEMBERS element on the (default) listpack encoding now
+pays `Bytes::copy_from_slice` — a heap allocation per element on the common path. The
+consolidation was mandated by the issue-13 amendment and is documented at both `Listpack`
+encoding variants; accept the cost, or file a follow-up to give the shared listpack a
+`Bytes`-backed buffer.

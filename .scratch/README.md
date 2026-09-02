@@ -12,7 +12,7 @@ temp dir. Several files here are load-bearing — `scripts/coverage-depth.py` wr
 
 | directory | state | open | done | what |
 |---|---|--:|--:|---|
-| [memory-architecture](memory-architecture/) | active | 9 | 14 | 2026-08-31 memory-architecture PRD (R1–R15, all ruled) + phase-1 spike (GO); phases 1–2 landed (issues 01–09); phase 3–6 issues 10, 13–22 filed 2026-09-01; 11–12 drafted from the landed slot-layout spike report; 23 filed from issue 18's review (replica feed accounting, D4); 17, 18, 20 landed 2026-09-02 |
+| [memory-architecture](memory-architecture/) | active | 8 | 15 | 2026-08-31 memory-architecture PRD (R1–R15, all ruled) + phase-1 spike (GO); phases 1–2 landed (issues 01–09); phase 3–6 issues 10, 13–22 filed 2026-09-01; 11–12 drafted from the landed slot-layout spike report; 23 filed from issue 18's review (replica feed accounting, D4); 14, 17, 18, 20 landed 2026-09-02 |
 | [redis-feel](redis-feel/) | active | 4 | 14 | 2026-08-15 side-by-side feel test vs Redis 8.6.1; data path matched line-for-line, gaps are all introspection/metadata — rulings in `adr/0005-truthful-redis-86-surface.md` |
 | [testing-improvements-round2](testing-improvements-round2/) | active | 70 | 6 | round-2 testing-gap audit; 249 findings → 95 issues. Re-triaged 2026-08-06: **18 confirmed live defects** |
 | [arch-deepening](arch-deepening/) | active | 15 | 1 | architecture deepening rounds; proposals backlog empty, issues backlog is not |
