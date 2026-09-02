@@ -894,6 +894,8 @@ dependencies = [
 name = "frogdb-cluster"
 version = "0.1.0"
 dependencies = [
+ "frogdb-protocol",
+ "frogdb-types",
  "futures",
  "openraft",
  "parking_lot",
@@ -914,11 +916,11 @@ version = "0.1.0"
 dependencies = [
  "bitvec",
  "bytes",
+ "frogdb-acl",
  "frogdb-core",
  "frogdb-protocol",
  "hex",
  "rand 0.10.0",
- "ryu",
  "serde_json",
  "smallvec",
  "tracing",
@@ -959,6 +961,7 @@ dependencies = [
  "dashmap",
  "frogdb-acl",
  "frogdb-cluster",
+ "frogdb-memory",
  "frogdb-persistence",
  "frogdb-protocol",
  "frogdb-replication",
@@ -966,6 +969,7 @@ dependencies = [
  "frogdb-search",
  "frogdb-types",
  "frogdb-vll",
+ "futures",
  "griddle",
  "hex",
  "linked-hash-map",
@@ -1010,6 +1014,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "frogdb-memory"
+version = "0.1.0"
+
+[[package]]
 name = "frogdb-metrics-derive"
 version = "0.1.0"
 dependencies = [
@@ -1027,8 +1035,10 @@ dependencies = [
  "bytes",
  "flume",
  "frogdb-config",
+ "frogdb-memory",
  "frogdb-types",
  "parking_lot",
+ "rand 0.10.0",
  "rocksdb",
  "serde",
  "serde_json",
@@ -1036,6 +1046,7 @@ dependencies = [
  "tokio",
  "tokio-metrics",
  "tracing",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -1045,6 +1056,7 @@ dependencies = [
  "bytes",
  "bytes-utils",
  "redis-protocol",
+ "ryu",
  "thiserror 2.0.18",
  "tokio-util",
  "tracing",
@@ -1114,6 +1126,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "thiserror 2.0.18",
+ "tokio",
  "tracing",
  "usearch",
  "xxhash-rust",
@@ -1549,6 +1562,7 @@ dependencies = [
  "libc",
  "libz-sys",
  "lz4-sys",
+ "tikv-jemalloc-sys",
  "zstd-sys",
 ]
 
@@ -2746,6 +2760,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "tikv-jemalloc-sys"
+version = "0.6.1+5.3.0-1-ge13ca993e8ccb9ba9847cc330696e02839f328f7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd8aa5b2ab86a2cefa406d889139c162cbb230092f7d1d7cbc1716405d852a3b"
+dependencies = [
+ "cc",
+ "libc",
 ]
 
 [[package]]
