@@ -5,7 +5,7 @@
 //! exactly one segment and the directory slice that points at it.
 
 use std::collections::hash_map::RandomState;
-use std::hash::{BuildHasher, Hash, Hasher};
+use std::hash::BuildHasher;
 
 use crate::segment::{Bucket, Segment, Slot, BUCKETS, REGULAR_BUCKETS, STASH_BUCKETS};
 use crate::word::{Decoded, InlineBuf, Word};
@@ -86,9 +86,7 @@ impl<K: Word, V: Word, const N: usize> Table<K, V, N> {
 
     #[inline]
     fn route(&self, key: &[u8]) -> Route {
-        let mut h = self.hasher.build_hasher();
-        key.hash(&mut h);
-        let h = h.finish();
+        let h = self.hasher.hash_one(key);
         Route {
             h,
             home: ((h >> 32) as usize) % REGULAR_BUCKETS,
@@ -242,7 +240,10 @@ impl<K: Word, V: Word, const N: usize> Table<K, V, N> {
             }
             self.split(si);
             guard += 1;
-            assert!(guard < 32, "segment refuses to relieve pressure after 32 splits");
+            assert!(
+                guard < 32,
+                "segment refuses to relieve pressure after 32 splits"
+            );
         }
     }
 
@@ -449,9 +450,7 @@ fn slot_route<K: Word, V: Word, const N: usize>(
 }
 
 fn route_with(hasher: &RandomState, key: &[u8]) -> Route {
-    let mut h = hasher.build_hasher();
-    key.hash(&mut h);
-    let h = h.finish();
+    let h = hasher.hash_one(key);
     Route {
         h,
         home: ((h >> 32) as usize) % REGULAR_BUCKETS,

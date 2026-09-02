@@ -15,7 +15,7 @@ use memarch_spike_table::segment::{
     STASH_BUCKETS,
 };
 use memarch_spike_table::table::{Stats, Table, Val};
-use memarch_spike_table::word::{Word, W16, W8, W8Int, W8Ptr};
+use memarch_spike_table::word::{W8Int, W8Ptr, Word, W16, W8};
 use memarch_spike_table::workload::{generate, summarize, Pair, Shape};
 
 #[global_allocator]
@@ -167,12 +167,19 @@ fn run_baseline(pairs: &[Pair], misses: &[Vec<u8>]) -> Row {
     let iterate_ns = t0.elapsed().as_nanos() as f64 / n as f64;
     assert!(bytes > 0);
 
+    // griddle's own table: capacity is in entries, each entry a `(Bytes, Entry)` pair
+    // plus a control byte. This is the incumbent's structural cost, the number our
+    // segment bytes are the counterpart of. During an incremental resize griddle also
+    // holds the old table, which the live-byte figure sees and this one does not.
+    let (_, _, pair_sz, _) = baseline::sizes();
+    let table_bytes = map.capacity() * (pair_sz + 1);
+
     Row {
         variant: "griddle",
         inline_keys: 0.0,
         inline_values: 0.0,
         live_bytes_per_entry: live as f64 / n as f64,
-        structural_bytes_per_entry: f64::NAN,
+        structural_bytes_per_entry: table_bytes as f64 / n as f64,
         dir_bytes_per_entry: f64::NAN,
         occupancy: f64::NAN,
         bucket_fill: f64::NAN,
@@ -192,28 +199,42 @@ fn run_baseline(pairs: &[Pair], misses: &[Vec<u8>]) -> Row {
     }
 }
 
-/// Worst single-operation stall: every insert is individually timed, so the maximum
-/// is a real split (or a directory doubling), not an amortised average.
+/// Worst single-operation stall. Every insert is individually timed and bucketed by
+/// what it did — plain, split, or split + directory doubling — so the split cost is a
+/// distribution over the ~2 000 real splits rather than an amortised average or a
+/// single outlier the OS scheduler produced.
 fn split_stall<K: Word, V: Word, const N: usize>(variant: &str, pairs: &[Pair]) {
     let mut t: Table<K, V, N> = Table::new();
-    let mut lat = Vec::with_capacity(pairs.len());
-    let mut worst = (0u64, 0usize, 0usize);
+    let mut plain = Vec::with_capacity(pairs.len());
+    let mut splits = Vec::new();
+    let mut doublings = Vec::new();
     for p in pairs {
+        let before_splits = t.stats.splits;
+        let before_doublings = t.stats.dir_doublings;
         let t0 = Instant::now();
         t.insert(&p.key, val_of(p));
         let ns = t0.elapsed().as_nanos() as u64;
-        if ns > worst.0 {
-            worst = (ns, t.segments(), t.directory_entries());
+        if t.stats.dir_doublings > before_doublings {
+            doublings.push(ns);
+        } else if t.stats.splits > before_splits {
+            splits.push(ns);
+        } else {
+            plain.push(ns);
         }
-        lat.push(ns);
     }
-    let p50 = percentile(&mut lat.clone(), 50.0);
-    let p999 = percentile(&mut lat.clone(), 99.9);
-    let p9999 = percentile(&mut lat.clone(), 99.99);
-    let max = percentile(&mut lat, 100.0);
+    // Split-carrying inserts are reported by their own median: on a shared laptop the
+    // maximum of a million timed inserts is a scheduler artefact, not a split.
+    let p50 = percentile(&mut plain.clone(), 50.0);
+    let p999 = percentile(&mut plain.clone(), 99.9);
+    let plain_max = percentile(&mut plain, 100.0);
+    let split_p50 = percentile(&mut splits.clone(), 50.0);
+    let split_p99 = percentile(&mut splits.clone(), 99.0);
+    let split_max = percentile(&mut splits, 100.0);
+    let dbl_p50 = percentile(&mut doublings.clone(), 50.0);
+    let dbl_max = percentile(&mut doublings, 100.0);
     println!(
-        "| {variant} | {p50} | {p999} | {p9999} | {max} | {} | {} | {} | {} |",
-        worst.1, worst.2, t.stats.splits, t.stats.dir_doublings
+        "| {variant} | {p50} | {p999} | {plain_max} | {split_p50} | {split_p99} | {split_max} | {dbl_p50} | {dbl_max} | {} | {} |",
+        t.stats.splits, t.stats.dir_doublings
     );
 }
 
@@ -334,8 +355,9 @@ fn main() {
     }
 
     println!("\n## Split stall — per-insert timing, `redis-feel`, {n} inserts\n");
-    println!("| variant | p50 ns | p99.9 ns | p99.99 ns | max ns | segs at worst | dir at worst | splits | doublings |");
-    println!("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+    println!("Inserts are bucketed by what they did: plain, split, or split + directory doubling.");
+    println!("| variant | plain p50 | plain p99.9 | plain max | split p50 | split p99 | split max | x2 p50 | x2 max | splits | doublings |");
+    println!("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
     let pairs = generate(Shape::RedisFeel, n);
     split_stall::<W8Ptr, W8Ptr, 14>("ptr8", &pairs);
     split_stall::<W8Ptr, W8Int, 14>("int8", &pairs);

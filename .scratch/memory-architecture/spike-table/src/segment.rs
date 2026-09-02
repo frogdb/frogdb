@@ -52,6 +52,11 @@ impl<K: Word, V: Word, const N: usize> Bucket<K, V, N> {
     }
 
     #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.occupied == 0
+    }
+
+    #[inline]
     pub fn is_full(&self) -> bool {
         self.len() as usize == N
     }

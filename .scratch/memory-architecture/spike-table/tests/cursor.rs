@@ -96,10 +96,9 @@ fn reverse_binary_cursor_sees_every_preexisting_key_exactly_once() {
 fn linear_directory_cursor_breaks_under_mid_scan_splits() {
     let preexisting = 8_000;
     let mut table = TableStr7::new();
-    let (seen, _steps, splits) =
-        scan_with_churn(&mut table, preexisting, 400, |t, c, out| {
-            t.scan_linear(c, out)
-        });
+    let (seen, _steps, splits) = scan_with_churn(&mut table, preexisting, 400, |t, c, out| {
+        t.scan_linear(c, out)
+    });
     assert!(splits >= 4, "need splits for the counter-example");
 
     let mut missing = 0;
@@ -213,6 +212,10 @@ fn cursor_guarantee_holds_for_the_hybrid_layout() {
     }
     for i in 0..preexisting {
         let key = format!("pre:{i}").into_bytes();
-        assert_eq!(seen.get(&key), Some(&1), "key pre:{i} not seen exactly once");
+        assert_eq!(
+            seen.get(&key),
+            Some(&1),
+            "key pre:{i} not seen exactly once"
+        );
     }
 }

@@ -18,6 +18,14 @@ Linux validation: [spike-report-linux.md](spike-report-linux.md) — both benche
 aarch64 Linux with hard `sched_setaffinity` pinning and `narenas:1`. Every verdict holds;
 it corrects six numbers and finds that the jemalloc config env var is `_RJEM_MALLOC_CONF`.
 
+R5 slot-layout spike: [spike-report-table.md](spike-report-table.md) — segmented-table
+prototype with inline values: the inline threshold ruling (7 bytes in an 8-byte tagged
+word), the segment/directory layout and its split cost, the reverse-binary SCAN cursor
+with an executable exactly-once proof, R9's reserved eviction space, and the measured
+comparison against the shipped `griddle::HashMap<Bytes, Entry>` (3.3–6.4× less memory,
+but 3–4× slower on lookup until SIMD fingerprint matching lands). Prototype code:
+[spike-table/](spike-table/) (throwaway, not a workspace member). Consumers: issues 11, 12.
+
 Spec draft: [`specs/memory.md`](../../specs/memory.md) — `Status: DRAFT`, scope statement and
 invariant vocabulary only, deliberately zero FM rows (a row arrives with its forcing test). It
 becomes the fifth locked area under R15 once the broker/table crates exist and pass their

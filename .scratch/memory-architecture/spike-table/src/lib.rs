@@ -16,7 +16,7 @@ pub mod word;
 pub mod workload;
 
 use table::Table;
-use word::{W16, W8, W8Int, W8Ptr};
+use word::{W8Int, W8Ptr, W16, W8};
 
 /// The control: nothing inlines, both words are pointers. 16-byte slot, 14 per bucket.
 pub type TablePtr = Table<W8Ptr, W8Ptr, 14>;

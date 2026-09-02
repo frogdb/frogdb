@@ -35,7 +35,7 @@ fn segment_capacity_and_r9_reservation() {
     // R9's eviction state fits inside the one-cache-line segment header, with room
     // left over — the whole point of reserving it now rather than at issue-12 time.
     assert_eq!(R9_RESERVED_BYTES, 22);
-    assert!(R9_RESERVED_BYTES < HEADER_BYTES);
+    const { assert!(R9_RESERVED_BYTES < HEADER_BYTES) };
     let header_reserved_tail = size_of::<[u8; 24]>();
     assert!(
         R9_RESERVED_BYTES + header_reserved_tail <= HEADER_BYTES,
@@ -145,7 +145,10 @@ roundtrip_test!(roundtrip_hybrid, TableHybrid);
 fn overwrite_replaces_the_value_without_growing_the_table() {
     let mut t = TableStr7::new();
     assert!(t.insert(b"k", Val::Bytes(b"first")));
-    assert!(!t.insert(b"k", Val::Bytes(b"a second value well past the inline width")));
+    assert!(!t.insert(
+        b"k",
+        Val::Bytes(b"a second value well past the inline width")
+    ));
     assert_eq!(t.len(), 1);
     assert_eq!(
         t.get_value(b"k"),
