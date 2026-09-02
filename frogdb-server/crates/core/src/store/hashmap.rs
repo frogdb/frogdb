@@ -126,6 +126,23 @@ pub enum BackdateExpiryResult {
     NoExpiry,
 }
 
+/// Outcome of [`HashMapStore::re_encode`] (DEBUG RE-ENCODE).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReEncodeResult {
+    /// Whether the value had an encoding choice to remake at all. `false` for
+    /// types with a single representation (strings, lists, ...), whose bytes
+    /// are reported unchanged.
+    pub re_encoded: bool,
+    /// The value's encoding after the rewrite — the same vocabulary
+    /// `OBJECT ENCODING` uses.
+    pub encoding: &'static str,
+    /// The entry's accounted memory before the rewrite.
+    pub before_bytes: usize,
+    /// The entry's accounted memory after it. Equal to `before_bytes` for a
+    /// value with nothing to compact, or one already compact.
+    pub after_bytes: usize,
+}
+
 /// Default store implementation using griddle::HashMap.
 pub struct HashMapStore {
     data: HashMap<Bytes, Entry>,
@@ -562,6 +579,55 @@ impl HashMapStore {
         entry.metadata.expires_at = Some(deadline);
         self.expiry_index.set(Bytes::copy_from_slice(key), deadline);
         BackdateExpiryResult::Backdated
+    }
+
+    /// Rebuild one key's value through [`Value::re_encode`] (DEBUG RE-ENCODE),
+    /// reclaiming the slack that in-place churn left in its representation.
+    ///
+    /// `None` for a missing or already-expired key. Goes through `get_mut`, so
+    /// a warm key is rehydrated first and the accounting is settled by the same
+    /// deferred-refresh seam every other in-place mutation uses — flushed here
+    /// rather than left pending, because this is a whole command rather than a
+    /// step inside one, and its reply reports the memory it reclaimed.
+    ///
+    /// One key, on operator demand. Nothing schedules it, and nothing scans for
+    /// candidates: a background defragmenter is a door the memory architecture
+    /// keeps shut (PRD R13), and this is the manual lever that makes keeping it
+    /// shut affordable.
+    pub fn re_encode(&mut self, key: &[u8]) -> Option<ReEncodeResult> {
+        // Maintenance, not access: the key's LRU clock and LFU counter must
+        // come out unchanged, or compacting a cold key would shield it from
+        // the very eviction pressure being diagnosed.
+        let touch_was_suppressed = self.suppress_touch;
+        self.suppress_touch = true;
+        let result = self.re_encode_untouched(key);
+        self.suppress_touch = touch_was_suppressed;
+        result
+    }
+
+    fn re_encode_untouched(&mut self, key: &[u8]) -> Option<ReEncodeResult> {
+        let value = self.get_mut(key)?;
+        let before_bytes = value.memory_size();
+        // The same thresholds every write-path mutator passes today: runtime
+        // knobs for these exist (`RuntimeConfig::listpack_config`) but are not
+        // yet plumbed to any write site, so the defaults are the encoding
+        // decision everywhere — including here. When that plumbing lands, this
+        // call site changes with the write sites, not separately from them.
+        let re_encoded = value.re_encode(
+            crate::types::ListpackThresholds::DEFAULT_HASH,
+            crate::types::ListpackThresholds::DEFAULT_SET,
+        );
+        // Sampled after the rewrite: for a re-encoded value this is the fresh
+        // choice, for anything else it is simply the value's one encoding.
+        let encoding_after = value.encoding_name();
+        let after_bytes = value.memory_size();
+        self.flush_keysizes_refreshes();
+        Some(ReEncodeResult {
+            re_encoded,
+            encoding: encoding_after,
+            before_bytes,
+            after_bytes,
+        })
     }
 
     // ========================================================================
@@ -2735,6 +2801,80 @@ mod tests {
             "the read-path lazy purge must fire normally after backdate"
         );
         assert!(!s.contains(b"k"), "the key must now be physically gone");
+    }
+
+    /// Re-encoding a churned value must leave the store's own accounting
+    /// consistent: the tracked `memory_used` counter has to follow the value
+    /// down, not keep charging for the representation that was just dropped.
+    #[test]
+    fn re_encode_compacts_a_churned_hash_and_reconciles_memory_accounting() {
+        use frogdb_types::types::{HashValue, ListpackThresholds};
+
+        const T: ListpackThresholds = ListpackThresholds::DEFAULT_HASH;
+        let mut hash = HashValue::new();
+        for i in 0..(T.max_entries + 50) {
+            hash.set(Bytes::from(format!("f{i}")), Bytes::from("v"), T);
+        }
+        for i in 0..(T.max_entries + 47) {
+            hash.remove(format!("f{i}").as_bytes());
+        }
+        assert!(
+            !hash.is_listpack(),
+            "the churned hash must still be promoted"
+        );
+
+        let mut store = HashMapStore::new();
+        store.set(Bytes::from_static(b"h"), Value::Hash(hash));
+        let before_used = store.memory_used();
+
+        let result = store.re_encode(b"h").expect("the key is present");
+        assert_eq!(result.encoding, "listpack");
+        assert!(
+            result.after_bytes < result.before_bytes,
+            "re-encoding must shrink the value: {} -> {}",
+            result.before_bytes,
+            result.after_bytes
+        );
+        assert!(
+            store.memory_used() < before_used,
+            "the tracked counter must follow the compacted value down"
+        );
+        assert_eq!(
+            store.recompute_memory_used(),
+            store.memory_used(),
+            "re-encode must leave the tracked counter reconciled with ground truth"
+        );
+    }
+
+    #[test]
+    fn re_encode_reports_a_miss_for_an_absent_key() {
+        let mut store = HashMapStore::new();
+        assert_eq!(store.re_encode(b"absent"), None);
+    }
+
+    /// Re-encoding is maintenance, not access: it must not advance the key's
+    /// LFU counter (nor its LRU clock), or compacting a cold key would shield
+    /// it from the eviction pressure the operator is diagnosing.
+    #[test]
+    fn re_encode_does_not_touch_the_eviction_clocks() {
+        let mut store = HashMapStore::new();
+        store.set(Bytes::from_static(b"k"), Value::string("v"));
+        // A fresh key sits at the LFU initial value, where `lfu_log_incr`
+        // increments with probability 1 — so any touch would show here
+        // deterministically.
+        let lfu_before = store.get_lfu_value(b"k", 0).expect("key present");
+
+        let result = store.re_encode(b"k").expect("key present");
+        assert!(!result.re_encoded, "a string has one representation");
+        assert_eq!(
+            store.get_lfu_value(b"k", 0),
+            Some(lfu_before),
+            "re-encode must leave the LFU counter where it was"
+        );
+        assert!(
+            !store.suppress_touch_enabled(),
+            "the scoped no-touch must not leak past re_encode"
+        );
     }
 
     #[test]

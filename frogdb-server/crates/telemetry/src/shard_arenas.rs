@@ -30,6 +30,8 @@
 //!   reporting nothing.
 
 use crate::jemalloc;
+use frogdb_core::MetricsRecorder;
+use frogdb_types::metrics::definitions::ArenaSamplerOnShardThreadTotal;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -47,6 +49,17 @@ pub struct ShardArenaSample {
     pub large_allocated_upper_bound_bytes: u64,
     /// `resident`: the shard's physically resident bytes.
     pub resident_bytes: u64,
+    /// `pactive` in bytes: pages the arena is serving allocations from.
+    pub active_bytes: u64,
+    /// `pdirty` in bytes: pages freed but not yet returned to the OS. Rising
+    /// here while `allocated` holds steady is reclamation lag, not growth.
+    pub dirty_bytes: u64,
+    /// `pmuzzy` in bytes: pages madvised away but still mapped. Zero under the
+    /// server's `muzzy_decay_ms:0` default.
+    pub muzzy_bytes: u64,
+    /// `retained`: address space kept mapped rather than unmapped. Costs address
+    /// space, not physical memory.
+    pub retained_bytes: u64,
     /// How many samples have landed in this slot. `0` means the sampler has not
     /// run yet and every figure above is a placeholder zero, which a caller must
     /// distinguish from a genuinely empty shard.
@@ -86,6 +99,10 @@ struct ShardArenaSlot {
     small: AtomicU64,
     large: AtomicU64,
     resident: AtomicU64,
+    active: AtomicU64,
+    dirty: AtomicU64,
+    muzzy: AtomicU64,
+    retained: AtomicU64,
     samples: AtomicU64,
 }
 
@@ -114,6 +131,10 @@ impl ShardArenaRegistry {
                     small: AtomicU64::new(0),
                     large: AtomicU64::new(0),
                     resident: AtomicU64::new(0),
+                    active: AtomicU64::new(0),
+                    dirty: AtomicU64::new(0),
+                    muzzy: AtomicU64::new(0),
+                    retained: AtomicU64::new(0),
                     samples: AtomicU64::new(0),
                 })
                 .collect(),
@@ -173,11 +194,25 @@ impl ShardArenaRegistry {
     /// Called by [`ArenaSampler`] on its tick, and by tests. Never from a
     /// command path — `arena_sampling_is_not_on_a_command_path` pins that.
     pub fn refresh(&self) -> usize {
-        if self.shards.is_empty() || !jemalloc::advance_epoch() {
+        self.refresh_stride(0..self.shards.len())
+    }
+
+    /// Refresh the slots in `stride` — see [`arena_stride`] for how the sampler
+    /// picks one. Advances the epoch once, then reads only that slice.
+    ///
+    /// The epoch advance is unavoidable (it merges every arena whatever is read
+    /// afterwards, which is what [`ArenaSampleRate::for_arena_count`] budgets
+    /// for); what the stride bounds is the per-tick read work and the burst of
+    /// cache traffic that comes with it.
+    pub fn refresh_stride(&self, stride: std::ops::Range<usize>) -> usize {
+        let Some(slots) = self.shards.get(stride) else {
+            return 0;
+        };
+        if slots.is_empty() || !jemalloc::advance_epoch() {
             return 0;
         }
         let mut refreshed = 0;
-        for slot in &self.shards {
+        for slot in slots {
             let Some(stats) = jemalloc::read_arena_stats(slot.arena) else {
                 continue;
             };
@@ -186,6 +221,10 @@ impl ShardArenaRegistry {
             slot.large
                 .store(stats.large_allocated_upper_bound, Ordering::Relaxed);
             slot.resident.store(stats.resident, Ordering::Relaxed);
+            slot.active.store(stats.active, Ordering::Relaxed);
+            slot.dirty.store(stats.dirty, Ordering::Relaxed);
+            slot.muzzy.store(stats.muzzy, Ordering::Relaxed);
+            slot.retained.store(stats.retained, Ordering::Relaxed);
             slot.samples.fetch_add(1, Ordering::Relaxed);
             refreshed += 1;
         }
@@ -196,6 +235,12 @@ impl ShardArenaRegistry {
         self.shards.iter().find(|s| s.shard_id == shard_id)
     }
 
+    /// Whether `arena` belongs to a shard in this registry — how the sampler
+    /// recognises that it has woken up on a shard thread.
+    fn holds_arena(&self, arena: u32) -> bool {
+        self.shards.iter().any(|s| s.arena == arena)
+    }
+
     fn read_slot(slot: &ShardArenaSlot) -> ShardArenaSample {
         ShardArenaSample {
             shard_id: slot.shard_id,
@@ -203,9 +248,48 @@ impl ShardArenaRegistry {
             small_allocated_upper_bound_bytes: slot.small.load(Ordering::Relaxed),
             large_allocated_upper_bound_bytes: slot.large.load(Ordering::Relaxed),
             resident_bytes: slot.resident.load(Ordering::Relaxed),
+            active_bytes: slot.active.load(Ordering::Relaxed),
+            dirty_bytes: slot.dirty.load(Ordering::Relaxed),
+            muzzy_bytes: slot.muzzy.load(Ordering::Relaxed),
+            retained_bytes: slot.retained.load(Ordering::Relaxed),
             samples: slot.samples.load(Ordering::Relaxed),
         }
     }
+}
+
+/// The most arenas the sampler reads in a single tick.
+///
+/// Past this the sweep is spread over consecutive ticks
+/// ([`arena_stride`]) instead of doing every arena at once. The point is not
+/// the total read cost — a by-name arena read is ~146 ns, noise against the
+/// epoch advance — but the shape of the tick: a 64-shard server reading every
+/// arena on every tick does one long burst of allocator work while shard
+/// threads are running, and a burst is what shows up in a tail-latency
+/// histogram. 32 keeps the burst at the size a mid-sized server already runs
+/// with today.
+pub const MAX_ARENAS_PER_TICK: usize = 32;
+
+/// How many ticks a full sweep of `arenas` arenas takes.
+pub fn sweep_ticks(arenas: usize) -> usize {
+    arenas.div_ceil(MAX_ARENAS_PER_TICK).max(1)
+}
+
+/// The slice of arenas to read on `tick`.
+///
+/// Consecutive ticks walk contiguous, non-overlapping chunks and wrap after
+/// [`sweep_ticks`] of them, so every arena is read exactly once per sweep and no
+/// arena is ever skipped twice in a row. At or below [`MAX_ARENAS_PER_TICK`] the
+/// stride is the whole range and every tick is a full sweep, which is what every
+/// server up to 32 shards does.
+pub fn arena_stride(arenas: usize, tick: u64) -> std::ops::Range<usize> {
+    if arenas == 0 {
+        return 0..0;
+    }
+    let sweep = sweep_ticks(arenas);
+    let per_tick = arenas.div_ceil(sweep);
+    let start = (tick % sweep as u64) as usize * per_tick;
+    let start = start.min(arenas);
+    start..(start + per_tick).min(arenas)
 }
 
 /// How often the arena sampler advances the epoch.
@@ -233,11 +317,64 @@ impl ArenaSampleRate {
     /// where this gets retuned with real numbers.
     pub const DEFAULT_HZ: u32 = 20;
 
+    /// Nanoseconds one epoch advance costs **per live arena** — the merge is
+    /// over every arena, so this is the term that grows with shard count
+    /// (spike-report §(a) E5 and its Linux re-run: 3.4 µs on macOS, 13.4 µs on
+    /// aarch64 Linux).
+    ///
+    /// The budget uses the slowest platform measured. Budgeting against the
+    /// fastest would leave the slowest silently over budget, and the sampler's
+    /// rate has to be something an operator can predict from the shard count
+    /// rather than something that shifts with the machine underneath.
+    pub const EPOCH_COST_PER_ARENA_NANOS: u64 = 13_400;
+
+    /// The share of one core the sampler may spend on epoch advances: 1 %.
+    ///
+    /// Expressed in nanoseconds of sampling per wall-clock second so the
+    /// derivation stays in integers.
+    pub const CPU_BUDGET_NANOS_PER_SEC: u64 = 10_000_000;
+
     /// Clamp `hz` into the band and build a rate.
+    ///
+    /// Prefer [`for_arena_count`](Self::for_arena_count) wherever the arena
+    /// count is known: this band alone is not shard-count-aware, and at the
+    /// ceiling the all-arena epoch merge stops being free well before the
+    /// largest shard counts FrogDB supports.
     pub fn new(hz: u32) -> Self {
         Self {
             hz: hz.clamp(Self::MIN_HZ, Self::MAX_HZ),
         }
+    }
+
+    /// Clamp `hz` into the band *and* into what the CPU budget affords for
+    /// `arenas` arenas.
+    ///
+    /// Sampling cost is `hz × arenas × EPOCH_COST_PER_ARENA`, so a fixed rate
+    /// band alone bounds nothing: at the 100 Hz ceiling the cost passes 1 % of a
+    /// core at eight arenas and keeps climbing linearly. This derives the
+    /// affordable rate from the arena count instead, and the configured rate is
+    /// honoured only where it fits underneath.
+    ///
+    /// [`MIN_HZ`](Self::MIN_HZ) still wins over the budget. Below it the figure
+    /// a memory refusal is written against is more than 100 ms stale, which is a
+    /// correctness property of the broker; spending a little over budget is the
+    /// cheaper of the two failures, and the arena count where the two meet
+    /// (~74 arenas) is far past where the striding above has already flattened
+    /// the tick.
+    pub fn for_arena_count(hz: u32, arenas: usize) -> Self {
+        Self {
+            hz: Self::new(hz).hz.min(Self::budget_hz(arenas)),
+        }
+    }
+
+    /// The highest rate [`CPU_BUDGET_NANOS_PER_SEC`](Self::CPU_BUDGET_NANOS_PER_SEC)
+    /// affords for `arenas` arenas, floored at [`MIN_HZ`](Self::MIN_HZ) and
+    /// capped at [`MAX_HZ`](Self::MAX_HZ).
+    pub fn budget_hz(arenas: usize) -> u32 {
+        let arenas = arenas.max(1) as u64;
+        let affordable =
+            Self::CPU_BUDGET_NANOS_PER_SEC / (arenas * Self::EPOCH_COST_PER_ARENA_NANOS);
+        (affordable as u32).clamp(Self::MIN_HZ, Self::MAX_HZ)
     }
 
     /// The clamped frequency, in Hz.
@@ -264,9 +401,14 @@ impl ArenaSampler {
     /// Spawn the sampler, or return `None` when there is nothing to sample (no
     /// shard reported an arena — a simulation build, or a target without
     /// jemalloc).
+    ///
+    /// `rate` should come from
+    /// [`ArenaSampleRate::for_arena_count`] so the tick rate is one the arena
+    /// count can afford.
     pub fn spawn(
         registry: Arc<ShardArenaRegistry>,
         rate: ArenaSampleRate,
+        recorder: Arc<dyn MetricsRecorder>,
     ) -> Option<tokio::task::JoinHandle<()>> {
         if registry.is_empty() {
             return None;
@@ -277,12 +419,53 @@ impl ArenaSampler {
             // delayed tick must produce one fresh reading, not a burst of
             // back-to-back epoch advances.
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            let mut tick: u64 = 0;
             loop {
                 ticker.tick().await;
-                registry.refresh();
+                assert_off_shard_thread(&registry, &*recorder);
+                registry.refresh_stride(arena_stride(registry.len(), tick));
+                tick = tick.wrapping_add(1);
             }
         }))
     }
+}
+
+/// Fail fast (debug) or count (release) a sampler tick that woke up on a shard
+/// thread.
+///
+/// The sampler belongs on a utility thread, off the cores the shards are pinned
+/// to (issue 08 pins the shards; this is the other half of that bargain). A tick
+/// that runs on a shard core steals time from request handling and never shows
+/// up as anything but tail latency, so it must not be able to happen quietly.
+///
+/// Thread affinity itself is the wrong thing to assert: a default deployment
+/// leaves the sampler's affinity mask unrestricted, so it *includes* every shard
+/// core while the sampler still never runs on one. What matters is where the
+/// tick is actually executing, and jemalloc already answers that — a shard
+/// thread is exactly a thread bound to one of the registry's arenas
+/// (ADR-0006 §3), so an unbound thread, or one bound to the automatic arena, is
+/// by construction not a shard.
+fn assert_off_shard_thread(registry: &ShardArenaRegistry, recorder: &dyn MetricsRecorder) {
+    let Some(arena) = shard_arena_of_current_thread(registry) else {
+        return;
+    };
+    // Count first, assert second: the counter is the production (release)
+    // surface for this bug, and ordering it before the debug assertion lets a
+    // debug test build exercise the same emission the release path performs.
+    ArenaSamplerOnShardThreadTotal::inc(recorder);
+    debug_assert!(
+        false,
+        "the arena sampler is running on the shard thread bound to arena {arena}; it must run \
+         on a utility thread, off the pinned shard cores"
+    );
+}
+
+/// The detection decision alone: the current thread's arena, when that arena
+/// belongs to a shard — i.e. when this thread *is* a shard thread. An unbound
+/// thread, or one bound to an arena outside the registry, is not a shard.
+fn shard_arena_of_current_thread(registry: &ShardArenaRegistry) -> Option<u32> {
+    let arena = jemalloc::current_thread_arena()?;
+    registry.holds_arena(arena).then_some(arena)
 }
 
 #[cfg(test)]
@@ -361,11 +544,178 @@ mod tests {
         );
     }
 
+    /// The clamp band alone bounds nothing as shards multiply: cost is
+    /// `hz × arenas × epoch-cost`, so the rate has to come down as the arena
+    /// count goes up. Mocked arena counts — no allocator involved, this is
+    /// arithmetic.
+    #[test]
+    fn the_sample_rate_is_budgeted_against_the_arena_count() {
+        // Small servers are unaffected: the configured rate fits underneath.
+        assert_eq!(ArenaSampleRate::for_arena_count(20, 9).hz(), 20);
+        assert_eq!(ArenaSampleRate::for_arena_count(20, 32).hz(), 20);
+
+        // At 64 arenas the budget is what decides, not the configuration.
+        let at_64 = ArenaSampleRate::for_arena_count(100, 64);
+        assert!(
+            at_64.hz() < ArenaSampleRate::for_arena_count(100, 32).hz(),
+            "doubling the arenas must lower the affordable rate, got {} Hz at 64 and {} Hz at 32",
+            at_64.hz(),
+            ArenaSampleRate::for_arena_count(100, 32).hz()
+        );
+
+        // The spend the budget authorises never exceeds the budget, until the
+        // MIN_HZ staleness floor deliberately takes over.
+        for arenas in [1usize, 8, 9, 32, 64, 128, 1024] {
+            let rate = ArenaSampleRate::for_arena_count(ArenaSampleRate::MAX_HZ, arenas);
+            let spend =
+                u64::from(rate.hz()) * arenas as u64 * ArenaSampleRate::EPOCH_COST_PER_ARENA_NANOS;
+            assert!(
+                spend <= ArenaSampleRate::CPU_BUDGET_NANOS_PER_SEC
+                    || rate.hz() == ArenaSampleRate::MIN_HZ,
+                "{arenas} arenas at {} Hz spends {spend} ns/s, over budget without being at the \
+                 staleness floor",
+                rate.hz()
+            );
+            assert!(rate.hz() >= ArenaSampleRate::MIN_HZ);
+        }
+    }
+
+    /// Past 32 arenas a tick reads a slice, and consecutive ticks cover
+    /// everything exactly once — the acceptance criterion's mocked 64.
+    #[test]
+    fn past_thirty_two_arenas_a_tick_reads_a_stride_not_the_whole_registry() {
+        // Up to the cap, every tick is still a full sweep.
+        for arenas in [1usize, 8, 32] {
+            assert_eq!(sweep_ticks(arenas), 1);
+            assert_eq!(arena_stride(arenas, 0), 0..arenas);
+            assert_eq!(arena_stride(arenas, 7), 0..arenas);
+        }
+
+        assert_eq!(sweep_ticks(64), 2);
+        assert_eq!(arena_stride(64, 0), 0..32);
+        assert_eq!(arena_stride(64, 1), 32..64);
+        assert_eq!(arena_stride(64, 2), 0..32, "the sweep wraps");
+
+        // For any arena count, one sweep of ticks reads every arena exactly
+        // once and no tick reads more than the cap.
+        for arenas in [0usize, 1, 31, 32, 33, 64, 65, 100, 1000] {
+            let mut seen = vec![0u32; arenas];
+            for tick in 0..sweep_ticks(arenas) as u64 {
+                let stride = arena_stride(arenas, tick);
+                assert!(
+                    stride.len() <= MAX_ARENAS_PER_TICK,
+                    "{arenas} arenas read {} in one tick",
+                    stride.len()
+                );
+                for i in stride {
+                    seen[i] += 1;
+                }
+            }
+            assert!(
+                seen.iter().all(|&n| n == 1),
+                "{arenas} arenas: a sweep must read each arena exactly once, got {seen:?}"
+            );
+        }
+    }
+
+    /// A registry bigger than the cap refreshes in strides, and a full sweep of
+    /// ticks leaves every slot sampled.
+    #[test]
+    #[cfg(not(target_env = "msvc"))]
+    fn a_strided_sweep_eventually_samples_every_shard() {
+        let arena = jemalloc::create_arena().expect("arenas.create");
+        let bindings: Vec<(usize, u32)> = (0..40).map(|shard| (shard, arena)).collect();
+        let registry = ShardArenaRegistry::new(bindings);
+
+        assert_eq!(sweep_ticks(registry.len()), 2);
+        let first = registry.refresh_stride(arena_stride(registry.len(), 0));
+        assert_eq!(first, 20, "the first tick reads half the registry");
+        assert_eq!(
+            registry.samples().filter(|s| s.is_sampled()).count(),
+            20,
+            "the shards this tick skipped must still report as unsampled rather than as zero"
+        );
+
+        registry.refresh_stride(arena_stride(registry.len(), 1));
+        assert!(
+            registry.samples().all(|s| s.is_sampled()),
+            "a full sweep must leave no shard unsampled"
+        );
+    }
+
+    /// The sampler on a utility thread is the normal case, and it must not
+    /// trip the guard — the release-build counter stays at zero and the debug
+    /// assertion does not fire.
+    #[test]
+    #[cfg(not(target_env = "msvc"))]
+    fn the_guard_passes_on_a_thread_that_is_not_a_shard() {
+        use crate::prometheus_recorder::PrometheusRecorder;
+
+        let shard_arena = jemalloc::create_arena().expect("arenas.create");
+        let registry = ShardArenaRegistry::new([(0, shard_arena)]);
+        let recorder = PrometheusRecorder::new();
+
+        // This thread is not bound to the shard's arena, which is exactly what
+        // a utility thread looks like.
+        assert_off_shard_thread(&registry, &recorder);
+        assert!(
+            !recorder
+                .encode()
+                .contains("frogdb_arena_sampler_on_shard_thread_total"),
+            "a utility thread must not be reported as running on a shard core"
+        );
+    }
+
+    /// And the guard actually catches the condition it exists for: a thread
+    /// bound to a shard's arena *is* that shard's thread.
+    #[test]
+    #[cfg(not(target_env = "msvc"))]
+    fn the_guard_catches_a_tick_running_on_a_shard_thread() {
+        use crate::prometheus_recorder::PrometheusRecorder;
+
+        let shard_arena = jemalloc::create_arena().expect("arenas.create");
+        let registry = ShardArenaRegistry::new([(0, shard_arena)]);
+        let recorder = PrometheusRecorder::new();
+
+        std::thread::spawn(move || {
+            jemalloc::bind_current_thread_to_arena(shard_arena).expect("thread.arena");
+            assert_eq!(
+                shard_arena_of_current_thread(&registry),
+                Some(shard_arena),
+                "a thread bound to a shard's arena must be recognised as that shard's thread"
+            );
+            // The counter is incremented before the debug assertion fires, so
+            // the emission — the one surface a release build has — is
+            // exercised here in both build modes; only the panic differs.
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                assert_off_shard_thread(&registry, &recorder);
+            }));
+            assert_eq!(
+                outcome.is_err(),
+                cfg!(debug_assertions),
+                "debug builds must fail fast; release builds must only count"
+            );
+            assert!(
+                recorder
+                    .encode()
+                    .contains("frogdb_arena_sampler_on_shard_thread_total 1"),
+                "the counter must record the tick regardless of build mode"
+            );
+        })
+        .join()
+        .expect("shard-shaped thread");
+    }
+
     #[tokio::test]
     async fn the_sampler_declines_to_run_when_there_is_nothing_to_sample() {
         let registry = Arc::new(ShardArenaRegistry::empty());
         assert!(
-            ArenaSampler::spawn(registry, ArenaSampleRate::default()).is_none(),
+            ArenaSampler::spawn(
+                registry,
+                ArenaSampleRate::default(),
+                Arc::new(frogdb_core::NoopMetricsRecorder::new())
+            )
+            .is_none(),
             "a simulation build has no arenas; spawning a ticking task to read \
              none of them is pure overhead"
         );
@@ -394,8 +744,12 @@ mod tests {
 
         let arena = arena_rx.recv().expect("shard reported its arena");
         let registry = Arc::new(ShardArenaRegistry::new([(0, arena)]));
-        let handle = ArenaSampler::spawn(registry.clone(), ArenaSampleRate::new(100))
-            .expect("a registry with an arena spawns a sampler");
+        let handle = ArenaSampler::spawn(
+            registry.clone(),
+            ArenaSampleRate::for_arena_count(100, 1),
+            Arc::new(frogdb_core::NoopMetricsRecorder::new()),
+        )
+        .expect("a registry with an arena spawns a sampler");
 
         // Two intervals is enough for at least one tick to have landed.
         tokio::time::sleep(Duration::from_millis(60)).await;

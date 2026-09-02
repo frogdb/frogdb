@@ -51,6 +51,8 @@ mod integration_maxclients;
 #[cfg(not(feature = "turmoil"))]
 mod integration_metrics;
 #[cfg(not(feature = "turmoil"))]
+mod integration_output_buffer_limits;
+#[cfg(not(feature = "turmoil"))]
 mod integration_persistence;
 #[cfg(not(feature = "turmoil"))]
 mod integration_pubsub;

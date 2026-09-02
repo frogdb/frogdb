@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 85c1b9b4596d8736ed21339918d8a752b4f8181edf9777a2ded25ebfb0735b65 # shrinks to value = Object {"a": Array [Number(-2.6800803741216982e+17)]}
+cc 7b1c7c725958574b6da275e10dea4cf06c9d6deea094cb308aaa9e2f194d5966 # shrinks to base = [("a", Object {"a": Array [Number(9.338468517884553e+17)]})], ops = [Set("b", Null)]
+cc c5bff07e2617d7f3de1923c12f70600c16f2511ffd7612e3161858ce0d535d5a # shrinks to base = [("d", Null), ("a", Null)], ops = [Set("b", Null), Delete("d")]

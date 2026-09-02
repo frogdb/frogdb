@@ -124,6 +124,16 @@ mod imp {
     /// on it had been freed, dropping to 0 only on an explicit
     /// `thread.tcache.flush` (spike-report §(a) E4 rows 1 and 3). The field
     /// names say so; a caller that wants live bytes cannot get them from here.
+    ///
+    /// The page-derived fields (`active`, `dirty`, `muzzy`) are the per-arena
+    /// depth PRD R13 asks for in place of an active defragmenter: an operator
+    /// seeing a shard's resident bytes climb needs to know whether the growth is
+    /// live data (`allocated` rising) or reclamation lag (`dirty`/`muzzy` rising
+    /// while `allocated` holds), because only the first is a reason to add
+    /// capacity. jemalloc reports those three as *page counts*
+    /// (`pactive`/`pdirty`/`pmuzzy`), so they are multiplied by
+    /// [`page_size`] here — a caller never sees a page count it might mistake
+    /// for bytes.
     #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
     pub struct ArenaStats {
         /// The arena these figures describe.
@@ -140,6 +150,46 @@ mod imp {
         /// page granularity), and the numerator of the per-shard fragmentation
         /// ratio PRD R13 wants.
         pub resident: u64,
+        /// `stats.arenas.<i>.pactive` × [`page_size`]: bytes in pages the arena
+        /// is actively serving allocations from. The gap to
+        /// [`allocated_upper_bound`](ArenaStats::allocated_upper_bound) is
+        /// internal (within-page) fragmentation.
+        pub active: u64,
+        /// `stats.arenas.<i>.pdirty` × [`page_size`]: bytes in pages the arena
+        /// has freed but not yet returned to the OS. These decay away on
+        /// `dirty_decay_ms` — see [`ArenaDecay`] — so a large figure here means
+        /// reclamation lag, not growth.
+        pub dirty: u64,
+        /// `stats.arenas.<i>.pmuzzy` × [`page_size`]: bytes in pages already
+        /// madvised away but still mapped, awaiting the `muzzy_decay_ms` step
+        /// that unmaps them. Zero under FrogDB's `muzzy_decay_ms:0` default,
+        /// which skips the muzzy stage entirely.
+        pub muzzy: u64,
+        /// `stats.arenas.<i>.retained`: bytes of address space the arena keeps
+        /// mapped rather than returning via `munmap(2)`. Costs address space,
+        /// not physical memory, so it is deliberately outside `resident`.
+        pub retained: u64,
+    }
+
+    /// One arena's page-reclamation timings (`arena.<i>.{dirty,muzzy}_decay_ms`).
+    ///
+    /// jemalloc frees pages in two steps: a freed page first becomes *dirty*
+    /// (still mapped and still resident), then after `dirty_decay_ms` is
+    /// madvised into the *muzzy* state, and after `muzzy_decay_ms` is unmapped.
+    /// Both are `ssize_t` milliseconds where `0` means "purge immediately" and
+    /// `-1` means "never decay".
+    ///
+    /// PRD R13's ruling is that FrogDB gets no active defragmenter, so these two
+    /// numbers *are* FrogDB's reclamation policy — which is why they are set
+    /// explicitly (`frogdb_server::malloc_conf`) rather than inherited from
+    /// jemalloc's defaults, and why they are readable and writable per arena at
+    /// runtime instead of only at startup.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct ArenaDecay {
+        /// Milliseconds a freed page stays dirty before being madvised away.
+        pub dirty_ms: i64,
+        /// Milliseconds a muzzy page stays mapped before being unmapped.
+        pub muzzy_ms: i64,
     }
 
     impl ArenaStats {
@@ -222,11 +272,32 @@ mod imp {
     /// once and then reads N times, rather than paying the all-arena merge per
     /// arena.
     pub fn read_arena_stats(arena: u32) -> Option<ArenaStats> {
+        let page = page_size()?;
         Some(ArenaStats {
             arena,
             small_allocated_upper_bound: arena_stat(arena, "small.allocated")?,
             large_allocated_upper_bound: arena_stat(arena, "large.allocated")?,
             resident: arena_stat(arena, "resident")?,
+            active: arena_stat(arena, "pactive")?.saturating_mul(page),
+            dirty: arena_stat(arena, "pdirty")?.saturating_mul(page),
+            muzzy: arena_stat(arena, "pmuzzy")?.saturating_mul(page),
+            retained: arena_stat(arena, "retained")?,
+        })
+    }
+
+    /// `arenas.page`: the page size jemalloc was built for, in bytes.
+    ///
+    /// The three `p*` arena stats are page counts, so this is what turns them
+    /// into the bytes callers actually want. It is a build-time constant of the
+    /// allocator (4 KiB on x86-64 Linux, 16 KiB on aarch64 macOS), so it is read
+    /// once and cached rather than re-read on every sampler tick.
+    pub fn page_size() -> Option<u64> {
+        static PAGE: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+        // SAFETY: `arenas.page` is a read-only `size_t` mallctl.
+        *PAGE.get_or_init(|| {
+            unsafe { raw::read::<usize>(b"arenas.page\0") }
+                .ok()
+                .map(|v| v as u64)
         })
     }
 
@@ -235,11 +306,80 @@ mod imp {
     fn arena_stat(arena: u32, leaf: &str) -> Option<u64> {
         let name = format!("stats.arenas.{arena}.{leaf}\0");
         // SAFETY: every leaf passed by this module (`small.allocated`,
-        // `large.allocated`, `resident`) is a `size_t`-typed read-only mallctl,
-        // and the name is null-terminated by construction above.
+        // `large.allocated`, `resident`, `pactive`, `pdirty`, `pmuzzy`,
+        // `retained`) is a `size_t`-typed read-only mallctl, and the name is
+        // null-terminated by construction above.
         unsafe { raw::read::<usize>(name.as_bytes()) }
             .ok()
             .map(|v| v as u64)
+    }
+
+    /// Read one arena's `arena.<i>.{dirty,muzzy}_decay_ms`.
+    ///
+    /// Unlike the `stats.*` reads these are current the instant they are made —
+    /// they are settings, not statistics, so they need no [`advance_epoch`].
+    pub fn read_arena_decay(arena: u32) -> Option<ArenaDecay> {
+        Some(ArenaDecay {
+            dirty_ms: arena_decay_ms(arena, "dirty")?,
+            muzzy_ms: arena_decay_ms(arena, "muzzy")?,
+        })
+    }
+
+    /// One `arena.<i>.<which>_decay_ms` read.
+    fn arena_decay_ms(arena: u32, which: &str) -> Option<i64> {
+        let name = format!("arena.{arena}.{which}_decay_ms\0");
+        // SAFETY: both decay mallctls are `ssize_t`-typed, and the name is
+        // null-terminated by construction above.
+        unsafe { raw::read::<isize>(name.as_bytes()) }
+            .ok()
+            .map(|v| v as i64)
+    }
+
+    /// Set one arena's decay timings at runtime.
+    ///
+    /// Writing a decay setting also purges whatever the new, shorter deadline
+    /// has already made overdue, so lowering `dirty_ms` returns pages
+    /// immediately rather than at the next natural decay tick.
+    ///
+    /// One real arena at a time: jemalloc's [`ALL_ARENAS`] sentinel is *not*
+    /// accepted by the `decay_ms` mallctls (its handler looks the index up as a
+    /// real arena and answers `EFAULT`), unlike `purge`. A caller retuning a
+    /// whole node loops over the arenas it owns — see `DEBUG ARENA-DECAY`.
+    pub fn set_arena_decay(arena: u32, decay: ArenaDecay) -> std::io::Result<()> {
+        write_arena_decay_ms(arena, "dirty", decay.dirty_ms)?;
+        write_arena_decay_ms(arena, "muzzy", decay.muzzy_ms)
+    }
+
+    /// One `arena.<i>.<which>_decay_ms` write.
+    fn write_arena_decay_ms(arena: u32, which: &str, ms: i64) -> std::io::Result<()> {
+        if ms < -1 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("{which}_decay_ms must be -1 (never) or a non-negative millisecond count"),
+            ));
+        }
+        let name = format!("arena.{arena}.{which}_decay_ms\0");
+        // SAFETY: both decay mallctls are writable `ssize_t`s, the name is
+        // null-terminated by construction above, and the value is range-checked
+        // against what jemalloc accepts.
+        unsafe { raw::write::<isize>(name.as_bytes(), ms as isize) }
+            .map_err(|e| std::io::Error::other(format!("arena.{arena}.{which}_decay_ms: {e}")))
+    }
+
+    /// Read the process-wide `opt.{dirty,muzzy}_decay_ms` — the decay settings
+    /// `malloc_conf` asked for, which every arena inherits when it is created.
+    ///
+    /// Reading these back is how a build proves its `malloc_conf` decay
+    /// settings were picked up, the same way [`configured_narenas`] proves
+    /// `narenas:`.
+    pub fn configured_decay() -> Option<ArenaDecay> {
+        // SAFETY: both `opt.*_decay_ms` are read-only `ssize_t` mallctls.
+        let dirty = unsafe { raw::read::<isize>(b"opt.dirty_decay_ms\0") }.ok()?;
+        let muzzy = unsafe { raw::read::<isize>(b"opt.muzzy_decay_ms\0") }.ok()?;
+        Some(ArenaDecay {
+            dirty_ms: dirty as i64,
+            muzzy_ms: muzzy as i64,
+        })
     }
 
     /// `arenas.narenas`: how many arenas the process has actually created.
@@ -283,16 +423,18 @@ mod imp {
         unsafe { raw::read::<u64>(b"thread.deallocated\0") }.ok()
     }
 
-    /// `jemalloc`'s `MALLCTL_ARENAS_ALL` sentinel arena index: purging (or
-    /// reading stats for) this pseudo-arena operates over every real arena
-    /// in one call. It's a C preprocessor `#define` (`4096`), not a symbol
-    /// bindgen exposes, so it's pinned here as a plain constant.
-    const MALLCTL_ARENAS_ALL: u32 = 4096;
+    /// `jemalloc`'s `MALLCTL_ARENAS_ALL` sentinel arena index: purging this
+    /// pseudo-arena operates over every real arena in one call. It's a C
+    /// preprocessor `#define` (`4096`), not a symbol bindgen exposes, so it's
+    /// pinned here as a plain constant.
+    ///
+    /// Not every per-arena mallctl accepts it — [`set_arena_decay`] does not.
+    pub const ALL_ARENAS: u32 = 4096;
 
     /// `MEMORY PURGE`: force jemalloc to return unused dirty pages across
-    /// every arena to the OS (`arena.<MALLCTL_ARENAS_ALL>.purge`).
+    /// every arena to the OS (`arena.<ALL_ARENAS>.purge`).
     pub fn purge_all() -> std::io::Result<()> {
-        void_mallctl(&format!("arena.{MALLCTL_ARENAS_ALL}.purge"))
+        void_mallctl(&format!("arena.{ALL_ARENAS}.purge"))
     }
 
     /// Issue a `void`-typed mallctl — one that takes and returns no value.
@@ -349,7 +491,21 @@ mod imp {
         pub small_allocated_upper_bound: u64,
         pub large_allocated_upper_bound: u64,
         pub resident: u64,
+        pub active: u64,
+        pub dirty: u64,
+        pub muzzy: u64,
+        pub retained: u64,
     }
+
+    /// See the jemalloc arm. Without jemalloc there is no decay to configure.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct ArenaDecay {
+        pub dirty_ms: i64,
+        pub muzzy_ms: i64,
+    }
+
+    /// See the jemalloc arm.
+    pub const ALL_ARENAS: u32 = 4096;
 
     impl ArenaStats {
         pub fn allocated_upper_bound(&self) -> u64 {
@@ -405,6 +561,25 @@ mod imp {
         None
     }
 
+    pub fn page_size() -> Option<u64> {
+        None
+    }
+
+    pub fn read_arena_decay(_arena: u32) -> Option<ArenaDecay> {
+        None
+    }
+
+    pub fn set_arena_decay(_arena: u32, _decay: ArenaDecay) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "jemalloc is not linked on this target; there is no arena decay to configure",
+        ))
+    }
+
+    pub fn configured_decay() -> Option<ArenaDecay> {
+        None
+    }
+
     pub fn narenas() -> Option<u32> {
         None
     }
@@ -431,9 +606,11 @@ mod imp {
 }
 
 pub use imp::{
-    AllocatorStats, ArenaStats, advance_epoch, allocator_name, bind_current_thread_to_arena,
-    configured_narenas, create_arena, current_thread_arena, flush_current_thread_cache, narenas,
-    purge_all, read_arena_stats, read_stats, thread_allocated, thread_deallocated,
+    ALL_ARENAS, AllocatorStats, ArenaDecay, ArenaStats, advance_epoch, allocator_name,
+    bind_current_thread_to_arena, configured_decay, configured_narenas, create_arena,
+    current_thread_arena, flush_current_thread_cache, narenas, page_size, purge_all,
+    read_arena_decay, read_arena_stats, read_stats, set_arena_decay, thread_allocated,
+    thread_deallocated,
 };
 
 #[cfg(test)]
@@ -741,6 +918,124 @@ mod tests {
         );
         assert!(thread_deallocated().is_some());
         drop(held);
+    }
+
+    /// The page-derived depth figures are bytes, not page counts, and they sit
+    /// in the order jemalloc's own accounting guarantees: an arena's active
+    /// bytes cover everything allocated out of it, and its resident bytes cover
+    /// the active and dirty pages both.
+    #[test]
+    #[cfg(not(target_env = "msvc"))]
+    fn arena_depth_is_reported_in_bytes() {
+        let page = page_size().expect("arenas.page");
+        assert!(
+            page.is_power_of_two() && page >= 4096,
+            "arenas.page is a page size, got {page}"
+        );
+
+        let arena = create_arena().expect("arenas.create");
+        let held = std::thread::spawn(move || {
+            bind_current_thread_to_arena(arena).expect("thread.arena");
+            let held = allocate_chunks(64);
+            flush_current_thread_cache().expect("thread.tcache.flush");
+            held
+        })
+        .join()
+        .expect("bound thread");
+
+        assert!(advance_epoch());
+        let stats = read_arena_stats(arena).expect("stats.arenas.<i>");
+        assert!(
+            stats.active >= stats.allocated_upper_bound(),
+            "active bytes ({}) must cover the arena's allocations ({})",
+            stats.active,
+            stats.allocated_upper_bound()
+        );
+        assert!(
+            stats.active.is_multiple_of(page)
+                && stats.dirty.is_multiple_of(page)
+                && stats.muzzy.is_multiple_of(page),
+            "the page-derived figures must be whole pages: {stats:?}"
+        );
+        assert!(
+            stats.resident >= stats.active,
+            "resident bytes ({}) must cover the active pages ({})",
+            stats.resident,
+            stats.active
+        );
+        drop(held);
+    }
+
+    /// Decay is per-arena, readable, and settable at runtime — the whole point
+    /// of PRD R13 refusing a background defragmenter is that these two numbers
+    /// are the reclamation policy, so an operator has to be able to move them
+    /// without a restart.
+    #[test]
+    #[cfg(not(target_env = "msvc"))]
+    fn arena_decay_is_readable_and_settable_at_runtime() {
+        let arena = create_arena().expect("arenas.create");
+        let before = read_arena_decay(arena).expect("arena.<i>.dirty_decay_ms");
+
+        let wanted = ArenaDecay {
+            dirty_ms: before.dirty_ms + 1234,
+            muzzy_ms: 0,
+        };
+        set_arena_decay(arena, wanted).expect("arena.<i> decay write");
+        assert_eq!(read_arena_decay(arena), Some(wanted));
+
+        // -1 is jemalloc's "never decay"; anything below it is not a duration.
+        set_arena_decay(
+            arena,
+            ArenaDecay {
+                dirty_ms: -1,
+                muzzy_ms: -1,
+            },
+        )
+        .expect("never-decay");
+        assert_eq!(
+            read_arena_decay(arena),
+            Some(ArenaDecay {
+                dirty_ms: -1,
+                muzzy_ms: -1
+            })
+        );
+        assert!(
+            set_arena_decay(
+                arena,
+                ArenaDecay {
+                    dirty_ms: -2,
+                    muzzy_ms: 0
+                }
+            )
+            .is_err(),
+            "-2 is not a decay setting jemalloc accepts"
+        );
+
+        set_arena_decay(arena, before).expect("restore");
+        assert!(
+            configured_decay().is_some(),
+            "opt.*_decay_ms is how a build proves its malloc_conf decay settings took effect"
+        );
+    }
+
+    /// `arena.<i>.purge` takes [`ALL_ARENAS`]; `arena.<i>.*_decay_ms` does not —
+    /// its handler resolves the index to a real arena first and answers
+    /// `EFAULT`. Callers therefore loop. Pinned because the two mallctls look
+    /// interchangeable in the header and are not.
+    #[test]
+    #[cfg(not(target_env = "msvc"))]
+    fn the_all_arenas_sentinel_is_rejected_by_the_decay_mallctl() {
+        assert!(
+            set_arena_decay(
+                ALL_ARENAS,
+                ArenaDecay {
+                    dirty_ms: 0,
+                    muzzy_ms: 0
+                }
+            )
+            .is_err()
+        );
+        purge_all().expect("the same sentinel is accepted by arena.<i>.purge");
     }
 
     /// The spike left open whether `mallctlnametomib` resolves for a

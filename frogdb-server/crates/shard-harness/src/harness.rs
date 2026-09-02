@@ -40,7 +40,7 @@ use frogdb_core::shard::{
     BlockingMsg, CoreMsg, DebugIntrospectionMsg, Envelope, NewConnection, ShardMessage,
     ShardReceiver, ShardSender, ShardWorkerBuilder, WatchEntry,
 };
-use frogdb_core::store::BackdateExpiryResult;
+use frogdb_core::store::{BackdateExpiryResult, ReEncodeResult};
 use frogdb_core::types::BlockingOp;
 use frogdb_core::{CommandRegistry, ShardWorker};
 
@@ -348,6 +348,22 @@ impl ShardDriver {
         )
         .await;
         rx.await.expect("expire backdate")
+    }
+
+    /// Rebuild one key's value through its own encoding (the production
+    /// `DEBUG RE-ENCODE` seam), compacting the slack in-place churn left in its
+    /// representation. `None` for a missing or already-expired key.
+    pub async fn re_encode(&mut self, shard: usize, key: &str) -> Option<ReEncodeResult> {
+        let (tx, rx) = oneshot::channel();
+        self.dispatch(
+            shard,
+            DebugIntrospectionMsg::ReEncode {
+                key: Bytes::copy_from_slice(key.as_bytes()),
+                response_tx: tx,
+            },
+        )
+        .await;
+        rx.await.expect("re-encode")
     }
 
     pub async fn expiry_index_check(&mut self, shard: usize) -> ExpiryIndexCheckInfo {

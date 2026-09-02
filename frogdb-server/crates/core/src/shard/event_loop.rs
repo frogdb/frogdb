@@ -21,6 +21,16 @@ impl ShardWorker {
     pub async fn run(mut self) {
         tracing::info!(shard_id = self.shard_id(), "Shard worker started");
 
+        // Adopt this core's `NetworkOutput` budget. It has to happen *here*,
+        // inside `run`, rather than at build time: the budget is a thread local
+        // and a shard is built on one thread and moved to its own, so the
+        // budget adopted at build time would be some other core's. Connections
+        // assigned to this shard run on this same thread, so what is adopted
+        // here is exactly the allowance they charge their buffered replies to —
+        // which is what puts client output buffers in the per-subsystem
+        // breakdown and the `frogdb_memory_budget_*` metrics.
+        self.memory.adopt(frogdb_memory::network_output::current());
+
         // Active expiry runs every 100ms
         let mut expiry_interval = tokio::time::interval(Duration::from_millis(100));
 

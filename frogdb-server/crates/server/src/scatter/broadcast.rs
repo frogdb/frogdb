@@ -33,9 +33,12 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use frogdb_core::{IntrospectionResponse, PartialResult, ShardMessage, ShardSender};
+use frogdb_memory::Charge;
 use frogdb_protocol::Response;
 use tokio::sync::oneshot;
 use tracing::warn;
+
+use crate::net_charge;
 
 /// Fallback fan-out deadline for broadcast helpers invoked from a
 /// [`ConnCtx`](frogdb_core::ConnCtx), which does not carry the connection's
@@ -470,9 +473,22 @@ impl<R: IntegerTotal> MergeStrategy for SumIntegers<R> {
 /// Collect every key across all shards, sort, and emit a bulk-string array.
 ///
 /// Replaces the inline KEYS and TS.QUERYINDEX sorted-union folds.
-#[derive(Default)]
 pub struct SortedUnion {
     keys: Vec<Bytes>,
+    /// Accounts the accumulated keys against this core's `NetworkOutput`
+    /// budget while the fan-out is in flight.
+    charge: Charge,
+    shed: bool,
+}
+
+impl Default for SortedUnion {
+    fn default() -> Self {
+        Self {
+            keys: Vec::new(),
+            charge: net_charge::open_charge(),
+            shed: false,
+        }
+    }
 }
 
 impl MergeStrategy for SortedUnion {
@@ -483,12 +499,22 @@ impl MergeStrategy for SortedUnion {
     }
 
     fn absorb(&mut self, _shard_id: usize, reply: PartialResult) {
+        if self.shed {
+            return;
+        }
         for (key, _) in reply.into_keyed_results() {
+            if !net_charge::try_grow(&mut self.charge, (key.len() + 32) as u64) {
+                self.shed = true;
+                return;
+            }
             self.keys.push(key);
         }
     }
 
     fn finish(mut self: Box<Self>) -> Response {
+        if self.shed {
+            return net_charge::shed_error(self.name());
+        }
         self.keys.sort();
         Response::Array(self.keys.into_iter().map(Response::bulk).collect())
     }
@@ -496,9 +522,22 @@ impl MergeStrategy for SortedUnion {
 
 /// Collect `(key, response)` pairs across all shards, sort by key, and emit the
 /// responses. Replaces the inline TS.MGET / TS.MRANGE folds.
-#[derive(Default)]
 pub struct SortedByKey {
     results: Vec<(Bytes, Response)>,
+    /// Accounts the accumulated per-key responses against this core's
+    /// `NetworkOutput` budget while the fan-out is in flight.
+    charge: Charge,
+    shed: bool,
+}
+
+impl Default for SortedByKey {
+    fn default() -> Self {
+        Self {
+            results: Vec::new(),
+            charge: net_charge::open_charge(),
+            shed: false,
+        }
+    }
 }
 
 impl MergeStrategy for SortedByKey {
@@ -509,10 +548,23 @@ impl MergeStrategy for SortedByKey {
     }
 
     fn absorb(&mut self, _shard_id: usize, reply: PartialResult) {
-        self.results.extend(reply.into_keyed_results());
+        if self.shed {
+            return;
+        }
+        for (key, resp) in reply.into_keyed_results() {
+            let bytes = key.len() as u64 + net_charge::approx_response_bytes(&resp);
+            if !net_charge::try_grow(&mut self.charge, bytes) {
+                self.shed = true;
+                return;
+            }
+            self.results.push((key, resp));
+        }
     }
 
     fn finish(mut self: Box<Self>) -> Response {
+        if self.shed {
+            return net_charge::shed_error(self.name());
+        }
         self.results.sort_by(|a, b| a.0.cmp(&b.0));
         Response::Array(self.results.into_iter().map(|(_, r)| r).collect())
     }
@@ -520,9 +572,22 @@ impl MergeStrategy for SortedByKey {
 
 /// Deduplicate channel names across all shards, sort, and emit a bulk-string
 /// array. Replaces PUBSUB CHANNELS / SHARDCHANNELS.
-#[derive(Default)]
 pub struct DedupSorted {
     channels: HashSet<Bytes>,
+    /// Accounts the accumulated channel names against this core's
+    /// `NetworkOutput` budget while the fan-out is in flight.
+    charge: Charge,
+    shed: bool,
+}
+
+impl Default for DedupSorted {
+    fn default() -> Self {
+        Self {
+            channels: HashSet::new(),
+            charge: net_charge::open_charge(),
+            shed: false,
+        }
+    }
 }
 
 impl MergeStrategy for DedupSorted {
@@ -533,12 +598,24 @@ impl MergeStrategy for DedupSorted {
     }
 
     fn absorb(&mut self, _shard_id: usize, reply: IntrospectionResponse) {
+        if self.shed {
+            return;
+        }
         if let IntrospectionResponse::Channels(channels) = reply {
-            self.channels.extend(channels);
+            for channel in channels {
+                if !net_charge::try_grow(&mut self.charge, (channel.len() + 32) as u64) {
+                    self.shed = true;
+                    return;
+                }
+                self.channels.insert(channel);
+            }
         }
     }
 
     fn finish(self: Box<Self>) -> Response {
+        if self.shed {
+            return net_charge::shed_error(self.name());
+        }
         let mut channels: Vec<Bytes> = self.channels.into_iter().collect();
         channels.sort();
         Response::Array(channels.into_iter().map(Response::bulk).collect())

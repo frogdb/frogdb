@@ -223,3 +223,78 @@ async fn drive_tick_message_runs_the_waiter_timeout_sweep() {
         "the timed-out BLPOP must be answered with its op-aware null-array reply"
     );
 }
+
+/// DEBUG RE-ENCODE compacts a churned value: a hash grown past the listpack
+/// threshold promotes to the hashmap encoding and — by design — never demotes
+/// on its own, so a hash churned back down to a handful of fields keeps paying
+/// for a table it no longer needs. Re-encoding rebuilds it through the current
+/// thresholds, which packs it back down.
+#[tokio::test]
+async fn re_encode_compacts_a_hash_churned_back_below_the_listpack_threshold() {
+    use frogdb_shard_harness::harness::ShardDriver;
+
+    let mut d = ShardDriver::new(1);
+    // Past `ListpackThresholds::DEFAULT_HASH.max_entries` (128), so the hash
+    // promotes to the hashmap encoding.
+    for i in 0..200 {
+        let field = format!("f{i}");
+        assert_eq!(
+            d.execute(0, "HSET", &["h", &field, "v"]).await,
+            Response::Integer(1)
+        );
+    }
+    assert_eq!(
+        d.execute(0, "OBJECT", &["ENCODING", "h"]).await,
+        Response::Bulk(Some(Bytes::from_static(b"hashtable"))),
+        "a hash over the entry threshold must be on the hashmap encoding"
+    );
+
+    // Churn it back down to well under the threshold. The encoding stays put.
+    for i in 0..197 {
+        let field = format!("f{i}");
+        assert_eq!(
+            d.execute(0, "HDEL", &["h", &field]).await,
+            Response::Integer(1)
+        );
+    }
+    assert_eq!(
+        d.execute(0, "OBJECT", &["ENCODING", "h"]).await,
+        Response::Bulk(Some(Bytes::from_static(b"hashtable"))),
+        "promotion is one-way: shrinking must not demote the encoding on its own"
+    );
+
+    let result = d
+        .re_encode(0, "h")
+        .await
+        .expect("re-encode must find the key");
+    assert_eq!(
+        result.encoding, "listpack",
+        "re-encoding a shrunken hash must pack it back down"
+    );
+    assert!(
+        result.after_bytes < result.before_bytes,
+        "re-encoding must shrink the value: {} -> {}",
+        result.before_bytes,
+        result.after_bytes
+    );
+
+    // The compaction must be lossless.
+    assert_eq!(d.execute(0, "HLEN", &["h"]).await, Response::Integer(3));
+    for i in 197..200 {
+        let field = format!("f{i}");
+        assert_eq!(
+            d.execute(0, "HGET", &["h", &field]).await,
+            Response::Bulk(Some(Bytes::from_static(b"v")))
+        );
+    }
+}
+
+/// Re-encode is keyed: a key that is not there reports a miss rather than an
+/// invented result.
+#[tokio::test]
+async fn re_encode_reports_a_miss_for_a_key_that_is_not_there() {
+    use frogdb_shard_harness::harness::ShardDriver;
+
+    let mut d = ShardDriver::new(1);
+    assert!(d.re_encode(0, "absent").await.is_none());
+}

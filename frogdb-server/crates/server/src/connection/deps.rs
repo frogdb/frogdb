@@ -224,10 +224,9 @@ pub struct ConnectionConfig {
     /// is enabled. Default false; test harness sets to true.
     pub enable_debug_command: bool,
 
-    /// Hard limit (bytes) on pub/sub messages buffered for a slow subscriber
-    /// before further messages are dropped and the connection is torn down.
-    /// `0` disables the bound. Sourced from `server.pubsub-output-buffer-hard-limit`.
-    pub pubsub_output_buffer_hard_limit: usize,
+    /// The `client-output-buffer-limit` triples enforced against the connection,
+    /// by class.
+    pub output_buffer_limits: crate::connection::output_buffer::OutputBufferLimits,
 
     /// Chaos testing configuration (turmoil simulation only).
     #[cfg(feature = "turmoil")]
@@ -248,7 +247,7 @@ impl ConnectionConfig {
             per_request_spans: Arc::new(AtomicBool::new(false)),
             is_replica: Arc::new(AtomicBool::new(false)),
             enable_debug_command: true,
-            pubsub_output_buffer_hard_limit: frogdb_core::DEFAULT_PUBSUB_OUTPUT_BUFFER_HARD_LIMIT,
+            output_buffer_limits: Default::default(),
             #[cfg(feature = "turmoil")]
             chaos_config: std::sync::Arc::new(crate::config::ChaosConfig::default()),
         }
@@ -296,11 +295,21 @@ pub struct ObservabilityDeps {
     /// connection command asks "is a collector installed?" rather than naming
     /// the concrete `frogdb_debug` type. Empty for the test-default deps.
     pub collectors: Arc<crate::server_observability::ServerObservability>,
+
+    /// Which jemalloc arena each shard owns, and that arena's last sampled
+    /// figures — the source `INFO arenas` renders and `DEBUG ARENA-DECAY`
+    /// retunes. Kept current by `frogdb_telemetry::ArenaSampler`; read here,
+    /// never sampled, so an INFO call costs a few relaxed atomic loads.
+    ///
+    /// Empty for the test-default deps and under simulation, where no shard has
+    /// an arena — which is why both surfaces report nothing rather than zeros.
+    pub shard_arenas: Arc<frogdb_telemetry::ShardArenaRegistry>,
 }
 
 impl Default for ObservabilityDeps {
     fn default() -> Self {
         Self {
+            shard_arenas: Arc::new(frogdb_telemetry::ShardArenaRegistry::empty()),
             metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
             shared_tracer: None,
             tracing_config: TracingConfig::default(),

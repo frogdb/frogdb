@@ -207,6 +207,65 @@ max(frogdb_shard_keys) / avg(frogdb_shard_keys)
 A ratio well above `1.0` indicates skewed key distribution across shards; alert thresholds are
 workload-dependent.
 
+## Memory: arena decay and per-key re-encode
+
+FrogDB runs no active defragmenter. Values are stored packed and each shard thread owns its own
+jemalloc arena, so the fragmentation Redis's `activedefrag` exists to fight mostly cannot
+accumulate. Two `DEBUG` levers cover what remains.
+
+### `DEBUG ARENA-DECAY`
+
+Page reclamation timing is FrogDB's fragmentation policy, so it is set explicitly at startup
+(`dirty_decay_ms=10000`, `muzzy_decay_ms=0`) rather than inherited from jemalloc's defaults.
+`DEBUG ARENA-DECAY` is the runtime half of that setting:
+
+```redis
+DEBUG ARENA-DECAY                          # report startup and live per-arena values
+DEBUG ARENA-DECAY <dirty_ms> <muzzy_ms>    # retune every shard arena on this node
+```
+
+Milliseconds; `0` purges freed pages immediately, `-1` never. The bare form reports the startup
+configuration plus each shard arena's live values, so divergence after a retune is visible:
+
+```
+# Arena decay in milliseconds (0 = purge on free, -1 = never)
+startup:dirty=10000,muzzy=0
+shard0:arena=1,dirty=10000,muzzy=0
+```
+
+A write applies to every shard arena at once — per-arena divergence would make the per-shard
+figures in [`INFO arenas`](/operations/observability/#per-shard-arena-depth-info-arenas)
+incomparable for no gain. The typical use is watching `dirty` bytes stay high after a large
+delete: lower `dirty_ms` (or set `0`) to return those pages to the OS now, then restore the
+default. The retune does not survive a restart; permanent policy changes belong in the startup
+configuration.
+
+### `DEBUG RE-ENCODE`
+
+```redis
+DEBUG RE-ENCODE <key>
+```
+
+Rebuilds one key's value through its own encoding, choosing the representation afresh from the
+same thresholds a write would. Encoding promotion is one-way in normal operation — a hash that a
+burst grew past the listpack threshold keeps its hashtable representation after shrinking back
+down, because checking for demotion on every mutation would tax every write for a rare case.
+`DEBUG RE-ENCODE` is the manual escape hatch for the pathological key that churned and now pays
+for a representation it no longer needs:
+
+```
+127.0.0.1:6379> DEBUG RE-ENCODE bighash
+re_encoded:1 encoding:listpack memory_before:16384 memory_after:212
+```
+
+`memory_after` equal to `memory_before` is a real answer: the value was already compact, or its
+type has only one representation. `re_encoded:0` marks the latter case — a type with a single
+representation (strings, lists, ...) has no encoding choice to remake, so the command reports its
+bytes unchanged rather than failing. The rewrite is O(value contents), runs on the shard that owns
+the key, and changes nothing observable about the value. Nothing invokes it automatically —
+there is no background scan looking for candidates, which is precisely the door the
+no-active-defrag design keeps shut.
+
 ## Server status
 
 `STATUS` gives a comprehensive server and shard health overview, available over both the Redis

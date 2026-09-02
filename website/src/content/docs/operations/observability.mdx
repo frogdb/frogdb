@@ -158,12 +158,41 @@ INFO server|clients|memory|persistence|stats|replication|cpu|keyspace|ratelimit
 Extra sections available via `INFO all` / `INFO everything`:
 
 ```
-INFO commandstats|errorstats|latencystats|latency_baseline|tiered|keysizes
+INFO commandstats|errorstats|latencystats|latency_baseline|tiered|keysizes|arenas
 ```
 
 For the meaning of the standard Redis fields within each section, see the
 [Redis INFO documentation](https://redis.io/docs/latest/commands/info/); this page documents
 only where FrogDB's section list differs.
+
+### Per-shard arena depth (`INFO arenas`)
+
+FrogDB has no active defragmenter: values are stored packed, and each shard thread owns a
+dedicated jemalloc arena, which removes the main fragmentation drivers. What remains is page
+reclamation lag, and `INFO arenas` exists so an operator can tell real growth apart from pages
+jemalloc has freed but not yet returned to the OS:
+
+```
+# Arenas
+shard0:arena=1,allocated=52428800,active=53477376,resident=54525952,dirty=1048576,muzzy=0,retained=8388608,frag_ratio=1.04
+```
+
+- `allocated` is an upper bound on live bytes, not an exact figure — jemalloc charges a freed
+  region to its arena until the owning thread flushes its cache.
+- `dirty`/`muzzy` are freed pages waiting out the decay timers. A large `dirty` figure with a
+  flat keyspace means reclamation lag, not growth; it drains on its own (or immediately via
+  `DEBUG ARENA-DECAY` — see [Diagnostics](/operations/diagnostics/)).
+- `frag_ratio` is per-arena `resident / allocated`, the per-shard version of the global
+  `allocator_frag_ratio` in `INFO memory`.
+
+The section renders one line per sampled shard and is empty (rather than zero-filled) on
+deployments without per-shard arenas or before the sampler's first tick. The same figures are
+exported to Prometheus as the `frogdb_allocator_shard_*` gauges, labeled by shard — see the
+[Metrics Reference](/reference/metrics/).
+
+Page reclamation timing is set explicitly at startup (`dirty_decay_ms=10000`,
+`muzzy_decay_ms=0`) and can be retuned on a live node with `DEBUG ARENA-DECAY` when a
+fragmentation problem needs faster purging than the defaults give.
 
 ## Logging
 

@@ -122,6 +122,11 @@ pub struct Server {
     /// memory that is not separately attributable.
     shard_arenas: Arc<frogdb_telemetry::ShardArenaRegistry>,
 
+    /// Per-connection output-buffer limits, parsed from
+    /// `server.client-output-buffer-limit` at construction so a malformed spec
+    /// is a boot failure rather than a silently defaulted limit.
+    output_buffer_limits: crate::connection::output_buffer::OutputBufferLimits,
+
     /// Optional RocksDB store for persistence.
     rocks_store: Option<Arc<RocksStore>>,
 
@@ -266,6 +271,16 @@ impl Server {
         listeners: ServerListeners,
         log_reload_handle: Option<crate::runtime_config::LogReloadHandle>,
     ) -> Result<Self> {
+        // Redis's `client-output-buffer-limit`, read once for every connection
+        // this server will accept. Parsed before anything is bound or recovered
+        // so a typo refuses the boot outright: a limit that failed to parse and
+        // was quietly replaced by a default is a limit the operator believes
+        // they set and does not have.
+        let output_buffer_limits = crate::connection::output_buffer::OutputBufferLimits::parse(
+            &config.server.client_output_buffer_limit,
+        )
+        .map_err(|e| anyhow::anyhow!("server.client-output-buffer-limit: {e}"))?;
+
         // Phase 1: Infrastructure init (metrics, listeners, registries, persistence, channels)
         // The RocksDB store is opened during recovery with the metrics recorder
         // injected at construction (`RocksStore::open_with_warm_metrics`), so
@@ -494,6 +509,7 @@ impl Server {
             shard_supervisor_handle,
             shard_placement,
             shard_arenas,
+            output_buffer_limits,
             rocks_store: infra.rocks_store,
             periodic_sync_handle: infra.periodic_sync_handle,
             periodic_snapshot_handle: infra.periodic_snapshot_handle,

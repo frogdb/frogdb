@@ -4820,8 +4820,9 @@ async fn test_subscriber_dereg_on_raw_close_cross_shard() {
 /// Regression + policy pin for the pub/sub client-output-buffer DoS: a
 /// subscriber that stops reading its socket must NOT let the server buffer
 /// published messages without bound. FrogDB caps the per-connection pub/sub
-/// output buffer at `server.pubsub-output-buffer-hard-limit` bytes (mirroring
-/// Redis `client-output-buffer-limit pubsub`): once the queue would exceed the
+/// output buffer at `client-output-buffer-limit pubsub`'s hard figure — the one
+/// Redis knob, covering the delivery queue and the socket buffers alike: once
+/// the queue would exceed the
 /// limit, further messages are dropped to keep memory bounded, the overflow is
 /// latched, and the connection task tears the slow subscriber down on its next
 /// drain — exactly as Redis disconnects a client that trips its pubsub buffer
@@ -4852,6 +4853,7 @@ async fn test_subscriber_dereg_on_raw_close_cross_shard() {
 /// per-connection *server memory* stays bounded by the 32 KiB budget throughout
 /// (the kernel buffers are the OS's fixed ceiling, not unbounded growth) — the
 /// whole point of the bound.
+// FM-MEMORY-001
 #[tokio::test]
 async fn test_slow_subscriber_output_buffer_bound_disconnects() {
     // Small budget so accumulation overflows well before the flood ends, but
@@ -4860,7 +4862,10 @@ async fn test_slow_subscriber_output_buffer_bound_disconnects() {
     let hard_limit = 32 * 1024;
     let server = TestServer::start_standalone_with_config(TestServerConfig {
         num_shards: Some(1),
-        pubsub_output_buffer_hard_limit: Some(hard_limit),
+        // One knob: the `pubsub` class bounds the delivery queue as well as the
+        // socket buffers. Soft limit left at 0 so this test pins the hard-limit
+        // kill only.
+        client_output_buffer_limit: Some(format!("pubsub {hard_limit} 0 0")),
         ..Default::default()
     })
     .await;

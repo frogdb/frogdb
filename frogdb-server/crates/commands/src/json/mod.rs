@@ -45,7 +45,7 @@ fn parse_path(arg: Option<&Bytes>) -> String {
 /// documents (internal re-serialization) do not belong here and stay unbounded.
 fn parse_json_value_limited(bytes: &[u8], limits: &JsonLimits) -> Result<JsonData, CommandError> {
     JsonValue::parse_with_limits(bytes, limits)
-        .map(JsonValue::into_data)
+        .map(|value| value.to_json_data())
         .map_err(json_error_to_command_error)
 }
 

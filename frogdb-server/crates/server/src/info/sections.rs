@@ -38,6 +38,7 @@ pub(super) fn all_sections() -> Vec<Box<dyn InfoSection>> {
         Box::new(LatencystatsSection),
         Box::new(LatencyBaselineSection),
         Box::new(TieredSection),
+        Box::new(ArenasSection),
     ]
 }
 
@@ -848,6 +849,52 @@ impl InfoSection for TieredSection {
 }
 
 // ============================================================================
+// Arenas
+// ============================================================================
+
+/// Per-shard jemalloc arena depth — the INFO view of the same figures
+/// Prometheus scrapes as `frogdb_allocator_shard_*`.
+///
+/// One line per *sampled* shard, so a deployment with no per-shard arenas (or
+/// one whose sampler has not ticked yet) renders an empty section rather than a
+/// column of zeros that would read as "these shards hold nothing".
+///
+/// `allocated` is an upper bound, not live bytes: jemalloc charges a freed
+/// region to its arena until the owning thread flushes its tcache. Read
+/// `dirty`/`muzzy` alongside it — those separate "this shard grew" from "this
+/// shard's pages have not decayed yet", which is the distinction an operator
+/// needs when there is no active defragmenter to lean on.
+struct ArenasSection;
+
+impl InfoSection for ArenasSection {
+    fn name(&self) -> &'static str {
+        "arenas"
+    }
+
+    fn render(&self, src: &InfoSources) -> String {
+        let mut w = SectionWriter::new("Arenas");
+        for sample in src.arenas() {
+            let mut line = format!(
+                "shard{}:arena={},allocated={},active={},resident={},dirty={},muzzy={},retained={}",
+                sample.shard_id,
+                sample.arena,
+                sample.allocated_upper_bound_bytes(),
+                sample.active_bytes,
+                sample.resident_bytes,
+                sample.dirty_bytes,
+                sample.muzzy_bytes,
+                sample.retained_bytes,
+            );
+            if let Some(ratio) = sample.fragmentation_ratio() {
+                line.push_str(&format!(",frag_ratio={ratio:.2}"));
+            }
+            w.line(&line);
+        }
+        w.finish()
+    }
+}
+
+// ============================================================================
 // Keysizes
 // ============================================================================
 
@@ -885,8 +932,8 @@ impl InfoSection for KeysizesSection {
 mod tests {
     use super::super::test_support::sources;
     use super::super::{
-        AllocatorSnapshot, InfoBuilder, PrimarySnapshot, RateLimitSnapshot, ReplicaLine,
-        ReplicaState, SectionSelector,
+        AllocatorSnapshot, DEFAULT_SECTIONS, InfoBuilder, PrimarySnapshot, RateLimitSnapshot,
+        ReplicaLine, ReplicaState, SectionSelector,
     };
     use super::*;
     use frogdb_core::{ServerCommandStats, WalLagAggregate};
@@ -2045,6 +2092,51 @@ mod tests {
         assert!(out.contains("tiered_enabled:1\r\n"), "{out}");
         assert!(out.contains("tiered_hot_keys:5\r\n"), "{out}");
         assert!(out.contains("tiered_warm_keys:2\r\n"), "{out}");
+    }
+
+    /// No arena has been sampled, so there is nothing truthful to say — the
+    /// section is a bare header, not a row of zeros per shard.
+    #[test]
+    fn arenas_renders_nothing_when_no_arena_has_been_sampled() {
+        let src = sources();
+        assert_eq!(render(&ArenasSection, &src), "# Arenas\r\n\r\n");
+    }
+
+    #[test]
+    fn arenas_renders_one_line_per_sampled_shard() {
+        let mut src = sources();
+        src.arenas = vec![frogdb_telemetry::ShardArenaSample {
+            shard_id: 3,
+            arena: 7,
+            small_allocated_upper_bound_bytes: 800,
+            large_allocated_upper_bound_bytes: 200,
+            resident_bytes: 2000,
+            active_bytes: 1500,
+            dirty_bytes: 400,
+            muzzy_bytes: 0,
+            retained_bytes: 4096,
+            samples: 1,
+        }];
+        let out = render(&ArenasSection, &src);
+        assert_eq!(
+            out,
+            "# Arenas\r\nshard3:arena=7,allocated=1000,active=1500,resident=2000,\
+             dirty=400,muzzy=0,retained=4096,frag_ratio=2.00\r\n\r\n",
+            "{out}"
+        );
+    }
+
+    /// The section is diagnostic, not Redis-compatible: it must stay out of
+    /// `INFO` / `INFO default` and appear only under `INFO all`.
+    #[test]
+    fn arenas_is_not_a_default_section() {
+        assert!(!DEFAULT_SECTIONS.contains(&"arenas"));
+        let src = sources();
+        let default = InfoBuilder::standard().render(&SectionSelector::from_args(&[]), &src);
+        assert!(!default.contains("# Arenas"), "{default}");
+        let all_args = [bytes::Bytes::from_static(b"all")];
+        let all = InfoBuilder::standard().render(&SectionSelector::from_args(&all_args), &src);
+        assert!(all.contains("# Arenas"), "{all}");
     }
 
     #[test]

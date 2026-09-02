@@ -31,6 +31,12 @@
 //! cover shard *placement*: production and simulation get different answers to
 //! "what does a shard run on", chosen by the same `turmoil` feature (ADR-0006
 //! §1).
+//!
+//! [`buffers`] rides the same "what is per-core about the network" boundary: a
+//! connection runs on its shard's thread, so its read and write buffers come
+//! from that thread's pool.
+
+pub mod buffers;
 
 // TcpListener
 #[cfg(feature = "turmoil")]

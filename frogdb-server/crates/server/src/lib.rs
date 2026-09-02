@@ -20,6 +20,7 @@ pub mod malloc_conf;
 pub mod migrate;
 pub mod monitor;
 pub mod net;
+pub(crate) mod net_charge;
 pub mod observability_server;
 pub mod operations;
 pub mod replication;
