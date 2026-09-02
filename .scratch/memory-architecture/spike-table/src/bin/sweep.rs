@@ -48,6 +48,45 @@ struct Row {
     doublings: u64,
 }
 
+/// Lookup passes per cell. This box runs several other builds, so a single timed pass
+/// measures the scheduler as much as the layout. Every read-side number is the *best*
+/// of `REPS` passes over the same table: contention can only make a pass slower, so the
+/// minimum is the closest estimate of the uncontended cost that a shared machine allows.
+/// Insert and split timings are single-shot by construction (the table is built once)
+/// and are flagged as contention-exposed in the report.
+const REPS: usize = 5;
+
+/// 1/5/15-minute load average, recorded with every run: this box builds four other
+/// worktrees, and a number taken at load 40 is not comparable with one taken at load 4.
+fn load_average() -> String {
+    // libc's getloadavg, declared directly: the spike has no `libc` dependency and
+    // shelling out to `sysctl` returns nothing under the agent sandbox.
+    unsafe extern "C" {
+        fn getloadavg(loadavg: *mut f64, nelem: i32) -> i32;
+    }
+    let mut avg = [0f64; 3];
+    let n = unsafe { getloadavg(avg.as_mut_ptr(), 3) };
+    if n == 3 {
+        format!("{:.1} {:.1} {:.1}", avg[0], avg[1], avg[2])
+    } else {
+        "unknown".into()
+    }
+}
+
+/// Runs `f` `REPS` times and returns the fastest per-operation nanoseconds.
+fn best_ns(ops: usize, mut f: impl FnMut()) -> f64 {
+    let mut best = f64::INFINITY;
+    for _ in 0..REPS {
+        let t0 = Instant::now();
+        f();
+        let ns = t0.elapsed().as_nanos() as f64 / ops as f64;
+        if ns < best {
+            best = ns;
+        }
+    }
+    best
+}
+
 fn val_of(p: &Pair) -> Val<'_> {
     match p.int {
         Some(i) => Val::Int(i),
@@ -76,34 +115,37 @@ fn run_variant<K: Word, V: Word, const N: usize>(
 
     // Timed lookups run through the *uninstrumented* path, so the number compares
     // against `griddle::HashMap::contains_key` and not against our own counters.
-    let t0 = Instant::now();
     let mut hits = 0usize;
-    for p in pairs {
-        if t.contains(&p.key) {
-            hits += 1;
+    let lookup_hit_ns = best_ns(n, || {
+        hits = 0;
+        for p in pairs {
+            if t.contains(&p.key) {
+                hits += 1;
+            }
         }
-    }
-    let lookup_hit_ns = t0.elapsed().as_nanos() as f64 / n as f64;
+    });
     assert_eq!(hits, n);
 
-    let t0 = Instant::now();
     let mut found = 0usize;
-    for k in misses {
-        if t.contains(k) {
-            found += 1;
+    let lookup_miss_ns = best_ns(misses.len(), || {
+        found = 0;
+        for k in misses {
+            if t.contains(k) {
+                found += 1;
+            }
         }
-    }
-    let lookup_miss_ns = t0.elapsed().as_nanos() as f64 / misses.len() as f64;
+    });
     assert_eq!(found, 0, "{variant}: miss keys collided with the workload");
 
     // Second pass, counters on: it supplies the probe-length columns and prices the
-    // instrumentation the first pass no longer carries.
-    t.stats = Stats::default();
-    let t0 = Instant::now();
-    for p in pairs {
-        assert!(t.contains_counted(&p.key));
-    }
-    let lookup_hit_counted_ns = t0.elapsed().as_nanos() as f64 / n as f64;
+    // instrumentation the first pass no longer carries. Same best-of-`REPS` rule, so
+    // the two columns differ only by the counters.
+    let lookup_hit_counted_ns = best_ns(n, || {
+        t.stats = Stats::default();
+        for p in pairs {
+            assert!(t.contains_counted(&p.key));
+        }
+    });
     let hit_stats = t.stats;
 
     t.stats = Stats::default();
@@ -112,10 +154,11 @@ fn run_variant<K: Word, V: Word, const N: usize>(
     }
     let miss_stats = t.stats;
 
-    let t0 = Instant::now();
     let mut bytes = 0usize;
-    t.for_each(|k| bytes += k.len());
-    let iterate_ns = t0.elapsed().as_nanos() as f64 / n as f64;
+    let iterate_ns = best_ns(n, || {
+        bytes = 0;
+        t.for_each(|k| bytes += k.len());
+    });
     assert!(bytes > 0);
 
     let (bucket_fill, full_buckets) = t.bucket_fill();
@@ -158,32 +201,35 @@ fn run_baseline(pairs: &[Pair], misses: &[Vec<u8>]) -> Row {
     let live = allocated().saturating_sub(before);
     assert_eq!(map.len(), n);
 
-    let t0 = Instant::now();
     let mut hits = 0usize;
-    for p in pairs {
-        if map.contains_key(p.key.as_slice()) {
-            hits += 1;
+    let lookup_hit_ns = best_ns(n, || {
+        hits = 0;
+        for p in pairs {
+            if map.contains_key(p.key.as_slice()) {
+                hits += 1;
+            }
         }
-    }
-    let lookup_hit_ns = t0.elapsed().as_nanos() as f64 / n as f64;
+    });
     assert_eq!(hits, n);
 
-    let t0 = Instant::now();
     let mut found = 0usize;
-    for k in misses {
-        if map.contains_key(k.as_slice()) {
-            found += 1;
+    let lookup_miss_ns = best_ns(misses.len(), || {
+        found = 0;
+        for k in misses {
+            if map.contains_key(k.as_slice()) {
+                found += 1;
+            }
         }
-    }
-    let lookup_miss_ns = t0.elapsed().as_nanos() as f64 / misses.len() as f64;
+    });
     assert_eq!(found, 0);
 
-    let t0 = Instant::now();
     let mut bytes = 0usize;
-    for (k, _) in map.iter() {
-        bytes += k.len();
-    }
-    let iterate_ns = t0.elapsed().as_nanos() as f64 / n as f64;
+    let iterate_ns = best_ns(n, || {
+        bytes = 0;
+        for (k, _) in map.iter() {
+            bytes += k.len();
+        }
+    });
     assert!(bytes > 0);
 
     // griddle's own table. `capacity()` is *usable* capacity (hashbrown keeps one
@@ -370,6 +416,12 @@ fn main() {
          `hit ns (counted)` is the same lookup with the probe counters on.",
         std::any::type_name::<memarch_spike_table::table::Hasher>(),
     );
+    println!(
+        "Read-side timings (`hit`, `hit (counted)`, `miss`, `iter`) are the best of {REPS} passes \
+         over the built table; `ins ns` and the split-stall table are single-shot and therefore \
+         carry whatever load the box had. Load at start: {}.",
+        load_average(),
+    );
 
     for shape in Shape::ALL {
         let pairs = generate(shape, n);
@@ -412,4 +464,6 @@ fn main() {
     split_stall::<W8, W8, 14>("str7", &pairs);
     split_stall::<W16, W16, 7>("str15w", &pairs);
     split_stall::<W8, W16, 9>("hybrid", &pairs);
+
+    println!("\nLoad at end: {}.", load_average());
 }
