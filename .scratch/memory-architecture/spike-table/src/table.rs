@@ -2,13 +2,22 @@
 //!
 //! Directory of segment indices, one segment per split event, buckets probed
 //! home → neighbour → stash. Growth never rehashes the whole table: a split touches
-//! exactly one segment and the directory slice that points at it.
+//! exactly one segment and the `dir.len() >> (local_depth + 1)` directory entries
+//! that alias it, reached by a strided walk rather than a full directory scan.
 
-use std::collections::hash_map::RandomState;
 use std::hash::BuildHasher;
 
-use crate::segment::{Bucket, Segment, Slot, BUCKETS, REGULAR_BUCKETS, STASH_BUCKETS};
+use crate::segment::{alloc_class, Bucket, Segment, Slot, BUCKETS, REGULAR_BUCKETS, STASH_BUCKETS};
 use crate::word::{Decoded, InlineBuf, Word};
+
+/// The hasher both sides of the comparison use.
+///
+/// This is `griddle::HashMap`'s own default (`hashbrown`'s
+/// `BuildHasherDefault<ahash::AHasher>`), deliberately: the baseline cannot be given
+/// a different — and several times cheaper — hash function than the prototype, or
+/// every timing that contains a hash (insert, lookup, and *all* of the split cost,
+/// which is nothing but rehashing) measures the hasher instead of the layout.
+pub type Hasher = griddle::hash_map::DefaultHashBuilder;
 
 /// A value on its way into the table.
 #[derive(Clone, Copy)]
@@ -25,6 +34,12 @@ pub enum ValueOut {
 }
 
 /// Counters the sweep reports. Probe length is buckets *touched*, not slots.
+///
+/// The probe counters are **not** maintained by the timed read path: [`Table::contains`]
+/// monomorphises to a version with every counter update compiled out, and the
+/// probe-length table comes from [`Table::contains_counted`]. Charging four counter
+/// updates (one of them a `max`) to every lookup while the baseline's `contains_key`
+/// pays nothing would put the instrumentation inside the number being compared.
 #[derive(Default, Clone, Copy, Debug)]
 pub struct Stats {
     pub lookups: u64,
@@ -35,14 +50,27 @@ pub struct Stats {
     pub dir_doublings: u64,
     pub inline_keys: u64,
     pub inline_values: u64,
+    /// Slots a split read and rehashed (every occupied slot in the segment).
+    pub split_scanned: u64,
+    /// Slots a split actually moved to the new segment (about half of the above).
+    pub split_moved: u64,
+    /// Directory entries a split rewrote.
+    pub dir_writes: u64,
 }
 
-pub struct Table<K: Word, V: Word, const N: usize> {
+/// What one probe touched, when counting is switched on.
+#[derive(Default, Clone, Copy)]
+struct ProbeCount {
+    buckets: u32,
+    stash: u64,
+}
+
+pub struct Table<K: Word, V: Word, const N: usize, S = Hasher> {
     dir: Vec<u32>,
     segs: Vec<Box<Segment<K, V, N>>>,
     global_depth: u8,
     len: usize,
-    hasher: RandomState,
+    hasher: S,
     pub stats: Stats,
 }
 
@@ -57,7 +85,7 @@ struct Route {
     fp: u8,
 }
 
-impl<K: Word, V: Word, const N: usize> Table<K, V, N> {
+impl<K: Word, V: Word, const N: usize, S: BuildHasher + Default + Clone> Table<K, V, N, S> {
     /// Longest key that fits in the key word.
     pub const KEY_INLINE_MAX: usize = K::INLINE_STR_MAX;
     /// Longest byte-string value that fits in the value word.
@@ -72,6 +100,12 @@ impl<K: Word, V: Word, const N: usize> Table<K, V, N> {
     pub const SEGMENT_CAPACITY: usize = Segment::<K, V, N>::CAPACITY;
 
     pub fn new() -> Self {
+        Self::with_hasher(S::default())
+    }
+
+    /// Same table with a caller-supplied hasher — the tests use a fixed-seed one so
+    /// the cursor proof is reproducible run to run.
+    pub fn with_hasher(hasher: S) -> Self {
         crate::segment::assert_layout::<K, V, N>();
         let seg = Segment::<K, V, N>::alloc_zeroed(0, 0);
         Table {
@@ -79,7 +113,7 @@ impl<K: Word, V: Word, const N: usize> Table<K, V, N> {
             segs: vec![seg],
             global_depth: 0,
             len: 0,
-            hasher: RandomState::new(),
+            hasher,
             stats: Stats::default(),
         }
     }
@@ -119,15 +153,36 @@ impl<K: Word, V: Word, const N: usize> Table<K, V, N> {
         self.global_depth
     }
 
-    /// Bytes of table structure: the directory plus every segment. Excludes the
-    /// out-of-line key/value payloads, which jemalloc accounts for separately.
+    /// `(segment_key, local_depth)` of the segment directory entry `idx` points at.
+    /// Introspection for the directory-invariant test.
+    pub fn dir_segment(&self, idx: usize) -> (u64, u8) {
+        let seg = &self.segs[self.dir[idx] as usize];
+        (seg.header.segment_key, seg.header.local_depth)
+    }
+
+    /// Bytes of table structure: the directory plus every segment, **as the allocator
+    /// serves them**. Excludes the out-of-line key/value payloads, which jemalloc
+    /// accounts for separately.
+    ///
+    /// Segments are charged at their jemalloc size class, not `size_of`: the class
+    /// round-up is memory the process really holds, and charging `size_of` understates
+    /// the structure by however far the segment sits below its class boundary.
     pub fn structural_bytes(&self) -> usize {
+        self.directory_bytes() + self.segs.len() * Segment::<K, V, N>::alloc_bytes()
+    }
+
+    /// Structure charged at `size_of` instead — kept only so the sweep can print the
+    /// gap between the struct and the class it lands in.
+    pub fn structural_bytes_unrounded(&self) -> usize {
         self.dir.len() * std::mem::size_of::<u32>()
             + self.segs.len() * std::mem::size_of::<Segment<K, V, N>>()
     }
 
     pub fn directory_bytes(&self) -> usize {
-        self.dir.len() * std::mem::size_of::<u32>()
+        alloc_class(
+            self.dir.capacity() * std::mem::size_of::<u32>(),
+            std::mem::align_of::<u32>(),
+        )
     }
 
     /// Live entries divided by addressable slots — the number bucket capacity buys.
@@ -142,51 +197,72 @@ impl<K: Word, V: Word, const N: usize> Table<K, V, N> {
 
     // -- read path ----------------------------------------------------------
 
-    /// Returns whether `key` is present, counting the buckets the probe touched.
-    pub fn contains(&mut self, key: &[u8]) -> bool {
-        self.locate(key).is_some()
+    /// Returns whether `key` is present. **Uninstrumented** — this is the method the
+    /// lookup bench times, so it has to cost exactly what the read path costs.
+    pub fn contains(&self, key: &[u8]) -> bool {
+        let mut c = ProbeCount::default();
+        self.probe::<false>(key, &mut c).is_some()
     }
 
-    fn locate(&mut self, key: &[u8]) -> Option<(usize, usize, usize)> {
+    /// Same lookup with the probe counters on, feeding [`Stats`]. The sweep uses this
+    /// for the probe-length columns and to price the instrumentation itself.
+    pub fn contains_counted(&mut self, key: &[u8]) -> bool {
+        let mut c = ProbeCount::default();
+        let found = self.probe::<true>(key, &mut c).is_some();
+        self.stats.lookups += 1;
+        self.stats.probe_buckets += c.buckets as u64;
+        self.stats.stash_probes += c.stash;
+        self.stats.probe_max = self.stats.probe_max.max(c.buckets);
+        found
+    }
+
+    fn locate(&self, key: &[u8]) -> Option<(usize, usize, usize)> {
+        let mut c = ProbeCount::default();
+        self.probe::<false>(key, &mut c)
+    }
+
+    /// Home → neighbour → the stashes this home bucket actually spilled into.
+    ///
+    /// `COUNT` is a const generic, not a runtime flag: with `COUNT = false` the
+    /// counter arithmetic is dead code before the optimiser ever sees it.
+    #[inline]
+    fn probe<const COUNT: bool>(
+        &self,
+        key: &[u8],
+        c: &mut ProbeCount,
+    ) -> Option<(usize, usize, usize)> {
         let r = self.route(key);
         let si = self.dir[self.dir_index(r.h)] as usize;
         let nb = (r.home + 1) % REGULAR_BUCKETS;
+        if COUNT {
+            c.buckets = 1;
+        }
 
-        let mut touched = 1u32;
-        let mut stash_probes = 0u64;
-        let found = {
-            let seg = &self.segs[si];
-            if let Some(slot) = seg.buckets[r.home].find(r.fp, key) {
-                Some((si, r.home, slot))
-            } else {
-                touched += 1;
-                if let Some(slot) = seg.buckets[nb].find(r.fp, key) {
-                    Some((si, nb, slot))
-                } else {
-                    let map = seg.buckets[r.home].stash_map();
-                    let mut hit = None;
-                    for s in 0..STASH_BUCKETS {
-                        if map & (1 << s) == 0 {
-                            continue;
-                        }
-                        touched += 1;
-                        stash_probes += 1;
-                        let b = REGULAR_BUCKETS + s;
-                        if let Some(slot) = seg.buckets[b].find(r.fp, key) {
-                            hit = Some((si, b, slot));
-                            break;
-                        }
-                    }
-                    hit
-                }
+        let seg = &self.segs[si];
+        if let Some(slot) = seg.buckets[r.home].find(r.fp, key) {
+            return Some((si, r.home, slot));
+        }
+        if COUNT {
+            c.buckets += 1;
+        }
+        if let Some(slot) = seg.buckets[nb].find(r.fp, key) {
+            return Some((si, nb, slot));
+        }
+        let map = seg.buckets[r.home].stash_map();
+        for s in 0..STASH_BUCKETS {
+            if map & (1 << s) == 0 {
+                continue;
             }
-        };
-
-        self.stats.lookups += 1;
-        self.stats.probe_buckets += touched as u64;
-        self.stats.stash_probes += stash_probes;
-        self.stats.probe_max = self.stats.probe_max.max(touched);
-        found
+            if COUNT {
+                c.buckets += 1;
+                c.stash += 1;
+            }
+            let b = REGULAR_BUCKETS + s;
+            if let Some(slot) = seg.buckets[b].find(r.fp, key) {
+                return Some((si, b, slot));
+            }
+        }
+        None
     }
 
     /// Copies the value out. Allocates for out-of-line payloads, so this is for
@@ -295,7 +371,13 @@ impl<K: Word, V: Word, const N: usize> Table<K, V, N> {
     // -- growth -------------------------------------------------------------
 
     /// Splits segment `si` on bit `local_depth` of the key hash, adding exactly one
-    /// segment and repointing the directory slice that now belongs to the new half.
+    /// segment and repointing the directory entries that now belong to the new half.
+    ///
+    /// Two costs worth keeping apart, because the report quotes both: the split
+    /// **reads and rehashes every occupied slot in the segment** but **moves only the
+    /// half whose bit `depth` is set**, and it rewrites only the
+    /// `dir.len() >> (depth + 1)` directory entries that alias the old segment,
+    /// reached by striding rather than by scanning the whole directory.
     fn split(&mut self, si: usize) {
         let depth = self.segs[si].header.local_depth;
         let old_key = self.segs[si].header.segment_key;
@@ -314,15 +396,19 @@ impl<K: Word, V: Word, const N: usize> Table<K, V, N> {
         // Move every item whose bit `depth` is set. The hash is recomputed from the
         // key word: fingerprints are only 8 bits, so a split has to read the keys.
         let seg = &mut self.segs[si];
+        let mut scanned = 0u64;
+        let mut moved = 0u64;
         for b in 0..BUCKETS {
             let mut bits = seg.buckets[b].occupied_bits();
             while bits != 0 {
                 let i = bits.trailing_zeros() as usize;
                 bits &= bits - 1;
+                scanned += 1;
                 let r = slot_route(&hasher, &seg.buckets[b], i);
                 if (r.h >> depth) & 1 == 0 {
                     continue;
                 }
+                moved += 1;
                 let slot = seg.buckets[b].take_slot(i);
                 if b >= REGULAR_BUCKETS {
                     seg.buckets[r.home].forget_stash();
@@ -340,14 +426,22 @@ impl<K: Word, V: Word, const N: usize> Table<K, V, N> {
         seg.header.local_depth = depth + 1;
         self.segs.push(new_seg);
 
-        let mask = (1u64 << depth) - 1;
-        for (i, entry) in self.dir.iter_mut().enumerate() {
-            let i = i as u64;
-            if i & mask == old_key & mask && (i >> depth) & 1 == 1 {
-                *entry = new_idx;
-            }
+        // The directory entries aliasing the old segment are exactly
+        // `(old_key & mask) + 2^depth + k * 2^(depth+1)`; stride over them instead of
+        // testing all `2^global_depth` entries (2,048 of them at 1 M entries).
+        let mask = (1usize << depth) - 1;
+        let stride = 1usize << (depth + 1);
+        let mut i = ((old_key as usize) & mask) | (1usize << depth);
+        let mut writes = 0u64;
+        while i < self.dir.len() {
+            self.dir[i] = new_idx;
+            writes += 1;
+            i += stride;
         }
         self.stats.splits += 1;
+        self.stats.split_scanned += scanned;
+        self.stats.split_moved += moved;
+        self.stats.dir_writes += writes;
     }
 
     // -- iteration ----------------------------------------------------------
@@ -436,8 +530,8 @@ impl<K: Word, V: Word, const N: usize> Table<K, V, N> {
 }
 
 /// Recomputes a slot's route from its key word, confining the key borrow to this call.
-fn slot_route<K: Word, V: Word, const N: usize>(
-    hasher: &RandomState,
+fn slot_route<K: Word, V: Word, const N: usize, S: BuildHasher>(
+    hasher: &S,
     bucket: &Bucket<K, V, N>,
     i: usize,
 ) -> Route {
@@ -449,7 +543,7 @@ fn slot_route<K: Word, V: Word, const N: usize>(
     }
 }
 
-fn route_with(hasher: &RandomState, key: &[u8]) -> Route {
+fn route_with<S: BuildHasher>(hasher: &S, key: &[u8]) -> Route {
     let h = hasher.hash_one(key);
     Route {
         h,
@@ -484,7 +578,9 @@ fn emit_segment<K: Word, V: Word, const N: usize>(
     }
 }
 
-impl<K: Word, V: Word, const N: usize> Default for Table<K, V, N> {
+impl<K: Word, V: Word, const N: usize, S: BuildHasher + Default + Clone> Default
+    for Table<K, V, N, S>
+{
     fn default() -> Self {
         Self::new()
     }

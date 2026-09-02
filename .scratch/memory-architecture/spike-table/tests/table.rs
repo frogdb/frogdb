@@ -173,6 +173,37 @@ fn stash_buckets_absorb_spills_before_a_split() {
     assert!(t.occupancy() > 0.5, "occupancy {:.3}", t.occupancy());
 }
 
+/// A split repoints the aliasing directory entries by *striding* over them
+/// (`old_key + 2^depth`, step `2^(depth+1)`) instead of testing all `2^global_depth`
+/// entries. The invariant that makes the stride legal — every directory index routes
+/// to a segment whose `segment_key` is that index masked to the segment's local depth
+/// — is what this test pins, since an off-by-one stride loses keys silently.
+#[test]
+fn every_directory_entry_routes_to_its_own_segment() {
+    let mut t = TableStr7::new();
+    for i in 0..300_000 {
+        t.insert(format!("dir:{i}").as_bytes(), Val::Int(i));
+    }
+    assert!(t.stats.splits > 8 && t.stats.dir_doublings > 3);
+
+    for idx in 0..t.directory_entries() {
+        let (segment_key, local_depth) = t.dir_segment(idx);
+        let mask = (1u64 << local_depth) - 1;
+        assert_eq!(
+            idx as u64 & mask,
+            segment_key,
+            "directory entry {idx} points at segment key {segment_key} (local depth {local_depth})"
+        );
+    }
+    // And nothing was lost on the way: every key is still reachable.
+    for i in 0..300_000 {
+        assert!(
+            t.contains(format!("dir:{i}").as_bytes()),
+            "key dir:{i} lost across splits"
+        );
+    }
+}
+
 #[test]
 fn directory_overhead_stays_under_one_byte_per_entry() {
     let mut t = TableStr7::new();

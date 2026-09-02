@@ -240,6 +240,28 @@ impl<K: Word, V: Word, const N: usize> Segment<K, V, N> {
     pub fn regular(&self) -> &[Bucket<K, V, N>] {
         &self.buckets[..REGULAR_BUCKETS]
     }
+
+    /// Bytes jemalloc actually hands out for one segment.
+    ///
+    /// `size_of::<Segment>()` is what the struct *needs*; the allocator rounds it up
+    /// to a size class and the round-up is real, live memory (a 15,424 B segment
+    /// occupies a 16,384 B class — 6.2 % more). Every per-entry structural figure the
+    /// sweep reports uses this, not `size_of`.
+    pub fn alloc_bytes() -> usize {
+        let layout = std::alloc::Layout::new::<Self>();
+        alloc_class(layout.size(), layout.align())
+    }
+}
+
+/// Size class jemalloc serves a `(size, align)` request from.
+pub fn alloc_class(size: usize, align: usize) -> usize {
+    // SAFETY: nallocx only computes a size; it allocates nothing.
+    let n = unsafe { tikv_jemalloc_sys::nallocx(size, tikv_jemalloc_sys::MALLOCX_ALIGN(align)) };
+    if n == 0 {
+        size
+    } else {
+        n
+    }
 }
 
 /// Layout checks: the header is one cache line and a bucket never exceeds four.

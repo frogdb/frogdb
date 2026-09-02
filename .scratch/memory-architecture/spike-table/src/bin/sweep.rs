@@ -11,7 +11,7 @@ use std::time::Instant;
 use memarch_spike_table::baseline;
 use memarch_spike_table::measure::{allocated, percentile};
 use memarch_spike_table::segment::{
-    BUCKETS, BUCKET_BYTES, HEADER_BYTES, META_BYTES, R9_RESERVED_BYTES, REGULAR_BUCKETS,
+    Segment, BUCKETS, BUCKET_BYTES, HEADER_BYTES, META_BYTES, R9_RESERVED_BYTES, REGULAR_BUCKETS,
     STASH_BUCKETS,
 };
 use memarch_spike_table::table::{Stats, Table, Val};
@@ -37,6 +37,9 @@ struct Row {
     probe_max: u32,
     insert_ns: f64,
     lookup_hit_ns: f64,
+    /// Same lookup with the probe counters switched on — the price of the
+    /// instrumentation, which the baseline's `contains_key` does not pay.
+    lookup_hit_counted_ns: f64,
     lookup_miss_ns: f64,
     iterate_ns: f64,
     segments: usize,
@@ -70,7 +73,9 @@ fn run_variant<K: Word, V: Word, const N: usize>(
     assert_eq!(t.len(), n, "{variant}: duplicate keys in workload");
 
     let build = t.stats;
-    t.stats = Stats::default();
+
+    // Timed lookups run through the *uninstrumented* path, so the number compares
+    // against `griddle::HashMap::contains_key` and not against our own counters.
     let t0 = Instant::now();
     let mut hits = 0usize;
     for p in pairs {
@@ -80,9 +85,7 @@ fn run_variant<K: Word, V: Word, const N: usize>(
     }
     let lookup_hit_ns = t0.elapsed().as_nanos() as f64 / n as f64;
     assert_eq!(hits, n);
-    let hit_stats = t.stats;
 
-    t.stats = Stats::default();
     let t0 = Instant::now();
     let mut found = 0usize;
     for k in misses {
@@ -92,6 +95,21 @@ fn run_variant<K: Word, V: Word, const N: usize>(
     }
     let lookup_miss_ns = t0.elapsed().as_nanos() as f64 / misses.len() as f64;
     assert_eq!(found, 0, "{variant}: miss keys collided with the workload");
+
+    // Second pass, counters on: it supplies the probe-length columns and prices the
+    // instrumentation the first pass no longer carries.
+    t.stats = Stats::default();
+    let t0 = Instant::now();
+    for p in pairs {
+        assert!(t.contains_counted(&p.key));
+    }
+    let lookup_hit_counted_ns = t0.elapsed().as_nanos() as f64 / n as f64;
+    let hit_stats = t.stats;
+
+    t.stats = Stats::default();
+    for k in misses {
+        assert!(!t.contains_counted(k));
+    }
     let miss_stats = t.stats;
 
     let t0 = Instant::now();
@@ -117,6 +135,7 @@ fn run_variant<K: Word, V: Word, const N: usize>(
         probe_max: hit_stats.probe_max.max(miss_stats.probe_max),
         insert_ns,
         lookup_hit_ns,
+        lookup_hit_counted_ns,
         lookup_miss_ns,
         iterate_ns,
         segments: t.segments(),
@@ -167,12 +186,15 @@ fn run_baseline(pairs: &[Pair], misses: &[Vec<u8>]) -> Row {
     let iterate_ns = t0.elapsed().as_nanos() as f64 / n as f64;
     assert!(bytes > 0);
 
-    // griddle's own table: capacity is in entries, each entry a `(Bytes, Entry)` pair
-    // plus a control byte. This is the incumbent's structural cost, the number our
-    // segment bytes are the counterpart of. During an incremental resize griddle also
-    // holds the old table, which the live-byte figure sees and this one does not.
+    // griddle's own table. `capacity()` is *usable* capacity (hashbrown keeps one
+    // group free: 7/8 of the buckets); the allocation is one `(Bytes, Entry)` pair
+    // plus one control byte per **bucket**, and the bucket count is a power of two.
+    // Charging per usable slot instead understates the incumbent's table by an eighth.
+    // During an incremental resize griddle also holds the old table, which the
+    // live-byte figure sees and this one does not.
     let (_, _, pair_sz, _) = baseline::sizes();
-    let table_bytes = map.capacity() * (pair_sz + 1);
+    let buckets = (map.capacity() * 8 / 7).next_power_of_two();
+    let table_bytes = buckets * (pair_sz + 1);
 
     Row {
         variant: "griddle",
@@ -190,6 +212,7 @@ fn run_baseline(pairs: &[Pair], misses: &[Vec<u8>]) -> Row {
         probe_max: 0,
         insert_ns,
         lookup_hit_ns,
+        lookup_hit_counted_ns: f64::NAN,
         lookup_miss_ns,
         iterate_ns,
         segments: 0,
@@ -232,8 +255,20 @@ fn split_stall<K: Word, V: Word, const N: usize>(variant: &str, pairs: &[Pair]) 
     let split_max = percentile(&mut splits, 100.0);
     let dbl_p50 = percentile(&mut doublings.clone(), 50.0);
     let dbl_max = percentile(&mut doublings, 100.0);
+    // Per-entry split cost is charged against the entries actually **moved**; the
+    // scanned/moved ratio shows how much of the work is the rehash of entries that
+    // stay put.
+    let splits_n = t.stats.splits.max(1);
+    let scanned = t.stats.split_scanned as f64 / splits_n as f64;
+    let moved = t.stats.split_moved as f64 / splits_n as f64;
+    let per_moved = if t.stats.split_moved > 0 {
+        split_p50 as f64 / moved
+    } else {
+        f64::NAN
+    };
+    let dir_writes = t.stats.dir_writes as f64 / splits_n as f64;
     println!(
-        "| {variant} | {p50} | {p999} | {plain_max} | {split_p50} | {split_p99} | {split_max} | {dbl_p50} | {dbl_max} | {} | {} |",
+        "| {variant} | {p50} | {p999} | {plain_max} | {split_p50} | {split_p99} | {split_max} | {dbl_p50} | {dbl_max} | {} | {} | {scanned:.0} | {moved:.0} | {per_moved:.0} | {dir_writes:.1} |",
         t.stats.splits, t.stats.dir_doublings
     );
 }
@@ -245,14 +280,14 @@ fn header(row: &str) {
 fn print_rows(title: &str, rows: &[Row]) {
     println!("\n### {title}\n");
     println!(
-        "| variant | inline K | inline V | live B/e | struct B/e | dir B/e | occup. | fill/14 | full bkt | stash | probe hit | probe miss | pmax | ins ns | hit ns | miss ns | iter ns | segs | dir | splits | x2 |"
+        "| variant | inline K | inline V | live B/e | struct B/e | dir B/e | occup. | fill/14 | full bkt | stash | probe hit | probe miss | pmax | ins ns | hit ns | hit ns (counted) | miss ns | iter ns | segs | dir | splits | x2 |"
     );
     println!(
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
     );
     for r in rows {
         println!(
-            "| {} | {:.1}% | {:.1}% | {:.1} | {:.1} | {:.3} | {:.3} | {:.2} | {:.1}% | {:.2}% | {:.2} | {:.2} | {} | {:.0} | {:.0} | {:.0} | {:.1} | {} | {} | {} | {} |",
+            "| {} | {:.1}% | {:.1}% | {:.1} | {:.1} | {:.3} | {:.3} | {:.2} | {:.1}% | {:.2}% | {:.2} | {:.2} | {} | {:.0} | {:.0} | {:.0} | {:.0} | {:.1} | {} | {} | {} | {} |",
             r.variant,
             r.inline_keys * 100.0,
             r.inline_values * 100.0,
@@ -268,6 +303,7 @@ fn print_rows(title: &str, rows: &[Row]) {
             r.probe_max,
             r.insert_ns,
             r.lookup_hit_ns,
+            r.lookup_hit_counted_ns,
             r.lookup_miss_ns,
             r.iterate_ns,
             r.segments,
@@ -287,25 +323,31 @@ fn main() {
     println!("# R5 slot-layout sweep — {n} entries per cell\n");
 
     println!("## Layout\n");
-    println!("| variant | key word | value word | slot B | slots/bucket | bucket B | segment B | segment slots | inline key ≤ | inline val ≤ | inline int bits |");
-    println!("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+    println!("| variant | key word | value word | slot B | slots/bucket | bucket B | segment B | segment alloc B | class waste | segment slots | inline key ≤ | inline val ≤ | inline int bits |");
+    println!(
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
+    );
     macro_rules! layout {
-        ($label:literal, $k:ty, $v:ty, $n:expr) => {
+        ($label:literal, $k:ty, $v:ty, $n:expr) => {{
+            let sz = Table::<$k, $v, $n>::SEGMENT_BYTES;
+            let alloc = Segment::<$k, $v, $n>::alloc_bytes();
             println!(
-                "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+                "| {} | {} | {} | {} | {} | {} | {} | {} | {:.1}% | {} | {} | {} | {} |",
                 $label,
                 <$k>::NAME,
                 <$v>::NAME,
                 Table::<$k, $v, $n>::SLOT_BYTES,
                 Table::<$k, $v, $n>::SLOTS_PER_BUCKET,
                 META_BYTES + Table::<$k, $v, $n>::SLOT_BYTES * $n,
-                Table::<$k, $v, $n>::SEGMENT_BYTES,
+                sz,
+                alloc,
+                (alloc as f64 / sz as f64 - 1.0) * 100.0,
                 Table::<$k, $v, $n>::SEGMENT_CAPACITY,
                 Table::<$k, $v, $n>::KEY_INLINE_MAX,
                 Table::<$k, $v, $n>::VALUE_INLINE_MAX,
                 Table::<$k, $v, $n>::VALUE_INT_BITS,
             );
-        };
+        }};
     }
     layout!("ptr8", W8Ptr, W8Ptr, 14);
     layout!("int8", W8Ptr, W8Int, 14);
@@ -321,6 +363,12 @@ fn main() {
     println!(
         "Segment header {HEADER_BYTES} B; {REGULAR_BUCKETS} regular + {STASH_BUCKETS} stash = \
          {BUCKETS} buckets of {BUCKET_BYTES} B; R9 reserves {R9_RESERVED_BYTES} B of the header."
+    );
+    println!(
+        "Both sides hash with `{}` — griddle's own default. Structural bytes are charged at the \
+         jemalloc size class, not `size_of`. `hit ns` is the uninstrumented read path; \
+         `hit ns (counted)` is the same lookup with the probe counters on.",
+        std::any::type_name::<memarch_spike_table::table::Hasher>(),
     );
 
     for shape in Shape::ALL {
@@ -356,8 +404,8 @@ fn main() {
 
     println!("\n## Split stall — per-insert timing, `redis-feel`, {n} inserts\n");
     println!("Inserts are bucketed by what they did: plain, split, or split + directory doubling.");
-    println!("| variant | plain p50 | plain p99.9 | plain max | split p50 | split p99 | split max | x2 p50 | x2 max | splits | doublings |");
-    println!("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+    println!("| variant | plain p50 | plain p99.9 | plain max | split p50 | split p99 | split max | x2 p50 | x2 max | splits | doublings | scanned/split | moved/split | ns/moved | dir writes/split |");
+    println!("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
     let pairs = generate(Shape::RedisFeel, n);
     split_stall::<W8Ptr, W8Ptr, 14>("ptr8", &pairs);
     split_stall::<W8Ptr, W8Int, 14>("int8", &pairs);

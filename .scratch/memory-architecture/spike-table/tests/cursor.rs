@@ -8,19 +8,43 @@
 
 use std::collections::HashMap;
 
-use memarch_spike_table::table::Val;
-use memarch_spike_table::{TableHybrid, TableStr7};
+use ahash::RandomState;
+use memarch_spike_table::table::{Table, Val};
+use memarch_spike_table::word::{W16, W8};
+
+/// The table's default hasher (griddle's own, so the sweep compares like with like)
+/// seeds itself from process randomness, which would make a failing scan
+/// unreproducible. These tests pin the seed instead: same keys, same hash, same
+/// split points, every run.
+const SEEDS: [u64; 4] = [
+    0x9E37_79B9_7F4A_7C15,
+    0xBF58_476D_1CE4_E5B9,
+    0x94D0_49BB_1331_11EB,
+    0xD1B5_4A32_D192_ED03,
+];
+
+fn fixed_hasher() -> RandomState {
+    RandomState::with_seeds(SEEDS[0], SEEDS[1], SEEDS[2], SEEDS[3])
+}
+
+/// `TableStr7`/`TableHybrid` with the seed pinned.
+type Str7 = Table<W8, W8, 14, RandomState>;
+type Hybrid = Table<W8, W16, 9, RandomState>;
+
+fn str7() -> Str7 {
+    Str7::with_hasher(fixed_hasher())
+}
 
 /// Runs a full SCAN with `step`, inserting `churn` fresh keys between every step so
 /// the table splits mid-iteration. Returns how many times each key was emitted.
 fn scan_with_churn<F>(
-    table: &mut TableStr7,
+    table: &mut Str7,
     preexisting: usize,
     churn: usize,
     mut step: F,
 ) -> (HashMap<Vec<u8>, u32>, usize, usize)
 where
-    F: FnMut(&TableStr7, u64, &mut Vec<Vec<u8>>) -> u64,
+    F: FnMut(&Str7, u64, &mut Vec<Vec<u8>>) -> u64,
 {
     for i in 0..preexisting {
         let key = format!("pre:{i}").into_bytes();
@@ -57,7 +81,7 @@ where
 #[test]
 fn reverse_binary_cursor_sees_every_preexisting_key_exactly_once() {
     let preexisting = 8_000;
-    let mut table = TableStr7::new();
+    let mut table = str7();
     let (seen, steps, splits) =
         scan_with_churn(&mut table, preexisting, 400, |t, c, out| t.scan(c, out));
 
@@ -95,7 +119,7 @@ fn reverse_binary_cursor_sees_every_preexisting_key_exactly_once() {
 #[test]
 fn linear_directory_cursor_breaks_under_mid_scan_splits() {
     let preexisting = 8_000;
-    let mut table = TableStr7::new();
+    let mut table = str7();
     let (seen, _steps, splits) = scan_with_churn(&mut table, preexisting, 400, |t, c, out| {
         t.scan_linear(c, out)
     });
@@ -123,7 +147,7 @@ fn linear_directory_cursor_breaks_under_mid_scan_splits() {
 
 #[test]
 fn scan_without_mutation_is_exactly_once() {
-    let mut table = TableStr7::new();
+    let mut table = str7();
     for i in 0..20_000 {
         let key = format!("k:{i}").into_bytes();
         assert!(table.insert(&key, Val::Int(i)));
@@ -147,7 +171,7 @@ fn scan_without_mutation_is_exactly_once() {
 /// per alias. This is the case the reverse-binary advance at *local* depth handles.
 #[test]
 fn aliased_directory_entries_are_visited_once() {
-    let mut table = TableStr7::new();
+    let mut table = str7();
     // Aliasing appears the moment one segment splits at the global depth and doubles
     // the directory: every other segment is then one depth short and owns two entries.
     // With a uniform hash the segments catch up again, so stop at the first insert that
@@ -188,7 +212,7 @@ fn aliased_directory_entries_are_visited_once() {
 /// change the cursor, and the proof must hold there too.
 #[test]
 fn cursor_guarantee_holds_for_the_hybrid_layout() {
-    let mut table = TableHybrid::new();
+    let mut table = Hybrid::with_hasher(fixed_hasher());
     let preexisting = 6_000;
     for i in 0..preexisting {
         table.insert(format!("pre:{i}").as_bytes(), Val::Int(i as i64));

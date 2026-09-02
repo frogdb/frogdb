@@ -24,5 +24,10 @@ tikv-jemalloc-sys = { version = "0.6", features = ["stats"] }
 griddle = "0.6"
 bytes = "1"
 
+[dev-dependencies]
+# Fixed-seed hasher for the cursor proof: griddle's default `BuildHasherDefault<AHasher>`
+# seeds itself from process randomness, so a failing scan would not reproduce.
+ahash = "0.8"
+
 [profile.release]
 debug = true
