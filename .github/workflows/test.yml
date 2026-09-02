@@ -241,6 +241,7 @@ jobs:
     - name: Run unit tests
       run: cargo nextest run --all
     - name: Spec ↔ test agreement
+      if: '!cancelled()'
       run: just lint-spec
   cmd-full-build:
     needs: changes

@@ -484,6 +484,10 @@ def test_workflow() -> Workflow:
     # a second compile. Gated on `specs` in addition to `rust` since a spec content
     # change (an `FM-<AREA>-NNN` row added, renamed, or dropped) can break the
     # agreement without touching any Rust source the `rust` filter would catch.
+    # `if: '!cancelled()'` on the lint step: `scripts/spec-lint.py` runs its own
+    # `cargo nextest list` (compile only, no test execution), so its verdict does
+    # not depend on whether `Run unit tests` passed — a flaky test must not mask
+    # spec↔test drift. A cancelled run still skips it.
     unit_tests = w.job(
         "unit-tests",
         Job(
@@ -498,7 +502,11 @@ def test_workflow() -> Workflow:
                 libclang_step(),
                 cargo_cache_step(shared_key="stable"),
                 run_step(name="Run unit tests", run="cargo nextest run --all"),
-                run_step(name="Spec ↔ test agreement", run="just lint-spec"),
+                Step(
+                    name="Spec ↔ test agreement",
+                    if_="!cancelled()",
+                    run="just lint-spec",
+                ),
             ],
         ),
     )
