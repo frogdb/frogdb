@@ -394,6 +394,14 @@ mutants-diff crate base="" *args:
 mutants-gate crate *args:
     ./scripts/mutants-gate.py target/mutants/{{crate}}/mutants.out/outcomes.json --crate {{crate}} {{args}}
 
+# Unit tests for the mutation gate's arithmetic (shard summing, previously_caught)
+#
+# The gate itself only ever runs after a multi-hour mutation run — locally or in
+# `mutants-weekly.yml` — so its scoring rules are pinned against synthetic
+# outcomes files here instead, in under a second.
+test-mutants-gate:
+    ./scripts/tests/test_mutants_gate.py
+
 # The locked-areas manifest: which areas are locked, at what mutation gate,
 # over which crates. Read from the `specs/*.md` header key blocks.
 locked-areas *args:
@@ -856,7 +864,7 @@ lint crate="": lint-gates lint-turmoil-features lint-turmoil lint-spec quint-che
 # second (see agents/seam-lints.md) and is cheap enough to run
 # unconditionally on every commit, unlike `lint` (clippy compiles the
 # workspace). Wired into lefthook pre-commit with no CLAUDECODE skip.
-lint-gates: lint-budget-growth lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-durable-ack lint-nested-config lint-error-sanitize lint-status-sanitize lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate lint-continuation-lock lint-script-write-seam lint-command-admission lint-ship-cmd-full lint-locked-areas
+lint-gates: lint-budget-growth lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-durable-ack lint-nested-config lint-error-sanitize lint-status-sanitize lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate lint-continuation-lock lint-script-write-seam lint-command-admission lint-ship-cmd-full lint-locked-areas test-mutants-gate
     @echo "OK: seam-lint gates passed"
 
 # Gate: turmoil-featured test bodies (frogdb-server/crates/server/tests/simulation.rs)
