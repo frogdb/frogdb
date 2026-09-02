@@ -1,6 +1,6 @@
 # Area mutation scores were measured once, at lock — re-measure them on a schedule
 
-Status: ready-for-agent
+Status: done
 Type: mechanism (enforcement gap)
 Severity: likelihood 2/3 (a diff run cannot see a deleted or weakened test — tests are
 `exclude_globs` — and 15 rows already postdate their area's last run), consequence 2/3 (an area
@@ -54,3 +54,26 @@ Weekly, not nightly: the score drifts slowly and the diff gate covers day-to-day
 and the merge job prints `score: 100.0% (gate: 90.0%)` from the header, with no threshold typed
 anywhere in the workflow. `mutants-gate.py` unit case: two outcome files with 3 caught + 1 missed
 each score 75%, not 75%/75% separately.
+
+## Resolution
+
+Landed on `locked-areas-mechanical/impl` as merge `a29d43a9` (commits `bb9dbdc1`, `c168df48`,
+`cfa223f4`, fix round `cc9a1160`, `ba6beb4c`), 2026-09-02.
+
+- `scripts/mutants-gate.py`: accepts one or more `outcomes.json` files and sums them into one
+  crate score; each file's sibling `previously_caught.txt` counts. `scripts/tests/test_mutants_gate.py`
+  pins the 3+1 / 3+1 → 75% case; `just test-mutants-gate` runs from `lint-gates`.
+- `workflow_gen/workflows/mutants_weekly.py` → `.github/workflows/mutants-weekly.yml`: weekly
+  cron plus `workflow_dispatch` with an optional `crate` input. A `gate` job validates a
+  non-empty `crate` against the manifest crate list baked in at generation time (a typo fails
+  loudly instead of running nothing). Matrix is crate × shard from the manifest (17 mutate legs,
+  8 score legs); each mutate leg uploads `mutants-<crate>-shard-<k>`; the `score` job asserts
+  every shard arrived, then runs `mutants-gate.py` with the gate read from the spec header — no
+  threshold number appears in the YAML (review dropped the `gate` matrix key the brief had
+  carried). Mutate legs tolerate cargo-mutants exit 2/3 so the score job, not the leg, is the
+  verdict. Summary artifact retained 30 days.
+- `CLAUDE.md` / `agents/seam-lints.md`: point at the weekly re-measure; note that `lint-gates`
+  also runs the script self-tests.
+
+Live forcing test (`workflow_dispatch` with `crate: frogdb-txn` prints the score against the
+header gate) runs on the `[ci-verify]` PR per D3.
