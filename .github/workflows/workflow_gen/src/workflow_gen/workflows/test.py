@@ -11,6 +11,7 @@ from workflow_gen.constants import (
     SETUP_GO,
 )
 from workflow_gen.helpers import (
+    MISE_JUST_MUTANTS,
     cargo_cache_step,
     checkout_step,
     ensure_path,
@@ -53,12 +54,9 @@ MISE_JUST_QUINT = "just npm:@informalsystems/quint"
 # `unit-tests` runs `cargo nextest run --all`, which picks up
 # frogdb-cluster's quint_conformance test binary (see that job's comment) —
 # it needs both cargo-nextest and the quint CLI quint-connect shells out to.
-MISE_JUST_NEXTEST_QUINT = "just cargo:cargo-nextest npm:@informalsystems/quint"
-# cargo-mutants shells out to the test tool named in .cargo/mutants.toml, which
-# is nextest — so the mutation job needs both binaries, not just cargo-mutants.
-# python/uv are for the `uv run --script` shebang on scripts/locked_areas.py,
-# which `just mutants-diff` calls to resolve the crate's perimeter and path.
-MISE_JUST_MUTANTS = "python uv just cargo:cargo-mutants cargo:cargo-nextest"
+# python/uv are for the `uv run --script` shebang on scripts/spec-lint.py and
+# scripts/tests/test_spec_lint.py, which the job's `just lint-spec` step runs.
+MISE_UNIT_TESTS = "python uv just cargo:cargo-nextest npm:@informalsystems/quint"
 MISE_PYTHON_WORKFLOW_GEN = "python uv just"
 MISE_PYTHON_LINT = "python uv ruff"
 MISE_HELM = "helm"
@@ -476,7 +474,7 @@ def test_workflow() -> Workflow:
             if_="needs.changes.outputs.rust == 'true' || needs.changes.outputs.specs == 'true'",
             steps=[
                 checkout_step(),
-                mise_setup_step(install_args=MISE_JUST_NEXTEST_QUINT),
+                mise_setup_step(install_args=MISE_UNIT_TESTS),
                 rust_toolchain_step(),
                 libclang_step(),
                 cargo_cache_step(shared_key="stable"),

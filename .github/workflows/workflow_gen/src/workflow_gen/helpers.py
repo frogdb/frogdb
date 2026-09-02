@@ -74,6 +74,14 @@ RUST_VERSION = _read_rust_version()
 # `cargo` is actually missing from PATH.
 RUST_TOOLCHAIN = f"dtolnay/rust-toolchain@{RUST_VERSION}"
 
+# mise install_args for a mutation job, shared by `test.py`'s per-PR
+# `mutants-diff` and `mutants_weekly.py`'s full runs so the two cannot drift.
+# cargo-mutants shells out to the test tool named in .cargo/mutants.toml, which
+# is nextest — so a mutation job needs both binaries, not just cargo-mutants.
+# python/uv are for the `uv run --script` shebang on scripts/locked_areas.py,
+# which the `just mutants*` recipes call to resolve the crate's perimeter and path.
+MISE_JUST_MUTANTS = "python uv just cargo:cargo-mutants cargo:cargo-nextest"
+
 
 # --- Locked-areas manifest ---
 

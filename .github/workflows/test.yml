@@ -219,7 +219,7 @@ jobs:
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
         install: 'true'
-        install_args: just cargo:cargo-nextest npm:@informalsystems/quint
+        install_args: python uv just cargo:cargo-nextest npm:@informalsystems/quint
         cache: 'true'
         experimental: 'true'
     - name: Install Rust 1.92.0
