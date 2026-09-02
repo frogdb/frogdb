@@ -99,10 +99,14 @@ impl BlockSet {
                 .expect("moved member is indexed");
             *slot = idx as u32;
         }
+        self.maybe_compact();
+        true
+    }
+
+    fn maybe_compact(&mut self) {
         if self.store.should_compact() {
             self.store.compact(self.members.iter_mut());
         }
-        true
     }
 
     fn iter(&self) -> impl Iterator<Item = Bytes> + '_ {
@@ -126,6 +130,11 @@ impl BlockSet {
 enum SetEncoding {
     /// Shared [`Listpack`] with one entry per member for small sets.
     /// O(n) lookups — fast for small N due to cache locality.
+    ///
+    /// Reads copy out of the listpack buffer (`Bytes::copy_from_slice`); the
+    /// old bespoke codec returned refcounted slices. The copy is bounded by
+    /// the listpack thresholds and is the price of the shared module the
+    /// issue-13 amendment mandates.
     Listpack(Listpack),
 
     /// Block-backed form for large sets. O(1) lookups, member bytes packed
@@ -188,7 +197,11 @@ impl SetValue {
     /// shape SUNION/SINTER/SDIFF results take (matching the old behavior of
     /// always producing the hash-table form).
     fn from_large_members(members: impl IntoIterator<Item = Bytes>) -> Self {
-        let members: Vec<Bytes> = members.into_iter().collect();
+        let mut members: Vec<Bytes> = members.into_iter().collect();
+        // Sorted insertion makes the block layout — and with it MEMORY
+        // USAGE — a function of the member set alone. The callers feed this
+        // from HashSet iteration, whose order is randomized per process.
+        members.sort_unstable();
         let mut blocks = BlockSet::with_capacity(members.len());
         for m in &members {
             blocks.insert(m);
@@ -344,22 +357,30 @@ impl SetValue {
             return vec![];
         }
 
-        let members: Vec<Bytes> = self.members().collect();
+        let len = self.len();
         let mut rng = rand::rng();
+        // Positional read: both encodings give random access by index, so
+        // sampling never materializes the whole set.
+        let member_at = |i: usize| -> Bytes {
+            match &self.data {
+                SetEncoding::Listpack(lp) => {
+                    Bytes::copy_from_slice(lp.get(i).expect("index in range"))
+                }
+                SetEncoding::Blocks(blocks) => Bytes::copy_from_slice(blocks.member_of(i as u32)),
+            }
+        };
 
         if count > 0 {
-            let count = (count as usize).min(members.len());
-            let mut shuffled = members;
-            shuffled.shuffle(&mut rng);
-            shuffled.into_iter().take(count).collect()
+            let count = (count as usize).min(len);
+            let mut indices: Vec<usize> = (0..len).collect();
+            indices.shuffle(&mut rng);
+            indices.truncate(count);
+            indices.into_iter().map(member_at).collect()
         } else {
-            let count = (-count) as usize;
-            let mut result = Vec::with_capacity(count);
-            for _ in 0..count {
-                let idx = rng.random_range(0..members.len());
-                result.push(members[idx].clone());
-            }
-            result
+            let count = count.unsigned_abs() as usize;
+            (0..count)
+                .map(|_| member_at(rng.random_range(0..len)))
+                .collect()
         }
     }
 
@@ -438,9 +459,9 @@ mod block_form_tests {
     }
 
     #[test]
-    fn churn_keeps_memory_bounded_by_live_payload() {
+    fn churn_keeps_memory_bounded_and_contents_exact() {
         let mut set = SetValue::new();
-        let payload = "m".repeat(200);
+        let payload = "m".repeat(999);
         for round in 0..100u32 {
             for i in 0..64u32 {
                 let member = b(&format!("{payload}-{i}"));
@@ -451,12 +472,39 @@ mod block_form_tests {
             }
         }
         assert_eq!(set.len(), 64);
-        let live_payload: usize = set.members().map(|m| m.len()).sum();
+        // Membership survives the churn and the compactions it forces —
+        // byte-exact, not just counted.
+        for i in 0..64u32 {
+            assert!(set.contains(format!("{payload}-{i}").as_bytes()));
+        }
+        let mut got: Vec<Bytes> = set.members().collect();
+        got.sort();
+        let mut want: Vec<Bytes> = (0..64u32).map(|i| b(&format!("{payload}-{i}"))).collect();
+        want.sort();
+        assert_eq!(got, want);
+        let live_payload: usize = got.iter().map(|m| m.len()).sum();
         let size = set.memory_size();
         assert!(
-            size < live_payload * 4 + 64 * 1024,
+            size < live_payload * 2 + 3 * 16 * 1024,
             "memory_size {size} not within a constant factor of live payload {live_payload}"
         );
+    }
+
+    #[test]
+    fn set_operation_memory_reports_are_run_stable() {
+        // Union results are built from HashSet iteration, whose order is
+        // randomized per instance — the block layout must not inherit that
+        // randomness, or MEMORY USAGE flaps between identical runs.
+        let mut a = SetValue::new();
+        let mut c = SetValue::new();
+        for i in 0..300usize {
+            a.add(b(&format!("alpha-{i:03}-{}", "x".repeat(i % 40))), TINY);
+            c.add(b(&format!("beta-{i:03}-{}", "y".repeat(i % 30))), TINY);
+        }
+        let u1 = a.union([&c].into_iter());
+        let u2 = a.union([&c].into_iter());
+        assert_eq!(u1.len(), 600);
+        assert_eq!(u1.memory_size(), u2.memory_size());
     }
 
     #[derive(Debug, Clone)]

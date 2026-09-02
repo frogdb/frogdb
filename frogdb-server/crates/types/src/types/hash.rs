@@ -95,6 +95,11 @@ impl BlockHash {
         let hash = self.hasher.hash_one(field);
         if let Some(&idx) = self.index.find(hash, |&idx| self.field_of(idx) == field) {
             let old = self.entries[idx as usize].handle;
+            if old.len() == field.len() + value.len() {
+                // Same-size update: overwrite in place, no dead bytes.
+                self.store.overwrite(old, &[field, value]);
+                return false;
+            }
             self.store.remove(old);
             self.entries[idx as usize] = BlockEntry {
                 handle: self.store.append(&[field, value]),
@@ -178,6 +183,11 @@ impl BlockHash {
 enum HashEncoding {
     /// Shared [`Listpack`] with alternating `field, value` entries for small
     /// hashes. O(n) lookups — fast for small N due to cache locality.
+    ///
+    /// Reads copy out of the listpack buffer (`Bytes::copy_from_slice`); the
+    /// old bespoke codec returned refcounted slices. The copy is bounded by
+    /// the listpack thresholds and is the price of the shared module the
+    /// issue-13 amendment mandates.
     Listpack(Listpack),
 
     /// Block-backed form for large hashes. O(1) lookups, entry bytes packed
@@ -462,30 +472,36 @@ impl HashValue {
             return vec![];
         }
 
-        let entries: Vec<(Bytes, Bytes)> = self.iter().collect();
+        let len = self.len();
         let mut rng = rand::rng();
+        // Positional read: both encodings give random access by pair index,
+        // so sampling never materializes the whole hash.
+        let pair_at = |i: usize| -> (Bytes, Option<Bytes>) {
+            match &self.data {
+                HashEncoding::Listpack(lp) => (
+                    Bytes::copy_from_slice(lp.get(i * 2).expect("pair index in range")),
+                    with_values.then(|| {
+                        Bytes::copy_from_slice(lp.get(i * 2 + 1).expect("pair index in range"))
+                    }),
+                ),
+                HashEncoding::Blocks(blocks) => (
+                    Bytes::copy_from_slice(blocks.field_of(i as u32)),
+                    with_values.then(|| Bytes::copy_from_slice(blocks.value_of(i as u32))),
+                ),
+            }
+        };
 
         if count > 0 {
-            let count = (count as usize).min(entries.len());
-            let mut indices: Vec<usize> = (0..entries.len()).collect();
+            let count = (count as usize).min(len);
+            let mut indices: Vec<usize> = (0..len).collect();
             indices.shuffle(&mut rng);
-            indices
-                .into_iter()
-                .take(count)
-                .map(|i| {
-                    let (ref k, ref v) = entries[i];
-                    (k.clone(), if with_values { Some(v.clone()) } else { None })
-                })
-                .collect()
+            indices.truncate(count);
+            indices.into_iter().map(pair_at).collect()
         } else {
             let abs_count = count.unsigned_abs() as usize;
-            let mut result = Vec::with_capacity(abs_count);
-            for _ in 0..abs_count {
-                let idx = rand::rng().random_range(0..entries.len());
-                let (ref k, ref v) = entries[idx];
-                result.push((k.clone(), if with_values { Some(v.clone()) } else { None }));
-            }
-            result
+            (0..abs_count)
+                .map(|_| pair_at(rng.random_range(0..len)))
+                .collect()
         }
     }
 
@@ -661,23 +677,48 @@ mod block_form_tests {
     }
 
     #[test]
-    fn churn_keeps_memory_bounded_by_live_payload() {
+    fn churn_keeps_memory_bounded_and_contents_exact() {
         let mut hash = HashValue::new();
-        let value = "v".repeat(200);
-        // Sustained insert/delete churn: the working set stays at 64 fields
-        // while 6400 records pass through the store.
-        for round in 0..100u32 {
+        let mut model: HashMap<Bytes, Bytes> = HashMap::new();
+        let filler = "v".repeat(999);
+        // Sustained update churn: the working set stays at 64 fields while
+        // ~6400 records pass through the store. Value lengths vary per round
+        // so every update is a remove+append (the same-length path would
+        // overwrite in place and generate no dead bytes to compact).
+        for round in 0..100usize {
             for i in 0..64u32 {
-                hash.set(b(&format!("f{i}")), b(&format!("{value}{round}")), TINY);
+                let field = b(&format!("f{i}"));
+                let val = b(&format!("{}{round}", &filler[..100 + (round % 7) * 128]));
+                hash.set(field.clone(), val.clone(), TINY);
+                model.insert(field, val);
             }
         }
         assert_eq!(hash.len(), 64);
-        let live_payload: usize = hash.iter().map(|(k, v)| k.len() + v.len()).sum();
+        // Contents survive the churn and the compactions it forces —
+        // byte-exact against the model, not just lengths.
+        let mut got: Vec<(Bytes, Bytes)> = hash.iter().collect();
+        let mut want: Vec<(Bytes, Bytes)> = model.into_iter().collect();
+        got.sort();
+        want.sort();
+        assert_eq!(got, want);
+        let live_payload: usize = got.iter().map(|(k, v)| k.len() + v.len()).sum();
         let size = hash.memory_size();
         assert!(
-            size < live_payload * 4 + 64 * 1024,
+            size < live_payload * 2 + 3 * 16 * 1024,
             "memory_size {size} not within a constant factor of live payload {live_payload}"
         );
+    }
+
+    #[test]
+    fn same_length_update_overwrites_in_place() {
+        let mut hash = HashValue::new();
+        for i in 0..10 {
+            hash.set(b(&format!("f{i}")), b("aaaa"), TINY);
+        }
+        assert!(!hash.is_listpack());
+        assert!(!hash.set(b("f5"), b("bbbb"), TINY));
+        assert_eq!(hash.get(b"f5").unwrap(), b("bbbb"));
+        assert_eq!(hash.len(), 10);
     }
 
     #[test]
