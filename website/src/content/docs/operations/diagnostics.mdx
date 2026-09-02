@@ -255,11 +255,13 @@ for a representation it no longer needs:
 
 ```
 127.0.0.1:6379> DEBUG RE-ENCODE bighash
-encoding:listpack memory_before:16384 memory_after:212
+re_encoded:1 encoding:listpack memory_before:16384 memory_after:212
 ```
 
 `memory_after` equal to `memory_before` is a real answer: the value was already compact, or its
-type has only one representation. The rewrite is O(value contents), runs on the shard that owns
+type has only one representation. `re_encoded:0` marks the latter case — a type with a single
+representation (strings, lists, ...) has no encoding choice to remake, so the command reports its
+bytes unchanged rather than failing. The rewrite is O(value contents), runs on the shard that owns
 the key, and changes nothing observable about the value. Nothing invokes it automatically —
 there is no background scan looking for candidates, which is precisely the door the
 no-active-defrag design keeps shut.

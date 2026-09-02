@@ -402,10 +402,16 @@ fn arena_decay(debug: &dyn DebugProvider, args: &[Bytes]) -> Response {
                 );
             }
             let decay = jemalloc::ArenaDecay { dirty_ms, muzzy_ms };
-            for (_, arena) in arenas {
+            let total = arenas.len();
+            for (applied, (_, arena)) in arenas.into_iter().enumerate() {
+                // A mid-loop failure leaves the arenas already visited retuned
+                // — jemalloc has no transactional multi-arena write — so the
+                // error says how far it got. The no-argument form shows the
+                // resulting per-arena state.
                 if let Err(err) = jemalloc::set_arena_decay(arena, decay) {
                     return Response::error(format!(
-                        "ERR DEBUG ARENA-DECAY failed on arena {arena}: {err}"
+                        "ERR DEBUG ARENA-DECAY failed on arena {arena} \
+                         after retuning {applied} of {total} arenas: {err}"
                     ));
                 }
             }
@@ -530,11 +536,16 @@ fn format_object_info(info: &frogdb_core::shard::ObjectInfo) -> Response {
 /// [`format_object_info`] uses.
 ///
 /// `after` equalling `before` is a real answer, not a failure: the value was
-/// already compact, or its type has only one representation.
+/// already compact, or its type has only one representation. `re_encoded:0`
+/// distinguishes the latter — a type with no encoding choice to remake — from
+/// a rewrite that reclaimed nothing.
 fn format_re_encode(result: &frogdb_core::store::ReEncodeResult) -> Response {
     Response::Simple(SafeStatus::sanitized(format!(
-        "encoding:{} memory_before:{} memory_after:{}",
-        result.encoding, result.before_bytes, result.after_bytes,
+        "re_encoded:{} encoding:{} memory_before:{} memory_after:{}",
+        u8::from(result.re_encoded),
+        result.encoding,
+        result.before_bytes,
+        result.after_bytes,
     )))
 }
 
@@ -1636,6 +1647,7 @@ mod tests {
     #[tokio::test]
     async fn re_encode_reports_the_encoding_and_the_memory_on_either_side() {
         let stub = StubDebug::new(true).with_re_encode(frogdb_core::store::ReEncodeResult {
+            re_encoded: true,
             encoding: "listpack",
             before_bytes: 4_096,
             after_bytes: 96,
@@ -1650,7 +1662,7 @@ mod tests {
         match resp {
             Response::Simple(s) => assert_eq!(
                 String::from_utf8_lossy(s.as_bytes()),
-                "encoding:listpack memory_before:4096 memory_after:96"
+                "re_encoded:1 encoding:listpack memory_before:4096 memory_after:96"
             ),
             other => panic!("got {other:?}"),
         }

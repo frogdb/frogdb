@@ -258,17 +258,25 @@ impl Value {
     /// O(entries) and never invoked on its own: this is the escape hatch behind
     /// `DEBUG RE-ENCODE`, deliberately operator-driven so that nothing in the
     /// server ever scans the keyspace looking for values to rewrite.
-    pub fn re_encode(&mut self) -> bool {
+    ///
+    /// The thresholds are parameters, exactly as they are for every write-path
+    /// mutator, so this compaction can never pick an encoding a write would
+    /// not have picked.
+    pub fn re_encode(
+        &mut self,
+        hash_thresholds: ListpackThresholds,
+        set_thresholds: ListpackThresholds,
+    ) -> bool {
         match self {
             Value::Hash(hash) => {
                 *hash = HashValue::from_entries_with_expiries(
                     hash.to_vec_with_expiries(),
-                    ListpackThresholds::DEFAULT_HASH,
+                    hash_thresholds,
                 );
                 true
             }
             Value::Set(set) => {
-                *set = SetValue::from_members(set.to_vec(), ListpackThresholds::DEFAULT_SET);
+                *set = SetValue::from_members(set.to_vec(), set_thresholds);
                 true
             }
             _ => false,
@@ -1572,7 +1580,10 @@ mod tests {
             let mut value = Value::Hash(churned_hash(3));
             let before = value.memory_size();
 
-            assert!(value.re_encode());
+            assert!(value.re_encode(
+                ListpackThresholds::DEFAULT_HASH,
+                ListpackThresholds::DEFAULT_SET
+            ));
 
             let Value::Hash(h) = &value else {
                 panic!("re-encoding must not change the type")
@@ -1596,7 +1607,10 @@ mod tests {
             h.set_field_expiry(&kept[0], deadline);
 
             let mut value = Value::Hash(h);
-            value.re_encode();
+            value.re_encode(
+                ListpackThresholds::DEFAULT_HASH,
+                ListpackThresholds::DEFAULT_SET,
+            );
 
             let Value::Hash(h) = &value else {
                 panic!("re-encoding must not change the type")
@@ -1626,7 +1640,10 @@ mod tests {
 
             let mut value = Value::Set(s);
             let before = value.memory_size();
-            assert!(value.re_encode());
+            assert!(value.re_encode(
+                ListpackThresholds::DEFAULT_HASH,
+                ListpackThresholds::DEFAULT_SET
+            ));
 
             let Value::Set(s) = &value else {
                 panic!("re-encoding must not change the type")
@@ -1643,10 +1660,35 @@ mod tests {
         }
 
         #[test]
+        fn re_encoding_honors_the_thresholds_it_is_given() {
+            // Same churned 3-entry hash, but re-encoded under thresholds too
+            // small for even 3 entries: the choice must follow the parameters,
+            // not the defaults.
+            let mut value = Value::Hash(churned_hash(3));
+            let tiny = ListpackThresholds {
+                max_entries: 2,
+                max_value_bytes: 64,
+            };
+            assert!(value.re_encode(tiny, ListpackThresholds::DEFAULT_SET));
+
+            let Value::Hash(h) = &value else {
+                panic!("re-encoding must not change the type")
+            };
+            assert!(
+                !h.is_listpack(),
+                "3 entries over a max_entries=2 threshold must stay a map"
+            );
+            assert_eq!(h.len(), 3);
+        }
+
+        #[test]
         fn a_value_with_one_representation_has_nothing_to_re_encode() {
             let mut value = Value::String(StringValue::new("v"));
             assert!(
-                !value.re_encode(),
+                !value.re_encode(
+                    ListpackThresholds::DEFAULT_HASH,
+                    ListpackThresholds::DEFAULT_SET
+                ),
                 "a string has no encoding choice to remake"
             );
             let Value::String(s) = &value else {

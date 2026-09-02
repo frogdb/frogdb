@@ -433,6 +433,15 @@ define_metrics! {
         labels: [shard: &str],
     }
 
+    // Naming ruling (memory-architecture issue 20): the brief drafted these as
+    // `frogdb_arena_{allocated,active,dirty_pages,muzzy_pages,retained}_bytes`
+    // with a shard/core label. They ship as `frogdb_allocator_shard_*` labeled
+    // by shard, deliberately: the existing `frogdb_allocator_*` family is the
+    // allocator namespace these extend, and shard — not core or arena id — is
+    // the dimension every other per-shard series here uses. The arena id is an
+    // implementation detail surfaced by `INFO arenas`, not a label. Do not
+    // "correct" these back to the brief's names.
+
     /// Upper bound on the bytes one shard has allocated, from the jemalloc
     /// arena bound to that shard's thread (`stats.arenas.<i>.{small,large}`).
     ///

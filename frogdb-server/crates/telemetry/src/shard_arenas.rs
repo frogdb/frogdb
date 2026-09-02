@@ -446,18 +446,26 @@ impl ArenaSampler {
 /// (ADR-0006 §3), so an unbound thread, or one bound to the automatic arena, is
 /// by construction not a shard.
 fn assert_off_shard_thread(registry: &ShardArenaRegistry, recorder: &dyn MetricsRecorder) {
-    let Some(arena) = jemalloc::current_thread_arena() else {
+    let Some(arena) = shard_arena_of_current_thread(registry) else {
         return;
     };
-    if !registry.holds_arena(arena) {
-        return;
-    }
+    // Count first, assert second: the counter is the production (release)
+    // surface for this bug, and ordering it before the debug assertion lets a
+    // debug test build exercise the same emission the release path performs.
+    ArenaSamplerOnShardThreadTotal::inc(recorder);
     debug_assert!(
         false,
         "the arena sampler is running on the shard thread bound to arena {arena}; it must run \
          on a utility thread, off the pinned shard cores"
     );
-    ArenaSamplerOnShardThreadTotal::inc(recorder);
+}
+
+/// The detection decision alone: the current thread's arena, when that arena
+/// belongs to a shard — i.e. when this thread *is* a shard thread. An unbound
+/// thread, or one bound to an arena outside the registry, is not a shard.
+fn shard_arena_of_current_thread(registry: &ShardArenaRegistry) -> Option<u32> {
+    let arena = jemalloc::current_thread_arena()?;
+    registry.holds_arena(arena).then_some(arena)
 }
 
 #[cfg(test)]
@@ -671,23 +679,28 @@ mod tests {
 
         std::thread::spawn(move || {
             jemalloc::bind_current_thread_to_arena(shard_arena).expect("thread.arena");
-            assert!(
-                registry.holds_arena(jemalloc::current_thread_arena().expect("bound")),
+            assert_eq!(
+                shard_arena_of_current_thread(&registry),
+                Some(shard_arena),
                 "a thread bound to a shard's arena must be recognised as that shard's thread"
             );
-            // The release path is the counter; the debug path is an assertion,
-            // so only the recognition above is exercised in both.
-            #[cfg(not(debug_assertions))]
-            {
+            // The counter is incremented before the debug assertion fires, so
+            // the emission — the one surface a release build has — is
+            // exercised here in both build modes; only the panic differs.
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 assert_off_shard_thread(&registry, &recorder);
-                assert!(
-                    recorder
-                        .encode()
-                        .contains("frogdb_arena_sampler_on_shard_thread_total 1")
-                );
-            }
-            #[cfg(debug_assertions)]
-            let _ = &recorder;
+            }));
+            assert_eq!(
+                outcome.is_err(),
+                cfg!(debug_assertions),
+                "debug builds must fail fast; release builds must only count"
+            );
+            assert!(
+                recorder
+                    .encode()
+                    .contains("frogdb_arena_sampler_on_shard_thread_total 1"),
+                "the counter must record the tick regardless of build mode"
+            );
         })
         .join()
         .expect("shard-shaped thread");
