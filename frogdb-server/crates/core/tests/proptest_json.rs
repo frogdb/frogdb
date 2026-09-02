@@ -474,13 +474,22 @@ fn arb_op() -> impl Strategy<Value = Op> {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(512))]
 
-    /// The tape is a lossless encoding: a parsed document re-serializes to
-    /// exactly the text `serde_json` produces for the same value.
+    /// The tape is a lossless encoding: parsing a document and serializing it
+    /// again produces exactly what `serde_json` produces from the same text.
+    ///
+    /// The baseline is serde's *re-serialization*, not the original text:
+    /// serde_json's default float parser is allowed to land one ULP off the
+    /// nearest double, so `parse -> print` is not the identity for either
+    /// representation. What must hold is that the tape does not add any loss of
+    /// its own.
     #[test]
     fn tape_round_trips_serde_json(value in arb_json()) {
         let text = serde_json::to_string(&value).unwrap();
         let doc = JsonValue::parse(text.as_bytes()).unwrap();
-        prop_assert_eq!(String::from_utf8(doc.to_bytes()).unwrap(), text);
+        let canonical =
+            serde_json::to_string(&serde_json::from_str::<serde_json::Value>(&text).unwrap())
+                .unwrap();
+        prop_assert_eq!(String::from_utf8(doc.to_bytes()).unwrap(), canonical);
     }
 
     /// `memory_size` is a pure function of the document, so MEMORY USAGE does
@@ -500,8 +509,12 @@ proptest! {
         base in prop::collection::vec(("[a-e]{1,2}", arb_json()), 0..5),
         ops in prop::collection::vec(arb_op(), 1..12),
     ) {
-        let mut model = serde_json::Value::Object(base.into_iter().collect());
-        let mut doc = JsonValue::parse(serde_json::to_string(&model).unwrap().as_bytes()).unwrap();
+        // Both sides start from the same parsed document, so the model carries
+        // the doubles serde's parser produced rather than the generator's.
+        let text = serde_json::to_string(&serde_json::Value::Object(base.into_iter().collect()))
+            .unwrap();
+        let mut model: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let mut doc = JsonValue::parse(text.as_bytes()).unwrap();
 
         for op in ops {
             let entries = match &mut model {
