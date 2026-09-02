@@ -179,8 +179,26 @@ class MatrixInclude:
 
 
 @dataclass
+class MatrixExpr:
+    """A matrix dimension whose legs come from a runtime expression.
+
+    `MatrixInclude` emits a static `include:` list, which cannot express
+    `crate: ${{ fromJSON(needs.changes.outputs.mutants_matrix) }}` — a matrix
+    whose legs are only known once an earlier job has computed them.
+    """
+
+    dimension: str
+    expression: str
+
+    def to_yaml(self) -> CommentedMap:
+        m = CommentedMap()
+        m[self.dimension] = self.expression
+        return m
+
+
+@dataclass
 class Strategy:
-    matrix: MatrixInclude
+    matrix: MatrixInclude | MatrixExpr
     fail_fast: bool = False
 
     def to_yaml(self) -> CommentedMap:
@@ -235,6 +253,7 @@ class Job:
     steps: list[Step] = field(default_factory=list)
     permissions: Permissions | None = None
     strategy: Strategy | None = None
+    concurrency: Concurrency | None = None
     needs: list[str] | str | None = None
     if_: str | None = None
     defaults: Defaults | None = None
@@ -258,6 +277,8 @@ class Job:
             m["timeout-minutes"] = self.timeout_minutes
         if self.permissions is not None:
             m["permissions"] = self.permissions.to_yaml()
+        if self.concurrency is not None:
+            m["concurrency"] = self.concurrency.to_yaml()
         if self.strategy is not None:
             m["strategy"] = self.strategy.to_yaml()
         if self.defaults is not None:
