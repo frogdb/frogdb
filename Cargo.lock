@@ -2204,6 +2204,7 @@ dependencies = [
  "bytes",
  "frogdb-metrics-derive",
  "frogdb-protocol",
+ "hashbrown 0.16.1",
  "murmur3",
  "ordered-float 5.3.0",
  "proptest",

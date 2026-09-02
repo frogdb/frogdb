@@ -1,8 +1,14 @@
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use std::collections::HashMap;
+use std::collections::hash_map::RandomState;
+use std::hash::BuildHasher;
 use std::time::Instant;
 
+use hashbrown::HashTable;
+
 use super::{EitherIter, ListpackThresholds};
+use crate::blockstore::{BlockStore, Handle};
+use crate::listpack::Listpack;
 use crate::types::string_value::IncrementError;
 use crate::types::string_value::format_float;
 
@@ -10,148 +16,157 @@ use rand::RngExt;
 use rand::seq::SliceRandom;
 
 // ============================================================================
-// Hash Listpack Helpers
+// Small form — shared listpack, alternating field/value entries
 // ============================================================================
 
-/// Iterator over field-value pairs in a hash listpack buffer.
-/// Layout: [flen:u16][field_bytes][vlen:u16][value_bytes]... repeated.
-struct ListpackHashIter<'a> {
-    buf: &'a Bytes,
-    pos: usize,
+/// Pair index of `field` in a listpack laid out `field0, value0, field1, ...`,
+/// scanning fields only.
+fn lp_find_field(lp: &Listpack, field: &[u8]) -> Option<usize> {
+    lp.iter()
+        .step_by(2)
+        .position(|candidate| candidate == field)
 }
 
-impl<'a> ListpackHashIter<'a> {
-    fn new(buf: &'a Bytes) -> Self {
-        Self { buf, pos: 0 }
-    }
+/// Iterate `(field, value)` pairs of an alternating listpack as owned `Bytes`.
+fn lp_pairs(lp: &Listpack) -> impl Iterator<Item = (Bytes, Bytes)> + '_ {
+    let mut iter = lp.iter();
+    std::iter::from_fn(move || {
+        let field = iter.next()?;
+        let value = iter.next().expect("hash listpack holds complete pairs");
+        Some((Bytes::copy_from_slice(field), Bytes::copy_from_slice(value)))
+    })
 }
 
-impl Iterator for ListpackHashIter<'_> {
-    type Item = (Bytes, Bytes);
+// ============================================================================
+// Large form — block-backed records indexed by a handle table
+// ============================================================================
 
-    fn next(&mut self) -> Option<(Bytes, Bytes)> {
-        if self.pos >= self.buf.len() {
-            return None;
+/// One hash entry: a `field ++ value` record in the block store, split at
+/// `field_len`.
+#[derive(Debug, Clone, Copy)]
+struct BlockEntry {
+    handle: Handle,
+    field_len: u32,
+}
+
+/// Large-hash form: entry bytes live in [`BlockStore`] blocks, a dense vec
+/// carries the handles (giving HRANDFIELD-style random access by position),
+/// and a [`HashTable`] of indices into that vec gives O(1) field lookup — the
+/// hash-table *index* survives, the per-entry `Bytes` allocations do not.
+#[derive(Debug, Clone)]
+struct BlockHash {
+    store: BlockStore,
+    entries: Vec<BlockEntry>,
+    index: HashTable<u32>,
+    hasher: RandomState,
+}
+
+impl BlockHash {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            store: BlockStore::new(),
+            entries: Vec::with_capacity(capacity),
+            index: HashTable::with_capacity(capacity),
+            hasher: RandomState::new(),
         }
-        let flen = u16::from_le_bytes([self.buf[self.pos], self.buf[self.pos + 1]]) as usize;
-        self.pos += 2;
-        let field = self.buf.slice(self.pos..self.pos + flen);
-        self.pos += flen;
-        let vlen = u16::from_le_bytes([self.buf[self.pos], self.buf[self.pos + 1]]) as usize;
-        self.pos += 2;
-        let value = self.buf.slice(self.pos..self.pos + vlen);
-        self.pos += vlen;
-        Some((field, value))
     }
 
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (0, None)
+    #[inline]
+    fn field_of(&self, idx: u32) -> &[u8] {
+        let entry = self.entries[idx as usize];
+        &self.store.get(entry.handle)[..entry.field_len as usize]
     }
-}
 
-/// Find a field in a hash listpack buffer, returning its value as a zero-copy slice.
-fn lp_hash_get(buf: &Bytes, field: &[u8]) -> Option<Bytes> {
-    let mut pos = 0;
-    while pos < buf.len() {
-        let flen = u16::from_le_bytes([buf[pos], buf[pos + 1]]) as usize;
-        pos += 2;
-        let matches = &buf[pos..pos + flen] == field;
-        pos += flen;
-        let vlen = u16::from_le_bytes([buf[pos], buf[pos + 1]]) as usize;
-        pos += 2;
-        if matches {
-            return Some(buf.slice(pos..pos + vlen));
+    #[inline]
+    fn value_of(&self, idx: u32) -> &[u8] {
+        let entry = self.entries[idx as usize];
+        &self.store.get(entry.handle)[entry.field_len as usize..]
+    }
+
+    fn find(&self, field: &[u8]) -> Option<u32> {
+        let hash = self.hasher.hash_one(field);
+        self.index
+            .find(hash, |&idx| self.field_of(idx) == field)
+            .copied()
+    }
+
+    /// Insert or update. Returns true when the field is new.
+    fn insert(&mut self, field: &[u8], value: &[u8]) -> bool {
+        let hash = self.hasher.hash_one(field);
+        if let Some(&idx) = self.index.find(hash, |&idx| self.field_of(idx) == field) {
+            let old = self.entries[idx as usize].handle;
+            self.store.remove(old);
+            self.entries[idx as usize] = BlockEntry {
+                handle: self.store.append(&[field, value]),
+                field_len: field.len() as u32,
+            };
+            self.maybe_compact();
+            return false;
         }
-        pos += vlen;
+        let handle = self.store.append(&[field, value]);
+        let idx = self.entries.len() as u32;
+        self.entries.push(BlockEntry {
+            handle,
+            field_len: field.len() as u32,
+        });
+        let (entries, store, hasher) = (&self.entries, &self.store, &self.hasher);
+        self.index.insert_unique(hash, idx, |&i| {
+            let entry = entries[i as usize];
+            hasher.hash_one(&store.get(entry.handle)[..entry.field_len as usize])
+        });
+        true
     }
-    None
-}
 
-/// Check if a field exists in a hash listpack buffer.
-fn lp_hash_contains(buf: &[u8], field: &[u8]) -> bool {
-    let mut pos = 0;
-    while pos < buf.len() {
-        let flen = u16::from_le_bytes([buf[pos], buf[pos + 1]]) as usize;
-        pos += 2;
-        if &buf[pos..pos + flen] == field {
-            return true;
+    /// Remove a field. Returns true when it existed.
+    fn remove(&mut self, field: &[u8]) -> bool {
+        let hash = self.hasher.hash_one(field);
+        let (index, entries, store) = (&mut self.index, &self.entries, &self.store);
+        let idx = match index.find_entry(hash, |&idx| {
+            let entry = entries[idx as usize];
+            &store.get(entry.handle)[..entry.field_len as usize] == field
+        }) {
+            Ok(occupied) => occupied.remove().0,
+            Err(_) => return false,
+        };
+        let idx = idx as usize;
+        let entry = self.entries.swap_remove(idx);
+        self.store.remove(entry.handle);
+        if idx < self.entries.len() {
+            // The former last entry moved into `idx`; repoint its index slot.
+            let moved_from = self.entries.len() as u32;
+            let moved_hash = self.hasher.hash_one(self.field_of(idx as u32));
+            let slot = self
+                .index
+                .find_mut(moved_hash, |&i| i == moved_from)
+                .expect("moved entry is indexed");
+            *slot = idx as u32;
         }
-        pos += flen;
-        let vlen = u16::from_le_bytes([buf[pos], buf[pos + 1]]) as usize;
-        pos += 2 + vlen;
+        self.maybe_compact();
+        true
     }
-    false
-}
 
-/// Rebuild a hash listpack buffer with a field set or updated.
-/// Returns (new_buf, new_len, was_new_field).
-fn lp_hash_set(old_buf: &[u8], old_len: u16, field: &[u8], value: &[u8]) -> (Bytes, u16, bool) {
-    let mut new_buf = BytesMut::with_capacity(old_buf.len() + 2 + field.len() + 2 + value.len());
-    let mut pos = 0;
-    let mut found = false;
-
-    while pos < old_buf.len() {
-        let flen = u16::from_le_bytes([old_buf[pos], old_buf[pos + 1]]) as usize;
-        pos += 2;
-        let existing_field = &old_buf[pos..pos + flen];
-        pos += flen;
-        let vlen = u16::from_le_bytes([old_buf[pos], old_buf[pos + 1]]) as usize;
-        pos += 2;
-
-        if existing_field == field {
-            new_buf.extend_from_slice(&(flen as u16).to_le_bytes());
-            new_buf.extend_from_slice(existing_field);
-            new_buf.extend_from_slice(&(value.len() as u16).to_le_bytes());
-            new_buf.extend_from_slice(value);
-            found = true;
-        } else {
-            new_buf.extend_from_slice(&(flen as u16).to_le_bytes());
-            new_buf.extend_from_slice(existing_field);
-            new_buf.extend_from_slice(&(vlen as u16).to_le_bytes());
-            new_buf.extend_from_slice(&old_buf[pos..pos + vlen]);
+    fn maybe_compact(&mut self) {
+        if self.store.should_compact() {
+            self.store
+                .compact(self.entries.iter_mut().map(|entry| &mut entry.handle));
         }
-        pos += vlen;
     }
 
-    if !found {
-        new_buf.extend_from_slice(&(field.len() as u16).to_le_bytes());
-        new_buf.extend_from_slice(field);
-        new_buf.extend_from_slice(&(value.len() as u16).to_le_bytes());
-        new_buf.extend_from_slice(value);
+    fn iter(&self) -> impl Iterator<Item = (Bytes, Bytes)> + '_ {
+        (0..self.entries.len() as u32).map(|idx| {
+            (
+                Bytes::copy_from_slice(self.field_of(idx)),
+                Bytes::copy_from_slice(self.value_of(idx)),
+            )
+        })
     }
 
-    let new_len = if found { old_len } else { old_len + 1 };
-    (new_buf.freeze(), new_len, !found)
-}
-
-/// Rebuild a hash listpack buffer with a field removed.
-/// Returns (new_buf, new_len, was_removed).
-fn lp_hash_remove(old_buf: &[u8], old_len: u16, field: &[u8]) -> (Bytes, u16, bool) {
-    let mut new_buf = BytesMut::with_capacity(old_buf.len());
-    let mut pos = 0;
-    let mut found = false;
-
-    while pos < old_buf.len() {
-        let flen = u16::from_le_bytes([old_buf[pos], old_buf[pos + 1]]) as usize;
-        pos += 2;
-        let existing_field = &old_buf[pos..pos + flen];
-        pos += flen;
-        let vlen = u16::from_le_bytes([old_buf[pos], old_buf[pos + 1]]) as usize;
-        pos += 2;
-
-        if existing_field == field {
-            found = true;
-        } else {
-            new_buf.extend_from_slice(&(flen as u16).to_le_bytes());
-            new_buf.extend_from_slice(existing_field);
-            new_buf.extend_from_slice(&(vlen as u16).to_le_bytes());
-            new_buf.extend_from_slice(&old_buf[pos..pos + vlen]);
-        }
-        pos += vlen;
+    fn memory_size(&self) -> usize {
+        self.store.allocated_bytes()
+            + self.entries.capacity() * std::mem::size_of::<BlockEntry>()
+            // Index: one u32 slot plus ~1 control byte per capacity slot.
+            + self.index.capacity() * (std::mem::size_of::<u32>() + 1)
     }
-
-    let new_len = if found { old_len - 1 } else { old_len };
-    (new_buf.freeze(), new_len, found)
 }
 
 // ============================================================================
@@ -161,22 +176,18 @@ fn lp_hash_remove(old_buf: &[u8], old_len: u16, field: &[u8]) -> (Bytes, u16, bo
 /// Internal encoding for hash values.
 #[derive(Debug, Clone)]
 enum HashEncoding {
-    /// Contiguous byte buffer for small hashes.
-    /// Layout: [flen:u16][field_bytes][vlen:u16][value_bytes]... repeated per entry.
-    /// O(n) lookups — fast for small N due to cache locality.
-    /// Per-entry overhead: 4 bytes (two u16 length prefixes).
-    Listpack { buf: Bytes, len: u16 },
+    /// Shared [`Listpack`] with alternating `field, value` entries for small
+    /// hashes. O(n) lookups — fast for small N due to cache locality.
+    Listpack(Listpack),
 
-    /// Standard hash table for large hashes. O(1) lookups.
-    HashMap(HashMap<Bytes, Bytes>),
+    /// Block-backed form for large hashes. O(1) lookups, entry bytes packed
+    /// into shared blocks instead of per-entry allocations.
+    Blocks(BlockHash),
 }
 
 impl Default for HashEncoding {
     fn default() -> Self {
-        HashEncoding::Listpack {
-            buf: Bytes::new(),
-            len: 0,
-        }
+        HashEncoding::Listpack(Listpack::new())
     }
 }
 
@@ -215,23 +226,22 @@ impl HashValue {
             });
 
         if use_listpack {
-            let mut buf = BytesMut::new();
+            let mut lp = Listpack::new();
             for (k, v) in &entries {
-                buf.extend_from_slice(&(k.len() as u16).to_le_bytes());
-                buf.extend_from_slice(k);
-                buf.extend_from_slice(&(v.len() as u16).to_le_bytes());
-                buf.extend_from_slice(v);
+                lp.push_back(k);
+                lp.push_back(v);
             }
             Self {
-                data: HashEncoding::Listpack {
-                    buf: buf.freeze(),
-                    len: entries.len() as u16,
-                },
+                data: HashEncoding::Listpack(lp),
                 field_expiries: None,
             }
         } else {
+            let mut blocks = BlockHash::with_capacity(entries.len());
+            for (k, v) in &entries {
+                blocks.insert(k, v);
+            }
             Self {
-                data: HashEncoding::HashMap(entries.into_iter().collect()),
+                data: HashEncoding::Blocks(blocks),
                 field_expiries: None,
             }
         }
@@ -239,14 +249,14 @@ impl HashValue {
 
     /// Whether this hash uses listpack encoding.
     pub fn is_listpack(&self) -> bool {
-        matches!(self.data, HashEncoding::Listpack { .. })
+        matches!(self.data, HashEncoding::Listpack(_))
     }
 
     /// Get the number of fields.
     pub fn len(&self) -> usize {
         match &self.data {
-            HashEncoding::Listpack { len, .. } => *len as usize,
-            HashEncoding::HashMap(map) => map.len(),
+            HashEncoding::Listpack(lp) => lp.len() / 2,
+            HashEncoding::Blocks(blocks) => blocks.entries.len(),
         }
     }
 
@@ -255,44 +265,45 @@ impl HashValue {
         self.len() == 0
     }
 
-    /// Set a field value. Promotes to HashMap if thresholds are exceeded.
+    /// Set a field value. Promotes to the block-backed form if thresholds are
+    /// exceeded.
     ///
     /// Returns true if the field is new, false if it was updated.
     pub fn set(&mut self, field: Bytes, value: Bytes, thresholds: ListpackThresholds) -> bool {
         self.remove_field_expiry(&field);
-        let data = std::mem::take(&mut self.data);
-        match data {
-            HashEncoding::Listpack { buf, len } => {
-                let would_be_new = !lp_hash_contains(&buf, &field);
-                let new_count = if would_be_new {
-                    len as usize + 1
+        match &mut self.data {
+            HashEncoding::Listpack(lp) => {
+                let existing = lp_find_field(lp, &field);
+                let new_count = if existing.is_some() {
+                    lp.len() / 2
                 } else {
-                    len as usize
+                    lp.len() / 2 + 1
                 };
 
                 if new_count > thresholds.max_entries
                     || field.len() > thresholds.max_value_bytes
                     || value.len() > thresholds.max_value_bytes
                 {
-                    // Promote to HashMap
-                    let mut map: HashMap<Bytes, Bytes> = ListpackHashIter::new(&buf).collect();
-                    let was_new = map.insert(field, value).is_none();
-                    self.data = HashEncoding::HashMap(map);
+                    // Promote to the block-backed form.
+                    let mut blocks = BlockHash::with_capacity(new_count);
+                    let mut iter = lp.iter();
+                    while let Some(f) = iter.next() {
+                        let v = iter.next().expect("hash listpack holds complete pairs");
+                        blocks.insert(f, v);
+                    }
+                    let was_new = blocks.insert(&field, &value);
+                    self.data = HashEncoding::Blocks(blocks);
                     was_new
+                } else if let Some(pair) = existing {
+                    lp.replace(pair * 2 + 1, &value);
+                    false
                 } else {
-                    let (new_buf, new_len, was_new) = lp_hash_set(&buf, len, &field, &value);
-                    self.data = HashEncoding::Listpack {
-                        buf: new_buf,
-                        len: new_len,
-                    };
-                    was_new
+                    lp.push_back(&field);
+                    lp.push_back(&value);
+                    true
                 }
             }
-            HashEncoding::HashMap(mut map) => {
-                let was_new = map.insert(field, value).is_none();
-                self.data = HashEncoding::HashMap(map);
-                was_new
-            }
+            HashEncoding::Blocks(blocks) => blocks.insert(&field, &value),
         }
     }
 
@@ -306,11 +317,18 @@ impl HashValue {
         self.set(field, value, thresholds)
     }
 
-    /// Get a field value (zero-copy for listpack encoding).
+    /// Get a field value.
     pub fn get(&self, field: &[u8]) -> Option<Bytes> {
         match &self.data {
-            HashEncoding::Listpack { buf, .. } => lp_hash_get(buf, field),
-            HashEncoding::HashMap(map) => map.get(field).cloned(),
+            HashEncoding::Listpack(lp) => {
+                let pair = lp_find_field(lp, field)?;
+                Some(Bytes::copy_from_slice(
+                    lp.get(pair * 2 + 1).expect("value entry follows field"),
+                ))
+            }
+            HashEncoding::Blocks(blocks) => blocks
+                .find(field)
+                .map(|idx| Bytes::copy_from_slice(blocks.value_of(idx))),
         }
     }
 
@@ -319,59 +337,59 @@ impl HashValue {
     /// Returns true if the field existed.
     pub fn remove(&mut self, field: &[u8]) -> bool {
         self.remove_field_expiry(field);
-        let data = std::mem::take(&mut self.data);
-        match data {
-            HashEncoding::Listpack { buf, len } => {
-                let (new_buf, new_len, was_removed) = lp_hash_remove(&buf, len, field);
-                self.data = HashEncoding::Listpack {
-                    buf: new_buf,
-                    len: new_len,
-                };
-                was_removed
-            }
-            HashEncoding::HashMap(mut map) => {
-                let was_removed = map.remove(field).is_some();
-                self.data = HashEncoding::HashMap(map);
-                was_removed
-            }
+        match &mut self.data {
+            HashEncoding::Listpack(lp) => match lp_find_field(lp, field) {
+                Some(pair) => {
+                    // Field entry first, then the value that slid into its place.
+                    lp.remove(pair * 2);
+                    lp.remove(pair * 2);
+                    true
+                }
+                None => false,
+            },
+            HashEncoding::Blocks(blocks) => blocks.remove(field),
         }
     }
 
     /// Check if a field exists.
     pub fn contains(&self, field: &[u8]) -> bool {
         match &self.data {
-            HashEncoding::Listpack { buf, .. } => lp_hash_contains(buf, field),
-            HashEncoding::HashMap(map) => map.contains_key(field),
+            HashEncoding::Listpack(lp) => lp_find_field(lp, field).is_some(),
+            HashEncoding::Blocks(blocks) => blocks.find(field).is_some(),
         }
     }
 
     /// Get all field names.
     pub fn keys(&self) -> impl Iterator<Item = Bytes> + '_ {
         match &self.data {
-            HashEncoding::Listpack { buf, .. } => {
-                EitherIter::Left(ListpackHashIter::new(buf).map(|(k, _)| k))
+            HashEncoding::Listpack(lp) => {
+                EitherIter::Left(lp.iter().step_by(2).map(Bytes::copy_from_slice))
             }
-            HashEncoding::HashMap(map) => EitherIter::Right(map.keys().cloned()),
+            HashEncoding::Blocks(blocks) => EitherIter::Right(
+                (0..blocks.entries.len() as u32)
+                    .map(|idx| Bytes::copy_from_slice(blocks.field_of(idx))),
+            ),
         }
     }
 
     /// Get all values.
     pub fn values(&self) -> impl Iterator<Item = Bytes> + '_ {
         match &self.data {
-            HashEncoding::Listpack { buf, .. } => {
-                EitherIter::Left(ListpackHashIter::new(buf).map(|(_, v)| v))
+            HashEncoding::Listpack(lp) => {
+                EitherIter::Left(lp.iter().skip(1).step_by(2).map(Bytes::copy_from_slice))
             }
-            HashEncoding::HashMap(map) => EitherIter::Right(map.values().cloned()),
+            HashEncoding::Blocks(blocks) => EitherIter::Right(
+                (0..blocks.entries.len() as u32)
+                    .map(|idx| Bytes::copy_from_slice(blocks.value_of(idx))),
+            ),
         }
     }
 
     /// Iterate over all field-value pairs.
     pub fn iter(&self) -> impl Iterator<Item = (Bytes, Bytes)> + '_ {
         match &self.data {
-            HashEncoding::Listpack { buf, .. } => EitherIter::Left(ListpackHashIter::new(buf)),
-            HashEncoding::HashMap(map) => {
-                EitherIter::Right(map.iter().map(|(k, v)| (k.clone(), v.clone())))
-            }
+            HashEncoding::Listpack(lp) => EitherIter::Left(lp_pairs(lp)),
+            HashEncoding::Blocks(blocks) => EitherIter::Right(blocks.iter()),
         }
     }
 
@@ -475,8 +493,8 @@ impl HashValue {
     pub fn memory_size(&self) -> usize {
         let base_size = std::mem::size_of::<Self>();
         let data_size = match &self.data {
-            HashEncoding::Listpack { buf, .. } => buf.len(),
-            HashEncoding::HashMap(map) => map.iter().map(|(k, v)| k.len() + v.len() + 32).sum(),
+            HashEncoding::Listpack(lp) => lp.byte_len(),
+            HashEncoding::Blocks(blocks) => blocks.memory_size(),
         };
         let expiry_size = self
             .field_expiries
@@ -583,5 +601,164 @@ impl HashValue {
                 (field, value, expiry)
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod block_form_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// Tiny thresholds so every test operates on the block-backed form after a
+    /// handful of inserts.
+    const TINY: ListpackThresholds = ListpackThresholds {
+        max_entries: 4,
+        max_value_bytes: 16,
+    };
+
+    fn b(s: &str) -> Bytes {
+        Bytes::copy_from_slice(s.as_bytes())
+    }
+
+    #[test]
+    fn promotion_preserves_contents_and_updates_in_place() {
+        let mut hash = HashValue::new();
+        for i in 0..10 {
+            assert!(hash.set(b(&format!("f{i}")), b(&format!("v{i}")), TINY));
+        }
+        assert!(!hash.is_listpack(), "10 > 4 entries must promote");
+        assert_eq!(hash.len(), 10);
+        for i in 0..10 {
+            assert_eq!(
+                hash.get(format!("f{i}").as_bytes()).unwrap(),
+                b(&format!("v{i}"))
+            );
+        }
+        // Update is not an insert.
+        assert!(!hash.set(b("f3"), b("updated"), TINY));
+        assert_eq!(hash.get(b"f3").unwrap(), b("updated"));
+        assert_eq!(hash.len(), 10);
+    }
+
+    #[test]
+    fn swap_remove_keeps_the_index_consistent() {
+        let mut hash = HashValue::new();
+        for i in 0..32 {
+            hash.set(b(&format!("field-{i}")), b(&format!("value-{i}")), TINY);
+        }
+        // Remove from the front so swap_remove keeps relocating tail entries.
+        for i in 0..16 {
+            assert!(hash.remove(format!("field-{i}").as_bytes()));
+            assert!(!hash.remove(format!("field-{i}").as_bytes()));
+        }
+        assert_eq!(hash.len(), 16);
+        for i in 16..32 {
+            assert_eq!(
+                hash.get(format!("field-{i}").as_bytes()).unwrap(),
+                b(&format!("value-{i}"))
+            );
+        }
+    }
+
+    #[test]
+    fn churn_keeps_memory_bounded_by_live_payload() {
+        let mut hash = HashValue::new();
+        let value = "v".repeat(200);
+        // Sustained insert/delete churn: the working set stays at 64 fields
+        // while 6400 records pass through the store.
+        for round in 0..100u32 {
+            for i in 0..64u32 {
+                hash.set(b(&format!("f{i}")), b(&format!("{value}{round}")), TINY);
+            }
+        }
+        assert_eq!(hash.len(), 64);
+        let live_payload: usize = hash.iter().map(|(k, v)| k.len() + v.len()).sum();
+        let size = hash.memory_size();
+        assert!(
+            size < live_payload * 4 + 64 * 1024,
+            "memory_size {size} not within a constant factor of live payload {live_payload}"
+        );
+    }
+
+    #[test]
+    fn listpack_update_and_remove_preserve_insertion_order() {
+        let mut hash = HashValue::new();
+        let thresholds = ListpackThresholds::DEFAULT_HASH;
+        hash.set(b("a"), b("1"), thresholds);
+        hash.set(b("b"), b("2"), thresholds);
+        hash.set(b("c"), b("3"), thresholds);
+        assert!(hash.is_listpack());
+        // Updating a middle field keeps its position.
+        hash.set(b("b"), b("two"), thresholds);
+        let pairs: Vec<(Bytes, Bytes)> = hash.iter().collect();
+        assert_eq!(
+            pairs,
+            vec![(b("a"), b("1")), (b("b"), b("two")), (b("c"), b("3"))]
+        );
+        assert!(hash.remove(b"b"));
+        let pairs: Vec<(Bytes, Bytes)> = hash.iter().collect();
+        assert_eq!(pairs, vec![(b("a"), b("1")), (b("c"), b("3"))]);
+    }
+
+    /// Model-based fuzz: a random op sequence on the block-backed form must
+    /// agree with a plain `HashMap` model, across promotion and compaction.
+    #[derive(Debug, Clone)]
+    enum Op {
+        Set(u8, Vec<u8>),
+        Remove(u8),
+        Get(u8),
+    }
+
+    fn op_strategy() -> impl Strategy<Value = Op> {
+        prop_oneof![
+            (any::<u8>(), proptest::collection::vec(any::<u8>(), 0..300))
+                .prop_map(|(k, v)| Op::Set(k, v)),
+            any::<u8>().prop_map(Op::Remove),
+            any::<u8>().prop_map(Op::Get),
+        ]
+    }
+
+    proptest! {
+        #[test]
+        fn block_hash_matches_hashmap_model(ops in proptest::collection::vec(op_strategy(), 1..400)) {
+            let thresholds = ListpackThresholds { max_entries: 8, max_value_bytes: 32 };
+            let mut hash = HashValue::new();
+            let mut model: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
+
+            for op in ops {
+                match op {
+                    Op::Set(k, v) => {
+                        let key = format!("key-{k}").into_bytes();
+                        let was_new = hash.set(
+                            Bytes::from(key.clone()),
+                            Bytes::copy_from_slice(&v),
+                            thresholds,
+                        );
+                        let model_new = model.insert(key, v).is_none();
+                        prop_assert_eq!(was_new, model_new);
+                    }
+                    Op::Remove(k) => {
+                        let key = format!("key-{k}").into_bytes();
+                        prop_assert_eq!(hash.remove(&key), model.remove(&key).is_some());
+                    }
+                    Op::Get(k) => {
+                        let key = format!("key-{k}").into_bytes();
+                        let got = hash.get(&key);
+                        let want = model.get(&key);
+                        prop_assert_eq!(got.as_deref(), want.map(|v| v.as_slice()));
+                        prop_assert_eq!(hash.contains(&key), want.is_some());
+                    }
+                }
+                prop_assert_eq!(hash.len(), model.len());
+            }
+
+            let mut got: Vec<(Vec<u8>, Vec<u8>)> =
+                hash.iter().map(|(k, v)| (k.to_vec(), v.to_vec())).collect();
+            let mut want: Vec<(Vec<u8>, Vec<u8>)> =
+                model.into_iter().collect();
+            got.sort();
+            want.sort();
+            prop_assert_eq!(got, want);
+        }
     }
 }

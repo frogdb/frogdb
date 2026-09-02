@@ -86,9 +86,11 @@ KEYSPACE_MODULES = (
     "frogdb-server/crates/types/src/json/",
     "frogdb-server/crates/types/src/bloom.rs",
     "frogdb-server/crates/types/src/cuckoo.rs",
-    # The block encoding those value representations are built from — a
-    # listpack buffer holds element bytes, so it is keyspace memory too.
+    # The block encodings those value representations are built from — a
+    # listpack buffer and a blockstore block hold element bytes, so they are
+    # keyspace memory too.
     "frogdb-server/crates/types/src/listpack.rs",
+    "frogdb-server/crates/types/src/blockstore.rs",
     "frogdb-server/crates/types/src/skiplist.rs",
     "frogdb-server/crates/types/src/tdigest.rs",
     "frogdb-server/crates/types/src/topk.rs",

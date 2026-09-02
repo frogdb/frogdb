@@ -5,6 +5,7 @@
 
 pub mod args;
 pub mod bitmap;
+pub mod blockstore;
 pub mod bloom;
 pub mod catalog;
 pub mod clock;

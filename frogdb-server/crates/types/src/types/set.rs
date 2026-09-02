@@ -1,58 +1,120 @@
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use rand::RngExt;
 use rand::seq::SliceRandom;
 use std::collections::HashSet;
+use std::collections::hash_map::RandomState;
+use std::hash::BuildHasher;
+
+use hashbrown::HashTable;
 
 use super::{EitherIter, ListpackThresholds};
+use crate::blockstore::{BlockStore, Handle};
+use crate::listpack::Listpack;
 
 // ============================================================================
-// Set Listpack Helpers
+// Small form — shared listpack, one entry per member
 // ============================================================================
 
-/// Iterator over members in a set listpack buffer.
-/// Layout: [mlen:u16][member_bytes]... repeated.
-struct ListpackSetIter<'a> {
-    buf: &'a Bytes,
-    pos: usize,
+/// Index of `member` in the listpack, if present.
+fn lp_find_member(lp: &Listpack, member: &[u8]) -> Option<usize> {
+    lp.iter().position(|candidate| candidate == member)
 }
 
-impl<'a> ListpackSetIter<'a> {
-    fn new(buf: &'a Bytes) -> Self {
-        Self { buf, pos: 0 }
-    }
+// ============================================================================
+// Large form — block-backed members indexed by a handle table
+// ============================================================================
+
+/// Large-set form: member bytes live in [`BlockStore`] blocks, a dense vec
+/// carries the handles (SRANDMEMBER/SPOP-style random access by position),
+/// and a [`HashTable`] of indices into that vec gives O(1) membership — the
+/// hash-table *index* survives, the per-member `Bytes` allocations do not.
+#[derive(Debug, Clone)]
+struct BlockSet {
+    store: BlockStore,
+    members: Vec<Handle>,
+    index: HashTable<u32>,
+    hasher: RandomState,
 }
 
-impl Iterator for ListpackSetIter<'_> {
-    type Item = Bytes;
-
-    fn next(&mut self) -> Option<Bytes> {
-        if self.pos >= self.buf.len() {
-            return None;
+impl BlockSet {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            store: BlockStore::new(),
+            members: Vec::with_capacity(capacity),
+            index: HashTable::with_capacity(capacity),
+            hasher: RandomState::new(),
         }
-        let mlen = u16::from_le_bytes([self.buf[self.pos], self.buf[self.pos + 1]]) as usize;
-        self.pos += 2;
-        let member = self.buf.slice(self.pos..self.pos + mlen);
-        self.pos += mlen;
-        Some(member)
     }
 
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (0, None)
+    #[inline]
+    fn member_of(&self, idx: u32) -> &[u8] {
+        self.store.get(self.members[idx as usize])
     }
-}
 
-/// Check if a member exists in a set listpack buffer.
-fn lp_set_contains(buf: &[u8], member: &[u8]) -> bool {
-    let mut pos = 0;
-    while pos < buf.len() {
-        let mlen = u16::from_le_bytes([buf[pos], buf[pos + 1]]) as usize;
-        pos += 2;
-        if &buf[pos..pos + mlen] == member {
-            return true;
+    fn contains(&self, member: &[u8]) -> bool {
+        let hash = self.hasher.hash_one(member);
+        self.index
+            .find(hash, |&idx| self.member_of(idx) == member)
+            .is_some()
+    }
+
+    /// Add a member. Returns true when it was new.
+    fn insert(&mut self, member: &[u8]) -> bool {
+        let hash = self.hasher.hash_one(member);
+        if self
+            .index
+            .find(hash, |&idx| self.member_of(idx) == member)
+            .is_some()
+        {
+            return false;
         }
-        pos += mlen;
+        let handle = self.store.append(&[member]);
+        let idx = self.members.len() as u32;
+        self.members.push(handle);
+        let (members, store, hasher) = (&self.members, &self.store, &self.hasher);
+        self.index.insert_unique(hash, idx, |&i| {
+            hasher.hash_one(store.get(members[i as usize]))
+        });
+        true
     }
-    false
+
+    /// Remove a member. Returns true when it existed.
+    fn remove(&mut self, member: &[u8]) -> bool {
+        let hash = self.hasher.hash_one(member);
+        let (index, members, store) = (&mut self.index, &self.members, &self.store);
+        let idx = match index.find_entry(hash, |&idx| store.get(members[idx as usize]) == member) {
+            Ok(occupied) => occupied.remove().0,
+            Err(_) => return false,
+        };
+        let idx = idx as usize;
+        let handle = self.members.swap_remove(idx);
+        self.store.remove(handle);
+        if idx < self.members.len() {
+            // The former last member moved into `idx`; repoint its index slot.
+            let moved_from = self.members.len() as u32;
+            let moved_hash = self.hasher.hash_one(self.member_of(idx as u32));
+            let slot = self
+                .index
+                .find_mut(moved_hash, |&i| i == moved_from)
+                .expect("moved member is indexed");
+            *slot = idx as u32;
+        }
+        if self.store.should_compact() {
+            self.store.compact(self.members.iter_mut());
+        }
+        true
+    }
+
+    fn iter(&self) -> impl Iterator<Item = Bytes> + '_ {
+        (0..self.members.len() as u32).map(|idx| Bytes::copy_from_slice(self.member_of(idx)))
+    }
+
+    fn memory_size(&self) -> usize {
+        self.store.allocated_bytes()
+            + self.members.capacity() * std::mem::size_of::<Handle>()
+            // Index: one u32 slot plus ~1 control byte per capacity slot.
+            + self.index.capacity() * (std::mem::size_of::<u32>() + 1)
+    }
 }
 
 // ============================================================================
@@ -62,21 +124,18 @@ fn lp_set_contains(buf: &[u8], member: &[u8]) -> bool {
 /// Internal encoding for set values.
 #[derive(Debug, Clone)]
 enum SetEncoding {
-    /// Contiguous byte buffer for small sets.
-    /// Layout: [mlen:u16][member_bytes]... repeated per member.
-    /// Per-entry overhead: 2 bytes (one u16 length prefix).
-    Listpack { buf: Bytes, len: u16 },
+    /// Shared [`Listpack`] with one entry per member for small sets.
+    /// O(n) lookups — fast for small N due to cache locality.
+    Listpack(Listpack),
 
-    /// Standard hash set for large sets. O(1) lookups.
-    HashSet(HashSet<Bytes>),
+    /// Block-backed form for large sets. O(1) lookups, member bytes packed
+    /// into shared blocks instead of per-member allocations.
+    Blocks(BlockSet),
 }
 
 impl Default for SetEncoding {
     fn default() -> Self {
-        SetEncoding::Listpack {
-            buf: Bytes::new(),
-            len: 0,
-        }
+        SetEncoding::Listpack(Listpack::new())
     }
 }
 
@@ -113,34 +172,42 @@ impl SetValue {
                 .all(|m| m.len() <= thresholds.max_value_bytes);
 
         if use_listpack {
-            let mut buf = BytesMut::new();
+            let mut lp = Listpack::new();
             for m in &members {
-                buf.extend_from_slice(&(m.len() as u16).to_le_bytes());
-                buf.extend_from_slice(m);
+                lp.push_back(m);
             }
             Self {
-                data: SetEncoding::Listpack {
-                    buf: buf.freeze(),
-                    len: members.len() as u16,
-                },
+                data: SetEncoding::Listpack(lp),
             }
         } else {
-            Self {
-                data: SetEncoding::HashSet(members.into_iter().collect()),
-            }
+            Self::from_large_members(members)
+        }
+    }
+
+    /// Build the block-backed large form directly, regardless of size — the
+    /// shape SUNION/SINTER/SDIFF results take (matching the old behavior of
+    /// always producing the hash-table form).
+    fn from_large_members(members: impl IntoIterator<Item = Bytes>) -> Self {
+        let members: Vec<Bytes> = members.into_iter().collect();
+        let mut blocks = BlockSet::with_capacity(members.len());
+        for m in &members {
+            blocks.insert(m);
+        }
+        Self {
+            data: SetEncoding::Blocks(blocks),
         }
     }
 
     /// Whether this set uses listpack encoding.
     pub fn is_listpack(&self) -> bool {
-        matches!(self.data, SetEncoding::Listpack { .. })
+        matches!(self.data, SetEncoding::Listpack(_))
     }
 
     /// Get the number of members.
     pub fn len(&self) -> usize {
         match &self.data {
-            SetEncoding::Listpack { len, .. } => *len as usize,
-            SetEncoding::HashSet(set) => set.len(),
+            SetEncoding::Listpack(lp) => lp.len(),
+            SetEncoding::Blocks(blocks) => blocks.members.len(),
         }
     }
 
@@ -149,40 +216,31 @@ impl SetValue {
         self.len() == 0
     }
 
-    /// Add a member to the set. Promotes to HashSet if thresholds are exceeded.
+    /// Add a member to the set. Promotes to the block-backed form if
+    /// thresholds are exceeded.
     ///
     /// Returns true if the member was new, false if it already existed.
     pub fn add(&mut self, member: Bytes, thresholds: ListpackThresholds) -> bool {
-        let data = std::mem::take(&mut self.data);
-        match data {
-            SetEncoding::Listpack { buf, len } => {
-                if lp_set_contains(&buf, &member) {
-                    self.data = SetEncoding::Listpack { buf, len };
+        match &mut self.data {
+            SetEncoding::Listpack(lp) => {
+                if lp_find_member(lp, &member).is_some() {
                     return false;
                 }
-                let new_count = len as usize + 1;
+                let new_count = lp.len() + 1;
                 if new_count > thresholds.max_entries || member.len() > thresholds.max_value_bytes {
-                    // Promote to HashSet
-                    let mut set: HashSet<Bytes> = ListpackSetIter::new(&buf).collect();
-                    set.insert(member);
-                    self.data = SetEncoding::HashSet(set);
+                    // Promote to the block-backed form.
+                    let mut blocks = BlockSet::with_capacity(new_count);
+                    for m in lp.iter() {
+                        blocks.insert(m);
+                    }
+                    blocks.insert(&member);
+                    self.data = SetEncoding::Blocks(blocks);
                 } else {
-                    let mut new_buf = BytesMut::with_capacity(buf.len() + 2 + member.len());
-                    new_buf.extend_from_slice(&buf);
-                    new_buf.extend_from_slice(&(member.len() as u16).to_le_bytes());
-                    new_buf.extend_from_slice(&member);
-                    self.data = SetEncoding::Listpack {
-                        buf: new_buf.freeze(),
-                        len: len + 1,
-                    };
+                    lp.push_back(&member);
                 }
                 true
             }
-            SetEncoding::HashSet(mut set) => {
-                let was_new = set.insert(member);
-                self.data = SetEncoding::HashSet(set);
-                was_new
-            }
+            SetEncoding::Blocks(blocks) => blocks.insert(&member),
         }
     }
 
@@ -190,51 +248,31 @@ impl SetValue {
     ///
     /// Returns true if the member existed.
     pub fn remove(&mut self, member: &[u8]) -> bool {
-        let data = std::mem::take(&mut self.data);
-        match data {
-            SetEncoding::Listpack { buf, len } => {
-                if !lp_set_contains(&buf, member) {
-                    self.data = SetEncoding::Listpack { buf, len };
-                    return false;
+        match &mut self.data {
+            SetEncoding::Listpack(lp) => match lp_find_member(lp, member) {
+                Some(idx) => {
+                    lp.remove(idx);
+                    true
                 }
-                let mut new_buf = BytesMut::with_capacity(buf.len());
-                let mut pos = 0;
-                while pos < buf.len() {
-                    let mlen = u16::from_le_bytes([buf[pos], buf[pos + 1]]) as usize;
-                    pos += 2;
-                    if &buf[pos..pos + mlen] != member {
-                        new_buf.extend_from_slice(&(mlen as u16).to_le_bytes());
-                        new_buf.extend_from_slice(&buf[pos..pos + mlen]);
-                    }
-                    pos += mlen;
-                }
-                self.data = SetEncoding::Listpack {
-                    buf: new_buf.freeze(),
-                    len: len - 1,
-                };
-                true
-            }
-            SetEncoding::HashSet(mut set) => {
-                let was_removed = set.remove(member);
-                self.data = SetEncoding::HashSet(set);
-                was_removed
-            }
+                None => false,
+            },
+            SetEncoding::Blocks(blocks) => blocks.remove(member),
         }
     }
 
     /// Check if a member exists.
     pub fn contains(&self, member: &[u8]) -> bool {
         match &self.data {
-            SetEncoding::Listpack { buf, .. } => lp_set_contains(buf, member),
-            SetEncoding::HashSet(set) => set.contains(member),
+            SetEncoding::Listpack(lp) => lp_find_member(lp, member).is_some(),
+            SetEncoding::Blocks(blocks) => blocks.contains(member),
         }
     }
 
     /// Get all members.
     pub fn members(&self) -> impl Iterator<Item = Bytes> + '_ {
         match &self.data {
-            SetEncoding::Listpack { buf, .. } => EitherIter::Left(ListpackSetIter::new(buf)),
-            SetEncoding::HashSet(set) => EitherIter::Right(set.iter().cloned()),
+            SetEncoding::Listpack(lp) => EitherIter::Left(lp.iter().map(Bytes::copy_from_slice)),
+            SetEncoding::Blocks(blocks) => EitherIter::Right(blocks.iter()),
         }
     }
 
@@ -246,9 +284,7 @@ impl SetValue {
                 result.insert(member);
             }
         }
-        SetValue {
-            data: SetEncoding::HashSet(result),
-        }
+        SetValue::from_large_members(result)
     }
 
     /// Compute the intersection of this set with others.
@@ -257,9 +293,7 @@ impl SetValue {
         for other in others {
             result.retain(|m| other.contains(m));
         }
-        SetValue {
-            data: SetEncoding::HashSet(result),
-        }
+        SetValue::from_large_members(result)
     }
 
     /// Compute the difference of this set minus others.
@@ -268,9 +302,7 @@ impl SetValue {
         for other in others {
             result.retain(|m| !other.contains(m));
         }
-        SetValue {
-            data: SetEncoding::HashSet(result),
-        }
+        SetValue::from_large_members(result)
     }
 
     /// Pop a random member from the set.
@@ -280,9 +312,11 @@ impl SetValue {
         if self.is_empty() {
             return None;
         }
-        let members: Vec<Bytes> = self.members().collect();
-        let idx = rand::rng().random_range(0..members.len());
-        let member = members[idx].clone();
+        let idx = rand::rng().random_range(0..self.len());
+        let member = match &self.data {
+            SetEncoding::Listpack(lp) => Bytes::copy_from_slice(lp.get(idx).expect("idx < len")),
+            SetEncoding::Blocks(blocks) => Bytes::copy_from_slice(blocks.member_of(idx as u32)),
+        };
         self.remove(&member);
         Some(member)
     }
@@ -333,16 +367,155 @@ impl SetValue {
     pub fn memory_size(&self) -> usize {
         let base_size = std::mem::size_of::<Self>();
         match &self.data {
-            SetEncoding::Listpack { buf, .. } => base_size + buf.len(),
-            SetEncoding::HashSet(set) => {
-                let entries_size: usize = set.iter().map(|m| m.len() + 24).sum();
-                base_size + entries_size
-            }
+            SetEncoding::Listpack(lp) => base_size + lp.byte_len(),
+            SetEncoding::Blocks(blocks) => base_size + blocks.memory_size(),
         }
     }
 
     /// Get all members as a vec for serialization.
     pub fn to_vec(&self) -> Vec<Bytes> {
         self.members().collect()
+    }
+}
+
+#[cfg(test)]
+mod block_form_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    const TINY: ListpackThresholds = ListpackThresholds {
+        max_entries: 4,
+        max_value_bytes: 16,
+    };
+
+    fn b(s: &str) -> Bytes {
+        Bytes::copy_from_slice(s.as_bytes())
+    }
+
+    #[test]
+    fn promotion_preserves_membership() {
+        let mut set = SetValue::new();
+        for i in 0..10 {
+            assert!(set.add(b(&format!("m{i}")), TINY));
+            assert!(!set.add(b(&format!("m{i}")), TINY));
+        }
+        assert!(!set.is_listpack(), "10 > 4 members must promote");
+        assert_eq!(set.len(), 10);
+        for i in 0..10 {
+            assert!(set.contains(format!("m{i}").as_bytes()));
+        }
+        assert!(!set.contains(b"absent"));
+    }
+
+    #[test]
+    fn swap_remove_keeps_the_index_consistent() {
+        let mut set = SetValue::new();
+        for i in 0..32 {
+            set.add(b(&format!("member-{i}")), TINY);
+        }
+        for i in 0..16 {
+            assert!(set.remove(format!("member-{i}").as_bytes()));
+            assert!(!set.remove(format!("member-{i}").as_bytes()));
+        }
+        assert_eq!(set.len(), 16);
+        for i in 16..32 {
+            assert!(set.contains(format!("member-{i}").as_bytes()));
+        }
+    }
+
+    #[test]
+    fn set_operations_produce_correct_membership() {
+        let a = SetValue::from_members([b("1"), b("2"), b("3")], TINY);
+        let c = SetValue::from_members([b("2"), b("3"), b("4")], TINY);
+        let union = a.union([&c].into_iter());
+        assert_eq!(union.len(), 4);
+        let inter = a.intersection([&c].into_iter());
+        assert_eq!(inter.len(), 2);
+        assert!(inter.contains(b"2") && inter.contains(b"3"));
+        let diff = a.difference([&c].into_iter());
+        assert_eq!(diff.len(), 1);
+        assert!(diff.contains(b"1"));
+    }
+
+    #[test]
+    fn churn_keeps_memory_bounded_by_live_payload() {
+        let mut set = SetValue::new();
+        let payload = "m".repeat(200);
+        for round in 0..100u32 {
+            for i in 0..64u32 {
+                let member = b(&format!("{payload}-{i}"));
+                set.remove(&member);
+                set.add(b(&format!("{payload}-{i}-{round}")), TINY);
+                set.remove(format!("{payload}-{i}-{round}").as_bytes());
+                set.add(member, TINY);
+            }
+        }
+        assert_eq!(set.len(), 64);
+        let live_payload: usize = set.members().map(|m| m.len()).sum();
+        let size = set.memory_size();
+        assert!(
+            size < live_payload * 4 + 64 * 1024,
+            "memory_size {size} not within a constant factor of live payload {live_payload}"
+        );
+    }
+
+    #[derive(Debug, Clone)]
+    enum Op {
+        Add(u8),
+        Remove(u8),
+        Contains(u8),
+        Pop,
+    }
+
+    fn op_strategy() -> impl Strategy<Value = Op> {
+        prop_oneof![
+            any::<u8>().prop_map(Op::Add),
+            any::<u8>().prop_map(Op::Remove),
+            any::<u8>().prop_map(Op::Contains),
+            Just(Op::Pop),
+        ]
+    }
+
+    proptest! {
+        #[test]
+        fn block_set_matches_hashset_model(ops in proptest::collection::vec(op_strategy(), 1..400)) {
+            let thresholds = ListpackThresholds { max_entries: 8, max_value_bytes: 32 };
+            let mut set = SetValue::new();
+            let mut model: HashSet<Vec<u8>> = HashSet::new();
+
+            for op in ops {
+                match op {
+                    Op::Add(m) => {
+                        let member = format!("member-{m}").into_bytes();
+                        prop_assert_eq!(
+                            set.add(Bytes::from(member.clone()), thresholds),
+                            model.insert(member)
+                        );
+                    }
+                    Op::Remove(m) => {
+                        let member = format!("member-{m}").into_bytes();
+                        prop_assert_eq!(set.remove(&member), model.remove(member.as_slice()));
+                    }
+                    Op::Contains(m) => {
+                        let member = format!("member-{m}").into_bytes();
+                        prop_assert_eq!(set.contains(&member), model.contains(member.as_slice()));
+                    }
+                    Op::Pop => {
+                        let popped = set.pop();
+                        match popped {
+                            Some(member) => prop_assert!(model.remove(member.as_ref())),
+                            None => prop_assert!(model.is_empty()),
+                        }
+                    }
+                }
+                prop_assert_eq!(set.len(), model.len());
+            }
+
+            let mut got: Vec<Vec<u8>> = set.members().map(|m| m.to_vec()).collect();
+            let mut want: Vec<Vec<u8>> = model.into_iter().collect();
+            got.sort();
+            want.sort();
+            prop_assert_eq!(got, want);
+        }
     }
 }
