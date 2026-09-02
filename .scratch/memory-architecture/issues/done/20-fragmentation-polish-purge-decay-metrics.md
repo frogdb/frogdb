@@ -1,6 +1,6 @@
 # 20: fragmentation polish — decay tuning, per-arena metrics, re-encode escape hatch
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Origin: memory-architecture PRD phase filing, 2026-09-01 — [PRD.md](../../PRD.md) R13
 Area: frogdb-telemetry (jemalloc) + frogdb-server (info/) + frogdb-memory
@@ -100,3 +100,20 @@ done), THP policy, allocator swaps.
 [Issue 03](../) sampler (done), [issue 07](../) registry→broker wiring (done).
 Benefits from phase-4 packed values (re-encode has something to compact) but does not block
 on them — re-encode of a listpack-small hash already compacts today.
+
+## Resolution
+
+Landed 2026-09-02 on `mem-arch-integration` (picks `1e3f34c6`..`1f06dceb`, 9 commits).
+
+What shipped: per-arena depth/decay read through mallctl (`frogdb-telemetry/src/jemalloc.rs`)
+with the sampler budgeted and per-arena depth exported; explicit jemalloc decay in
+`malloc_conf`; `INFO arenas` section for per-shard arena depth; `DEBUG ARENA-DECAY` to retune
+decay at runtime; `DEBUG RE-ENCODE` to re-encode a key's stored form in place (threshold
+params from review round 1, partial-apply error semantics, eviction-clock suppression via the
+NO-TOUCH seam); ops docs + metrics reference; gate pins.
+
+Review round 1 (3 Important, 4 Minor) fixed; re-review clean. Gates: shard-harness 52/52,
+seam-gate family, lint-spec (315 rows / 1751 refs), quint-check, workspace clippy (after a
+mechanical `is_multiple_of` fix, `233e8f24` pre-pick) all green; docs-gen idempotent.
+`just lint-turmoil` red on the pre-existing unrelated `shard_placement` dead-code defect
+(`4817d320`), not chased here.
