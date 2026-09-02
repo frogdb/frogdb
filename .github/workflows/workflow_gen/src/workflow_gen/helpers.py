@@ -1,8 +1,12 @@
 """Reusable step builders and matrix helpers."""
 
+import functools
+import sys
 import tomllib
 from pathlib import Path
 from textwrap import dedent
+from types import ModuleType
+from typing import TYPE_CHECKING
 
 from ruamel.yaml.comments import CommentedMap
 from ruamel.yaml.scalarstring import LiteralScalarString
@@ -26,7 +30,28 @@ from workflow_gen.constants import (
 )
 from workflow_gen.schema import Job, Permissions, Step
 
+if TYPE_CHECKING:
+    # `scripts/` is not on sys.path until `_locked_areas_module()` puts it there,
+    # so `Spec` is only ever a name in an annotation — see `locked_areas()` below.
+    from locked_areas import Spec
+
 DOCKERHUB_IMAGE = "frogdb/frogdb"
+
+# The repo-root marker: present at the root, nowhere below it.
+ROOT_MARKER = "rust-toolchain.toml"
+
+
+def _repo_root() -> Path:
+    """The repo root, found by walking up from this file for `ROOT_MARKER`.
+
+    `workflow_gen` is a uv project nested under `.github/workflows/`, so it can
+    reach repo-root sources (rust-toolchain.toml, specs/) only by locating the
+    root at generation time.
+    """
+    for parent in Path(__file__).resolve().parents:
+        if (parent / ROOT_MARKER).exists():
+            return parent
+    raise FileNotFoundError(f"{ROOT_MARKER} not found in any parent directory")
 
 
 def _read_rust_version() -> str:
@@ -36,14 +61,8 @@ def _read_rust_version() -> str:
     (authoritative for rustup) and the generated workflows (dtolnay/rust-toolchain).
     `just sync-toolchain-check` additionally verifies .mise.toml agrees.
     """
-    # Walk up from this file to find the repo root (where rust-toolchain.toml lives).
-    here = Path(__file__).resolve()
-    for parent in here.parents:
-        candidate = parent / "rust-toolchain.toml"
-        if candidate.exists():
-            data = tomllib.loads(candidate.read_text())
-            return data["toolchain"]["channel"]
-    raise FileNotFoundError("rust-toolchain.toml not found in any parent directory")
+    data = tomllib.loads((_repo_root() / ROOT_MARKER).read_text())
+    return data["toolchain"]["channel"]
 
 
 RUST_VERSION = _read_rust_version()
@@ -54,6 +73,40 @@ RUST_VERSION = _read_rust_version()
 # believes rust is installed (symlink marker) and skips the rustup install, but
 # `cargo` is actually missing from PATH.
 RUST_TOOLCHAIN = f"dtolnay/rust-toolchain@{RUST_VERSION}"
+
+
+# --- Locked-areas manifest ---
+
+
+@functools.cache
+def _locked_areas_module() -> ModuleType:
+    """`scripts/locked_areas.py`, imported across the uv-project boundary.
+
+    The manifest parser lives at the repo root, outside this project's
+    dependency set, so `scripts/` goes on `sys.path` here rather than at module
+    import — `helpers` is imported by every workflow, most of which never ask
+    for the manifest. Same seam as `website/scripts/spec-gen.py`.
+    """
+    sys.path.insert(0, str(_repo_root() / "scripts"))
+    import locked_areas
+
+    return locked_areas
+
+
+def locked_areas() -> list["Spec"]:
+    """Locked-area specs from `specs/*.md` headers, via scripts/locked_areas.py.
+
+    Only LOCKED areas are returned (DRAFT specs carry no gate or crates), in the
+    parser's order — sorted by spec path, so a generated matrix is stable across
+    runs and `just workflow-gen --check` does not flap.
+
+    Raises if the manifest fails validation — a bad header must break generation,
+    not silently drop a crate from a CI matrix.
+    """
+    specs, errors = _locked_areas_module().validate()
+    if errors:
+        raise RuntimeError("locked-areas manifest invalid:\n" + "\n".join(errors))
+    return [spec for spec in specs if spec.is_locked]
 
 
 def ensure_path(path: str) -> str:
