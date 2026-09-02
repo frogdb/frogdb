@@ -38,20 +38,20 @@ if TYPE_CHECKING:
 DOCKERHUB_IMAGE = "frogdb/frogdb"
 
 # The repo-root marker: present at the root, nowhere below it.
-ROOT_MARKER = "rust-toolchain.toml"
+_ROOT_MARKER = "rust-toolchain.toml"
 
 
 def _repo_root() -> Path:
-    """The repo root, found by walking up from this file for `ROOT_MARKER`.
+    """The repo root, found by walking up from this file for `_ROOT_MARKER`.
 
     `workflow_gen` is a uv project nested under `.github/workflows/`, so it can
     reach repo-root sources (rust-toolchain.toml, specs/) only by locating the
     root at generation time.
     """
     for parent in Path(__file__).resolve().parents:
-        if (parent / ROOT_MARKER).exists():
+        if (parent / _ROOT_MARKER).exists():
             return parent
-    raise FileNotFoundError(f"{ROOT_MARKER} not found in any parent directory")
+    raise FileNotFoundError(f"{_ROOT_MARKER} not found in any parent directory")
 
 
 def _read_rust_version() -> str:
@@ -61,7 +61,7 @@ def _read_rust_version() -> str:
     (authoritative for rustup) and the generated workflows (dtolnay/rust-toolchain).
     `just sync-toolchain-check` additionally verifies .mise.toml agrees.
     """
-    data = tomllib.loads((_repo_root() / ROOT_MARKER).read_text())
+    data = tomllib.loads((_repo_root() / _ROOT_MARKER).read_text())
     return data["toolchain"]["channel"]
 
 
@@ -87,7 +87,7 @@ def _locked_areas_module() -> ModuleType:
     import — `helpers` is imported by every workflow, most of which never ask
     for the manifest. Same seam as `website/scripts/spec-gen.py`.
     """
-    sys.path.insert(0, str(_repo_root() / "scripts"))
+    sys.path.append(str(_repo_root() / "scripts"))
     import locked_areas
 
     return locked_areas
@@ -107,6 +107,22 @@ def locked_areas() -> list["Spec"]:
     if errors:
         raise RuntimeError("locked-areas manifest invalid:\n" + "\n".join(errors))
     return [spec for spec in specs if spec.is_locked]
+
+
+def locked_crate_paths(specs: list["Spec"]) -> dict[str, str]:
+    """Locked crate → its repo-relative directory, in manifest order.
+
+    The `mutants-diff` job needs a path per crate twice over: as the
+    `paths-filter` glob that decides whether the crate was touched, and as the
+    `git diff -- <path>` scope inside `just mutants-diff`. Both read the same
+    workspace manifest walk, so a crate that moves directory changes the filter
+    on the next `just workflow-gen` rather than quietly matching nothing.
+
+    Takes the spec list rather than calling `locked_areas()` — that re-reads
+    and re-validates the manifest on every call, and the caller already has it.
+    """
+    paths = _locked_areas_module().member_paths()
+    return {crate: paths[crate] for spec in specs for crate in spec.crates}
 
 
 def ensure_path(path: str) -> str:
