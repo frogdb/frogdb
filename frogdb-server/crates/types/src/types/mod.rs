@@ -660,6 +660,43 @@ impl Default for ListpackThresholds {
     }
 }
 
+/// Per-block limits for the quicklist chain behind [`ListValue`].
+///
+/// A packed block stops accepting elements when either limit would be
+/// exceeded; an element that cannot fit an empty block at all gets a plain
+/// block of its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QuicklistLimits {
+    /// Maximum number of elements in one packed block.
+    pub max_entries: usize,
+    /// Maximum encoded byte length of one packed block.
+    pub max_bytes: usize,
+}
+
+impl QuicklistLimits {
+    /// Default block limits for list values.
+    ///
+    /// Mirrors Redis: `list-max-listpack-size` defaults to 128 entries per
+    /// quicklist node, and `quicklist.c`'s `SIZE_SAFETY_LIMIT` caps a node at
+    /// 8 KiB. An element over `max_bytes` is what Redis calls a large element
+    /// and stores in a `PLAIN` node.
+    ///
+    /// Deviation: Redis exposes these as runtime config
+    /// (`list-max-listpack-size`, negative values selecting 4–64 KiB size
+    /// classes). FrogDB pins the defaults as constants for now; config
+    /// plumbing can follow without changing the block machinery.
+    pub const DEFAULT_LIST: Self = Self {
+        max_entries: 128,
+        max_bytes: 8192,
+    };
+}
+
+impl Default for QuicklistLimits {
+    fn default() -> Self {
+        Self::DEFAULT_LIST
+    }
+}
+
 // ============================================================================
 // Either Iterator (local utility)
 // ============================================================================

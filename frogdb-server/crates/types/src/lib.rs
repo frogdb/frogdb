@@ -16,6 +16,7 @@ pub mod glob;
 pub mod histogram;
 pub mod hyperloglog;
 pub mod json;
+pub mod listpack;
 pub mod metrics;
 pub mod redirect;
 pub mod redis_version;
@@ -51,6 +52,7 @@ pub use json::{
     DEFAULT_JSON_MAX_DEPTH, DEFAULT_JSON_MAX_SIZE, JsonError, JsonLimits, JsonType, JsonValue,
     estimate_json_size,
 };
+pub use listpack::{Listpack, ListpackIter, ListpackRevIter};
 pub use redis_version::{
     ADVERTISED_REDIS_VERSION, ADVERTISED_REDIS_VERSION_NUM, REDIS_COMPAT_TARGET,
 };
