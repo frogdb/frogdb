@@ -495,7 +495,7 @@ impl Command for LrangeCommand {
                 if let Some(list) = value.as_list() {
                     let results: Vec<Response> = list
                         .range_iter(start, stop)
-                        .map(|b| Response::bulk(b.clone()))
+                        .map(|b| Response::bulk(Bytes::copy_from_slice(b)))
                         .collect();
                     Ok(Response::Array(results))
                 } else {
@@ -551,7 +551,7 @@ impl Command for LindexCommand {
             Some(value) => {
                 if let Some(list) = value.as_list() {
                     match list.get(index) {
-                        Some(elem) => Ok(Response::bulk(elem.clone())),
+                        Some(elem) => Ok(Response::bulk(Bytes::copy_from_slice(elem))),
                         None => Ok(Response::null()),
                     }
                 } else {

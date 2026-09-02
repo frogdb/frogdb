@@ -2291,8 +2291,8 @@ mod tests {
             "element must not be lost to an abandoned waiter"
         );
         assert_eq!(
-            list.as_list().unwrap().get(0).cloned(),
-            Some(Bytes::from_static(b"x")),
+            list.as_list().unwrap().get(0),
+            Some(&b"x"[..]),
             "the restored element keeps its value"
         );
         // The doomed waiter was consumed off the queue (not left blocking).
@@ -2338,7 +2338,7 @@ mod tests {
 
         // All three elements are back, in their original order.
         let list = worker.store.get_hot(&ka).expect("key a must survive");
-        let elems: Vec<Bytes> = list.as_list().unwrap().iter().cloned().collect();
+        let elems: Vec<Bytes> = list.as_list().unwrap().to_vec();
         assert_eq!(
             elems,
             vec![

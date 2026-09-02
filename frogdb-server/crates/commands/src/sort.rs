@@ -129,7 +129,7 @@ fn extract_elements(
     };
 
     match &*value {
-        Value::List(list) => Ok(Some(list.iter().cloned().collect())),
+        Value::List(list) => Ok(Some(list.to_vec())),
         Value::Set(set) => Ok(Some(set.members().collect())),
         Value::SortedSet(zset) => Ok(Some(zset.iter().map(|(m, _)| m.clone()).collect())),
         _ => Err(CommandError::WrongType),
@@ -933,9 +933,9 @@ mod tests {
         let stored = ctx.store.get(&Bytes::from("result")).unwrap();
         if let Value::List(list) = &*stored {
             assert_eq!(list.len(), 3);
-            assert_eq!(list.get(0), Some(&Bytes::from("1")));
-            assert_eq!(list.get(1), Some(&Bytes::from("2")));
-            assert_eq!(list.get(2), Some(&Bytes::from("3")));
+            assert_eq!(list.get(0), Some(&b"1"[..]));
+            assert_eq!(list.get(1), Some(&b"2"[..]));
+            assert_eq!(list.get(2), Some(&b"3"[..]));
         } else {
             panic!("Expected list value");
         }

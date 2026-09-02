@@ -415,9 +415,9 @@ mod integration {
 
         let list = recovered.as_list().unwrap();
         assert_eq!(list.len(), 3);
-        assert_eq!(list.get(0), Some(&Bytes::from("first")));
-        assert_eq!(list.get(1), Some(&Bytes::from("second")));
-        assert_eq!(list.get(2), Some(&Bytes::from("third")));
+        assert_eq!(list.get(0), Some(&b"first"[..]));
+        assert_eq!(list.get(1), Some(&b"second"[..]));
+        assert_eq!(list.get(2), Some(&b"third"[..]));
     }
 
     #[test]
@@ -463,9 +463,9 @@ mod integration {
 
         let list = recovered.as_list().unwrap();
         assert_eq!(list.len(), 1000);
-        assert_eq!(list.get(0), Some(&Bytes::from("item_00000")));
-        assert_eq!(list.get(500), Some(&Bytes::from("item_00500")));
-        assert_eq!(list.get(999), Some(&Bytes::from("item_00999")));
+        assert_eq!(list.get(0), Some(&b"item_00000"[..]));
+        assert_eq!(list.get(500), Some(&b"item_00500"[..]));
+        assert_eq!(list.get(999), Some(&b"item_00999"[..]));
     }
 
     // ========================================================================
