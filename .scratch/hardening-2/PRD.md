@@ -619,3 +619,4 @@ Grill-and-dispatch ledger for issues 13–16. Appended per answer; lines never e
 
 - D1: scope = issues 14, 15, 16; integration branch `locked-areas-mechanical/impl` off `worktree-locked-areas-mechanical` (13 unmerged on main); fu-a/b/c stay unfiled.
 - D2: gate command = `just workflow-gen --check && just lint-gates && just lint-py && just fmt-py-check && just scratch-check` (compile-free; per-issue extras live in that issue's acceptance criteria).
+- D3: live CI verification in-session = push `locked-areas-mechanical/impl` and open a draft `[ci-verify]` PR against `main` (closed unmerged) so the forcing tests run for real: a locked-crate touch spawns a red `mutants-diff` leg, a `frogdb-commands`-only change spawns none, and `mutants-weekly.yml` dispatched with `crate: frogdb-txn` prints the score against the header gate.
