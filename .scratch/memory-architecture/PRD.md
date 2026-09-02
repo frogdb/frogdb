@@ -222,13 +222,16 @@ that sim tests logic, not execution shape.
 5. R11 net pools + R12 parse path.
 6. R13 purge/metrics polish, R14 txn caps, R15 spec lock.
 
-## Open questions (not yet ruled)
+## Open questions (each owned by an issue — D5)
 
-- Exact inline-value threshold in table slots (needs slot-layout prototype).
+- Exact inline-value threshold in table slots → [issue 10](issues/) reports the ruling
+  with numbers.
 - Cross-slot txn interaction between VLL lock tables and copy-at-boundary arg
-  ownership (design detail for the R3 hop protocol).
-- Per-type small→block promotion thresholds (default to Redis values initially).
-- How turmoil tests model per-core pinning (simulation fidelity for R2/R3).
+  ownership → ruled at issue-11 drafting (bites only once values are refcounted, the
+  R6 heap half decided there).
+- Per-type small→block promotion thresholds → Redis defaults; re-tuned only if issue
+  13/14 benches say otherwise.
+- Turmoil per-core-pinning fidelity → issue-11 test plan.
 
 ## Grill-dispatch decisions (2026-09-01)
 
@@ -245,3 +248,7 @@ Session decisions layered on the R1–R15 rulings above; D-numbers are cited by 
   `replica` output-limit class (Redis semantics); backlog stays `ReplicationBacklog`, WAL
   stays `WalChannel`. Closes the replica/AOF budget-class open question — already split
   correctly, no new class.
+- D5: remaining open questions assigned owners — inline threshold → issue 10 report;
+  cross-slot txn/VLL and turmoil pinning fidelity → issue-11 drafting; promotion
+  thresholds → Redis defaults unless 13/14 benches disagree. Interview design tree
+  closed 2026-09-01.
