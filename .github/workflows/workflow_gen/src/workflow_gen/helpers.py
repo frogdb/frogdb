@@ -1,8 +1,12 @@
 """Reusable step builders and matrix helpers."""
 
+import functools
+import sys
 import tomllib
 from pathlib import Path
 from textwrap import dedent
+from types import ModuleType
+from typing import TYPE_CHECKING
 
 from ruamel.yaml.comments import CommentedMap
 from ruamel.yaml.scalarstring import LiteralScalarString
@@ -26,7 +30,28 @@ from workflow_gen.constants import (
 )
 from workflow_gen.schema import Job, Permissions, Step
 
+if TYPE_CHECKING:
+    # `scripts/` is not on sys.path until `_locked_areas_module()` puts it there,
+    # so `Spec` is only ever a name in an annotation — see `locked_areas()` below.
+    from locked_areas import Spec
+
 DOCKERHUB_IMAGE = "frogdb/frogdb"
+
+# The repo-root marker: present at the root, nowhere below it.
+_ROOT_MARKER = "rust-toolchain.toml"
+
+
+def _repo_root() -> Path:
+    """The repo root, found by walking up from this file for `_ROOT_MARKER`.
+
+    `workflow_gen` is a uv project nested under `.github/workflows/`, so it can
+    reach repo-root sources (rust-toolchain.toml, specs/) only by locating the
+    root at generation time.
+    """
+    for parent in Path(__file__).resolve().parents:
+        if (parent / _ROOT_MARKER).exists():
+            return parent
+    raise FileNotFoundError(f"{_ROOT_MARKER} not found in any parent directory")
 
 
 def _read_rust_version() -> str:
@@ -36,14 +61,8 @@ def _read_rust_version() -> str:
     (authoritative for rustup) and the generated workflows (dtolnay/rust-toolchain).
     `just sync-toolchain-check` additionally verifies .mise.toml agrees.
     """
-    # Walk up from this file to find the repo root (where rust-toolchain.toml lives).
-    here = Path(__file__).resolve()
-    for parent in here.parents:
-        candidate = parent / "rust-toolchain.toml"
-        if candidate.exists():
-            data = tomllib.loads(candidate.read_text())
-            return data["toolchain"]["channel"]
-    raise FileNotFoundError("rust-toolchain.toml not found in any parent directory")
+    data = tomllib.loads((_repo_root() / _ROOT_MARKER).read_text())
+    return data["toolchain"]["channel"]
 
 
 RUST_VERSION = _read_rust_version()
@@ -54,6 +73,64 @@ RUST_VERSION = _read_rust_version()
 # believes rust is installed (symlink marker) and skips the rustup install, but
 # `cargo` is actually missing from PATH.
 RUST_TOOLCHAIN = f"dtolnay/rust-toolchain@{RUST_VERSION}"
+
+# mise install_args for a mutation job, shared by `test.py`'s per-PR
+# `mutants-diff` and `mutants_weekly.py`'s full runs so the two cannot drift.
+# cargo-mutants shells out to the test tool named in .cargo/mutants.toml, which
+# is nextest — so a mutation job needs both binaries, not just cargo-mutants.
+# python/uv are for the `uv run --script` shebang on scripts/locked_areas.py,
+# which the `just mutants*` recipes call to resolve the crate's perimeter and path.
+MISE_JUST_MUTANTS = "python uv just cargo:cargo-mutants cargo:cargo-nextest"
+
+
+# --- Locked-areas manifest ---
+
+
+@functools.cache
+def _locked_areas_module() -> ModuleType:
+    """`scripts/locked_areas.py`, imported across the uv-project boundary.
+
+    The manifest parser lives at the repo root, outside this project's
+    dependency set, so `scripts/` goes on `sys.path` here rather than at module
+    import — `helpers` is imported by every workflow, most of which never ask
+    for the manifest. Same seam as `website/scripts/spec-gen.py`.
+    """
+    sys.path.append(str(_repo_root() / "scripts"))
+    import locked_areas
+
+    return locked_areas
+
+
+def locked_areas() -> list["Spec"]:
+    """Locked-area specs from `specs/*.md` headers, via scripts/locked_areas.py.
+
+    Only LOCKED areas are returned (DRAFT specs carry no gate or crates), in the
+    parser's order — sorted by spec path, so a generated matrix is stable across
+    runs and `just workflow-gen --check` does not flap.
+
+    Raises if the manifest fails validation — a bad header must break generation,
+    not silently drop a crate from a CI matrix.
+    """
+    specs, errors = _locked_areas_module().validate()
+    if errors:
+        raise RuntimeError("locked-areas manifest invalid:\n" + "\n".join(errors))
+    return [spec for spec in specs if spec.is_locked]
+
+
+def locked_crate_paths(specs: list["Spec"]) -> dict[str, str]:
+    """Locked crate → its repo-relative directory, in manifest order.
+
+    The `mutants-diff` job needs a path per crate twice over: as the
+    `paths-filter` glob that decides whether the crate was touched, and as the
+    `git diff -- <path>` scope inside `just mutants-diff`. Both read the same
+    workspace manifest walk, so a crate that moves directory changes the filter
+    on the next `just workflow-gen` rather than quietly matching nothing.
+
+    Takes the spec list rather than calling `locked_areas()` — that re-reads
+    and re-validates the manifest on every call, and the caller already has it.
+    """
+    paths = _locked_areas_module().member_paths()
+    return {crate: paths[crate] for spec in specs for crate in spec.crates}
 
 
 def ensure_path(path: str) -> str:
@@ -123,7 +200,21 @@ def mise_setup_step(install_args: str | None = None) -> Step:
         w["install_args"] = install_args
     w["cache"] = SQ("true")
     w["experimental"] = SQ("true")  # enables cargo: and ubi: backends
-    return Step(name="Set up mise toolchain", uses=MISE_ACTION, with_=w)
+    # rust is unconfigured for mise (see RUST_TOOLCHAIN above), so a cargo:
+    # tool's declared `rust` install dependency must fall back to ambient PATH
+    # instead of failing mise's install-dependency check.
+    env = omap(MISE_DISABLE_TOOLS="rust")
+    cargo_tools = [tok for tok in (install_args or "").split() if tok.startswith("cargo:")]
+    if len(cargo_tools) >= 2:
+        # Parallel `cargo install`s race rustup's first-use toolchain install of
+        # the rust-toolchain.toml pin, so force them to install one at a time.
+        env["MISE_JOBS"] = SQ("1")
+    return Step(
+        name="Set up mise toolchain",
+        uses=MISE_ACTION,
+        with_=w,
+        env=env,
+    )
 
 
 def rust_toolchain_step(components: str | None = None, targets: str | None = None) -> Step:
@@ -296,9 +387,16 @@ def change_gate_job(*, workflow_file: str) -> Job:
 
     Nightly workflows burn CI minutes every night regardless of whether anything
     changed. This job compares the current commit against the head SHA of this same
-    workflow's last successful run (via `gh run list`) and exposes a `skip` output;
-    downstream jobs add `needs: gate` plus `if: needs.gate.outputs.skip != 'true'` to
-    honor it.
+    workflow's last successful *scheduled* run (via `gh run list --event schedule`)
+    and exposes a `skip` output; downstream jobs add `needs: gate` plus
+    `if: needs.gate.outputs.skip != 'true'` to honor it.
+
+    The `--event schedule` filter is what makes the comparison mean "since the last
+    time the full scheduled run measured this tree". Without it a `workflow_dispatch`
+    — which may deliberately run a *narrower* slice, e.g. `mutants-weekly.yml`'s
+    one-crate input — becomes the last successful run at its sha, and the next
+    scheduled run at that same sha skips entirely, so the rest of the slice goes
+    unmeasured that cycle.
 
     The check only ever applies to `schedule`-triggered runs — `workflow_dispatch`
     (someone explicitly asked for a run) and any other trigger always proceed, so a
@@ -321,7 +419,7 @@ def change_gate_job(*, workflow_file: str) -> Job:
         steps=[
             Step(
                 id="gate",
-                name="Check for new commits since last successful run",
+                name="Check for new commits since last successful scheduled run",
                 env=omap(
                     GH_TOKEN="${{ github.token }}",
                     EVENT_NAME="${{ github.event_name }}",
@@ -336,16 +434,16 @@ def change_gate_job(*, workflow_file: str) -> Job:
                       exit 0
                     fi
                     last_sha=$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow "${WORKFLOW_FILE}" \\
-                      --status success --limit 1 --json headSha --jq '.[0].headSha // empty')
+                      --event schedule --status success --limit 1 --json headSha --jq '.[0].headSha // empty')
                     if [ -z "${last_sha}" ]; then
                       echo "skip=false" >> "$GITHUB_OUTPUT"
-                      echo "No previous successful run found; proceeding."
+                      echo "No previous successful scheduled run found; proceeding."
                     elif [ "${last_sha}" = "${CURRENT_SHA}" ]; then
                       echo "skip=true" >> "$GITHUB_OUTPUT"
-                      echo "No new commits since last successful run (${last_sha}); skipping."
+                      echo "No new commits since last successful scheduled run (${last_sha}); skipping."
                     else
                       echo "skip=false" >> "$GITHUB_OUTPUT"
-                      echo "New commits since last successful run (${last_sha} -> ${CURRENT_SHA}); proceeding."
+                      echo "New commits since last successful scheduled run (${last_sha} -> ${CURRENT_SHA}); proceeding."
                     fi
                     """),
             ),

@@ -17,7 +17,13 @@ locked spec claims is an error rather than a default — it has no contract to
 enforce — unless `--min-score` is passed, which stays as the explicit override
 for an experiment on an unlocked crate.
 
-Usage: mutants-gate.py <outcomes.json> --crate frogdb-txn [--min-score 0.90]
+Several outcomes files may be named at once and are scored as one run: a large
+locked crate is mutated in `cargo mutants --shard k/n` legs by
+`mutants-weekly.yml`, and the contract the spec header states is the crate's
+score, not each shard's. Summing before dividing is what makes those the same
+number.
+
+Usage: mutants-gate.py <outcomes.json>... --crate frogdb-txn [--min-score 0.90]
 """
 
 from __future__ import annotations
@@ -33,7 +39,12 @@ import locked_areas
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("outcomes", type=Path, help="outcomes.json from mutants.out")
+    ap.add_argument(
+        "outcomes",
+        type=Path,
+        nargs="+",
+        help="one or more outcomes.json from mutants.out; counts are summed into one score",
+    )
     ap.add_argument("--crate", required=True, help="the mutated crate, looked up in the manifest")
     ap.add_argument(
         "--min-score",
@@ -51,16 +62,29 @@ def main() -> None:
         except locked_areas.ManifestError as exc:
             sys.exit(f"{exc}\npass --min-score to gate an unlocked crate anyway")
 
-    data = json.loads(args.outcomes.read_text())
-    counts = Counter(o["summary"] for o in data["outcomes"] if o.get("scenario") != "Baseline")
-
-    # An --iterate run only re-tests mutants not already caught; the caught set
-    # from earlier passes lives in previously_caught.txt next to outcomes.json
-    # and must count toward the score or an iterated run scores absurdly low.
+    counts: Counter[str] = Counter()
     previously_caught = 0
-    prev_file = args.outcomes.parent / "previously_caught.txt"
-    if prev_file.exists():
-        previously_caught = sum(1 for line in prev_file.read_text().splitlines() if line.strip())
+    missed_names: list[str] = []
+    for path in args.outcomes:
+        outcomes = [
+            o for o in json.loads(path.read_text())["outcomes"] if o.get("scenario") != "Baseline"
+        ]
+        counts.update(o["summary"] for o in outcomes)
+        missed_names.extend(
+            o.get("scenario", {}).get("Mutant", {}).get("name", "?")
+            for o in outcomes
+            if o.get("summary") == "MissedMutant" and isinstance(o.get("scenario"), dict)
+        )
+        # An --iterate run only re-tests mutants not already caught; the caught
+        # set from earlier passes lives in previously_caught.txt next to that
+        # run's outcomes.json — one per file, since each shard iterates its own
+        # share — and must count toward the score or an iterated run scores
+        # absurdly low.
+        prev_file = path.parent / "previously_caught.txt"
+        if prev_file.exists():
+            previously_caught += sum(
+                1 for line in prev_file.read_text().splitlines() if line.strip()
+            )
 
     caught = counts.get("CaughtMutant", 0) + previously_caught
     missed = counts.get("MissedMutant", 0)
@@ -88,11 +112,8 @@ def main() -> None:
 
     if score < min_score:
         print("GATE: FAIL", file=sys.stderr)
-        for o in data["outcomes"]:
-            if o.get("summary") == "MissedMutant":
-                sc = o.get("scenario", {})
-                if isinstance(sc, dict):
-                    print(f"  missed: {sc.get('Mutant', {}).get('name', '?')}", file=sys.stderr)
+        for name in missed_names:
+            print(f"  missed: {name}", file=sys.stderr)
         sys.exit(1)
     print("GATE: PASS")
 

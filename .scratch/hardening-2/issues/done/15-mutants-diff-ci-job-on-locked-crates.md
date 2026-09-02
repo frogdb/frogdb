@@ -1,12 +1,12 @@
 # The lock is an honor system — run `mutants-diff` in CI on every locked-crate change
 
-Status: ready-for-agent
+Status: done
 Type: mechanism (enforcement gap)
 Severity: likelihood 3/3 (nothing runs it: 175 commits touched locked crates since lock, 39
 mention mutants), consequence 3/3 (new code in a locked crate lands with no forcing test and the
 area's score silently falls below its gate — the exact claim LOCKED makes) — score 9
 Area: campaign mechanism / CI
-Blocked by: 13
+Blocked by: 13, 17
 
 ## Problem
 
@@ -67,3 +67,26 @@ CI enforces it; run locally to iterate faster.
 On a branch: add a trivial unforced branch to a locked crate (e.g. an `if` that flips a return on
 an impossible input) and open a PR — the job goes red with that mutant listed. Add the killing
 test — green. Also: a PR touching only `frogdb-commands` must not spawn the job at all.
+
+## Resolution
+
+Landed on `locked-areas-mechanical/impl` as merge `0c43dc6d` (commits `53aaf37d`, `b0478624`,
+`7fffae69`, `2d266018`, fix round `45ae5a22`, `ddc1ae14`, `611c1fb6`) plus `5585b39b` (D4),
+2026-09-02.
+
+- `scripts/locked_areas.py`: `member_paths()` (name → repo-relative dir; `workspace_members`
+  derives from it) and `--crate-path CRATE`, answered before `validate()` so a bad spec header
+  cannot break the CI job's path lookup. Fixture tests pin both.
+- `just mutants-diff crate base="" *args`: crate-scoped `git diff <base> -- <path>` into a
+  per-crate patch; empty patch exits 0 without invoking cargo. Review found the ruled
+  "exit 3 = timeouts, nothing missed" premise false — cargo-mutants 27.1.0 ranks timeout above
+  missed — so on exit 3 the recipe re-reads `missed.txt` and exits 2 if it is non-empty.
+- `test.yml`: one `locked-<crate>` paths-filter per locked crate plus a `mutants_matrix` JSON
+  output, both generated from the manifest; a `mutants-diff` job (fromJSON matrix,
+  fail-fast off, 90 min, `-e` base step that fails on an unresolvable base, summary with counts
+  and the missed list, >5% timeout-share warning) gated on the matrix being non-empty;
+  `ci-pass` needs it. Concurrency group is keyed by ref on PRs and by sha on pushes (D4).
+- `CLAUDE.md`: the "before pushing" rule is now advice; CI enforces.
+
+Live forcing test (locked-crate touch → red leg; `frogdb-commands`-only → no leg) runs on the
+`[ci-verify]` PR per D3.

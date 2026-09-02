@@ -352,17 +352,55 @@ mutants crate *args:
     mkdir -p target/mutants/{{crate}}
     {{dyld-env}} {{rocksdb-env}} cargo mutants -p {{crate}} --output target/mutants/{{crate}} {{args}}
 
-# Mutate only this branch's diff vs origin/main (PR-viable cost)
-mutants-diff crate:
+# Mutate only this branch's diff for one locked crate (PR-viable cost).
+# base defaults to the merge-base with origin/main; CI passes its own.
+# cargo-mutants exit 3 means "at least one mutant timed out" and outranks its
+# exit 2 for missed ones, so a 3 is re-read against missed.txt below.
+mutants-diff crate base="" *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
     ./scripts/locked_areas.py --check-crate {{crate}}
+    crate_path=$(./scripts/locked_areas.py --crate-path {{crate}})
+    base="{{base}}"
+    if [ -z "$base" ]; then base=$(git merge-base origin/main HEAD); fi
+    mkdir -p target/mutants
+    patch="target/mutants/{{crate}}-diff.patch"
+    git diff "$base" -- "$crate_path" > "$patch"
+    if [ ! -s "$patch" ]; then
+      echo "mutants-diff: no changes under $crate_path since $base"
+      exit 0
+    fi
     mkdir -p target/mutants/{{crate}}-diff
-    git diff $(git merge-base origin/main HEAD) > target/mutants-diff.patch
-    {{dyld-env}} {{rocksdb-env}} cargo mutants -p {{crate}} --in-diff target/mutants-diff.patch --output target/mutants/{{crate}}-diff
+    status=0
+    {{dyld-env}} {{rocksdb-env}} cargo mutants -p {{crate}} --in-diff "$patch" \
+      --output target/mutants/{{crate}}-diff {{args}} || status=$?
+    # cargo-mutants reports a timeout (3) in preference to a miss (2), so exit 3
+    # alone says nothing about misses. The verdict this ratchet enforces is
+    # *missed* mutants, so ask missed.txt directly before letting a 3 pass.
+    if [ "$status" -eq 3 ]; then
+      missed="target/mutants/{{crate}}-diff/mutants.out/missed.txt"
+      if [ -s "$missed" ]; then
+        echo "mutants-diff: {{crate}} had timed-out mutants *and* missed ones — missed mutants are fatal:"
+        sed 's/^/  /' "$missed"
+        exit 2
+      fi
+      echo "mutants-diff: {{crate}} had timed-out mutants and no missed ones — see the run output"
+      exit 0
+    fi
+    exit "$status"
 
 # Enforce an area's mutation score from a completed run (gate from the spec
 # header — `just locked-areas`; --min-score overrides for an unlocked crate)
 mutants-gate crate *args:
     ./scripts/mutants-gate.py target/mutants/{{crate}}/mutants.out/outcomes.json --crate {{crate}} {{args}}
+
+# Unit tests for the mutation gate's arithmetic (shard summing, previously_caught)
+#
+# The gate itself only ever runs after a multi-hour mutation run — locally or in
+# `mutants-weekly.yml` — so its scoring rules are pinned against synthetic
+# outcomes files here instead, in under a second.
+test-mutants-gate:
+    ./scripts/tests/test_mutants_gate.py
 
 # The locked-areas manifest: which areas are locked, at what mutation gate,
 # over which crates. Read from the `specs/*.md` header key blocks.
@@ -821,12 +859,13 @@ lint crate="": lint-gates lint-turmoil-features lint-turmoil lint-spec quint-che
 
 # Gate: the compile-free subset of the seam-lint family — every `lint-*` gate
 # except `lint-spec` (builds test binaries) and the turmoil lints
-# (compile via clippy, or exist only to police the turmoil feature). These are
-# grep/regex checks over source text, so the whole set runs in well under a
-# second (see agents/seam-lints.md) and is cheap enough to run
-# unconditionally on every commit, unlike `lint` (clippy compiles the
-# workspace). Wired into lefthook pre-commit with no CLAUDECODE skip.
-lint-gates: lint-budget-growth lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-durable-ack lint-nested-config lint-error-sanitize lint-status-sanitize lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate lint-continuation-lock lint-script-write-seam lint-command-admission lint-ship-cmd-full lint-locked-areas
+# (compile via clippy, or exist only to police the turmoil feature), plus
+# `test-mutants-gate`, the self-test for the scoring script the mutation gates
+# call. These are grep/regex checks over source text (and stdlib-only Python),
+# so the whole set runs in well under a second (see agents/seam-lints.md) and is
+# cheap enough to run unconditionally on every commit, unlike `lint` (clippy
+# compiles the workspace). Wired into lefthook pre-commit with no CLAUDECODE skip.
+lint-gates: lint-budget-growth lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-durable-ack lint-nested-config lint-error-sanitize lint-status-sanitize lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate lint-continuation-lock lint-script-write-seam lint-command-admission lint-ship-cmd-full lint-locked-areas test-mutants-gate
     @echo "OK: seam-lint gates passed"
 
 # Gate: turmoil-featured test bodies (frogdb-server/crates/server/tests/simulation.rs)

@@ -106,25 +106,32 @@ def rel(path: Path) -> str:
     return str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path)
 
 
-def workspace_members(root: Path = ROOT) -> set[str]:
-    """Every workspace member's *package name*.
+def member_paths(root: Path = ROOT) -> dict[str, str]:
+    """Every workspace member's *package name* → its repo-relative directory.
 
     `Cargo.toml` lists members by path (`frogdb-server/crates/txn`), while a
     spec names them the way `cargo mutants -p` does, so the package name is
     read out of each member's own manifest rather than guessed from the path.
+    The directory is what `git diff -- <path>` needs to scope a diff to one
+    crate (`just mutants-diff`, and the generated per-crate CI path filters).
     """
     manifest = tomllib.loads((root / "Cargo.toml").read_text())
-    names: set[str] = set()
+    paths: dict[str, str] = {}
     for member in manifest.get("workspace", {}).get("members", []):
-        paths = sorted(root.glob(member)) if "*" in member else [root / member]
-        for path in paths:
+        members = sorted(root.glob(member)) if "*" in member else [root / member]
+        for path in members:
             cargo = path / "Cargo.toml"
             if not cargo.is_file():
                 continue
             name = tomllib.loads(cargo.read_text()).get("package", {}).get("name")
             if name:
-                names.add(name)
-    return names
+                paths[name] = path.relative_to(root).as_posix()
+    return paths
+
+
+def workspace_members(root: Path = ROOT) -> set[str]:
+    """Every workspace member's *package name*."""
+    return set(member_paths(root))
 
 
 def parse_header(path: Path) -> tuple[list[tuple[int, str, str]], list[str]]:
@@ -333,7 +340,26 @@ def main() -> int:
         metavar="CRATE",
         help="exit 0 if the crate is inside the mutation perimeter, 1 with a message if not",
     )
+    ap.add_argument(
+        "--crate-path",
+        metavar="CRATE",
+        help="print the crate's repo-relative directory (what `git diff -- <path>` scopes on)",
+    )
     args = ap.parse_args()
+
+    # Answered before `validate()`: the crate's directory is a workspace fact,
+    # not a manifest one, so an unrelated bad spec header must not hide it.
+    if args.crate_path:
+        paths = member_paths()
+        if args.crate_path not in paths:
+            print(
+                f"ERROR: {args.crate_path} is not a workspace member "
+                "(see the `members` list in Cargo.toml)",
+                file=sys.stderr,
+            )
+            return 1
+        print(paths[args.crate_path])
+        return 0
 
     specs, errors = validate()
     if errors:

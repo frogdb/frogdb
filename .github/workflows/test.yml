@@ -33,6 +33,7 @@ jobs:
       specs: ${{ steps.filter.outputs.specs }}
       quint: ${{ steps.filter.outputs.quint }}
       testing: ${{ steps.filter.outputs.testing }}
+      mutants_matrix: ${{ steps.mutants-matrix.outputs.crates }}
     steps:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -84,6 +85,47 @@ jobs:
             - 'scripts/quint-*.sh'
           testing:
             - 'testing/**'
+          locked-frogdb-cluster:
+            - 'frogdb-server/crates/cluster/**'
+          locked-frogdb-cluster-runtime:
+            - 'frogdb-server/crates/cluster-runtime/**'
+          locked-frogdb-persistence:
+            - 'frogdb-server/crates/persistence/**'
+          locked-frogdb-recovery:
+            - 'frogdb-server/crates/recovery/**'
+          locked-frogdb-replication:
+            - 'frogdb-server/crates/replication/**'
+          locked-frogdb-replication-runtime:
+            - 'frogdb-server/crates/replication-runtime/**'
+          locked-frogdb-txn:
+            - 'frogdb-server/crates/txn/**'
+          locked-frogdb-vll:
+            - 'frogdb-server/crates/vll/**'
+    - id: mutants-matrix
+      name: Reduce locked-crate filters to a matrix
+      env:
+        LOCKED_FROGDB_CLUSTER: ${{ steps.filter.outputs['locked-frogdb-cluster'] }}
+        LOCKED_FROGDB_CLUSTER_RUNTIME: ${{ steps.filter.outputs['locked-frogdb-cluster-runtime'] }}
+        LOCKED_FROGDB_PERSISTENCE: ${{ steps.filter.outputs['locked-frogdb-persistence'] }}
+        LOCKED_FROGDB_RECOVERY: ${{ steps.filter.outputs['locked-frogdb-recovery'] }}
+        LOCKED_FROGDB_REPLICATION: ${{ steps.filter.outputs['locked-frogdb-replication'] }}
+        LOCKED_FROGDB_REPLICATION_RUNTIME: ${{ steps.filter.outputs['locked-frogdb-replication-runtime'] }}
+        LOCKED_FROGDB_TXN: ${{ steps.filter.outputs['locked-frogdb-txn'] }}
+        LOCKED_FROGDB_VLL: ${{ steps.filter.outputs['locked-frogdb-vll'] }}
+      run: |
+        set -euo pipefail
+        crates=()
+        if [ "$LOCKED_FROGDB_CLUSTER" = "true" ]; then crates+=(frogdb-cluster); fi
+        if [ "$LOCKED_FROGDB_CLUSTER_RUNTIME" = "true" ]; then crates+=(frogdb-cluster-runtime); fi
+        if [ "$LOCKED_FROGDB_PERSISTENCE" = "true" ]; then crates+=(frogdb-persistence); fi
+        if [ "$LOCKED_FROGDB_RECOVERY" = "true" ]; then crates+=(frogdb-recovery); fi
+        if [ "$LOCKED_FROGDB_REPLICATION" = "true" ]; then crates+=(frogdb-replication); fi
+        if [ "$LOCKED_FROGDB_REPLICATION_RUNTIME" = "true" ]; then crates+=(frogdb-replication-runtime); fi
+        if [ "$LOCKED_FROGDB_TXN" = "true" ]; then crates+=(frogdb-txn); fi
+        if [ "$LOCKED_FROGDB_VLL" = "true" ]; then crates+=(frogdb-vll); fi
+        matrix=$(jq -cn '$ARGS.positional' --args ${crates[@]+"${crates[@]}"})
+        echo "crates=$matrix" >> "$GITHUB_OUTPUT"
+        echo "locked crates touched: $matrix"
   actionlint:
     needs: changes
     if: needs.changes.outputs.workflows == 'true'
@@ -104,6 +146,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: just cargo:cargo-deny
@@ -137,6 +181,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: python uv just
@@ -156,9 +202,11 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
-        install_args: just npm:@informalsystems/quint
+        install_args: just node npm:@informalsystems/quint
         cache: 'true'
         experimental: 'true'
     - name: Typecheck Quint models
@@ -167,7 +215,7 @@ jobs:
       run: just quint-run
   unit-tests:
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.specs == 'true'
     name: Unit Tests
     runs-on: ubuntu-latest
     steps:
@@ -175,9 +223,11 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
-        install_args: just cargo:cargo-nextest npm:@informalsystems/quint
+        install_args: python uv just cargo:cargo-nextest node npm:@informalsystems/quint
         cache: 'true'
         experimental: 'true'
     - name: Install Rust 1.92.0
@@ -190,6 +240,9 @@ jobs:
         shared-key: stable
     - name: Run unit tests
       run: cargo nextest run --all
+    - name: Spec ↔ test agreement
+      if: '!cancelled()'
+      run: just lint-spec
   cmd-full-build:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
@@ -200,6 +253,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: just
@@ -221,6 +276,110 @@ jobs:
       run: cargo check -p frogdb-server --all-targets
     - name: Check server (full command surface)
       run: cargo check -p frogdb-server --features cmd-full --all-targets
+  mutants-diff:
+    needs: changes
+    if: needs.changes.outputs.mutants_matrix != '[]'
+    name: Mutation Ratchet (locked crates)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    concurrency:
+      group: mutants-diff-${{ github.event_name == 'pull_request' && github.ref || github.sha }}-${{ matrix.crate }}
+      cancel-in-progress: true
+    strategy:
+      matrix:
+        crate: ${{ fromJSON(needs.changes.outputs.mutants_matrix) }}
+      fail-fast: false
+    steps:
+    - name: Checkout
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        fetch-depth: '0'
+    - name: Set up mise toolchain
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
+        MISE_JOBS: '1'
+      with:
+        install: 'true'
+        install_args: python uv just cargo:cargo-mutants cargo:cargo-nextest
+        cache: 'true'
+        experimental: 'true'
+    - name: Install Rust 1.92.0
+      uses: dtolnay/rust-toolchain@1.92.0
+    - name: Install libclang
+      run: sudo apt-get install -y libclang-dev
+    - name: Cache Rust build artifacts
+      uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+      with:
+        shared-key: mutants
+    - id: base
+      name: Resolve the diff base
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        BEFORE: ${{ github.event.before }}
+      run: |
+        set -euo pipefail
+        if [ "${EVENT_NAME}" = "pull_request" ]; then
+          sha=$(git merge-base origin/main HEAD)
+        else
+          if [ -z "${BEFORE}" ] || [ "${BEFORE}" = "0000000000000000000000000000000000000000" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "This push created the branch (no before-SHA); nothing to diff against."
+            exit 0
+          fi
+          if ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "before-SHA ${BEFORE} is unreachable (force push); nothing to diff against."
+            exit 0
+          fi
+          sha="${BEFORE}"
+        fi
+        [ -n "${sha}" ] || { echo "mutants-diff: could not resolve a base commit"; exit 1; }
+        echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+    - name: Mutate the diff
+      if: steps.base.outputs.skip != 'true'
+      env:
+        CRATE: ${{ matrix.crate }}
+        BASE: ${{ steps.base.outputs.sha }}
+      run: just mutants-diff "${CRATE}" "${BASE}" --jobs 2
+    - name: Summarize the run
+      if: always() && steps.base.outcome == 'success' && steps.base.outputs.skip != 'true'
+      env:
+        CRATE: ${{ matrix.crate }}
+        BASE: ${{ steps.base.outputs.sha }}
+      run: |
+        set -uo pipefail
+        out="target/mutants/${CRATE}-diff/mutants.out"
+        count() { if [ -f "${out}/$1.txt" ]; then grep -c '' "${out}/$1.txt"; else echo 0; fi; }
+        caught=$(count caught)
+        missed=$(count missed)
+        unviable=$(count unviable)
+        timeout=$(count timeout)
+        total=$((caught + missed + unviable + timeout))
+        {
+          echo "### mutants-diff: ${CRATE}"
+          echo
+          if [ ! -d "${out}" ]; then
+            # The recipe exits 0 before mutating when the crate-scoped
+            # patch is empty, so no mutants.out exists — a different
+            # outcome from "mutated, found nothing to mutate".
+            echo "No changes under \`${CRATE}\` since \`${BASE}\`; nothing to mutate."
+          elif [ "${total}" -eq 0 ]; then
+            echo "No mutants in this crate's share of the diff."
+          else
+            echo "${total} total, ${caught} caught, ${missed} missed, ${unviable} unviable, ${timeout} timeout"
+            if [ "${missed}" -gt 0 ]; then
+              echo
+              echo "Missed mutants — each needs a forcing test or a documented-equivalent exclusion:"
+              echo
+              sed 's/^/- /' "${out}/missed.txt"
+            fi
+            if [ $((timeout * 100)) -gt $((total * 5)) ]; then
+              echo
+              echo "> Warning: ${timeout} of ${total} mutants timed out (over 5%) — the counts above understate the crate's exposure; raise \`timeout_multiplier\` in .cargo/mutants.toml."
+            fi
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
   shuttle-tests:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
@@ -231,6 +390,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: just cargo:cargo-nextest
@@ -256,6 +417,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: just cargo:cargo-nextest
@@ -283,6 +446,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: just cargo:cargo-nextest
@@ -308,6 +473,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: just
@@ -333,6 +500,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: just
@@ -386,6 +555,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: just
@@ -411,6 +582,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: python uv just
@@ -428,6 +601,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: python uv just
@@ -445,6 +620,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: python uv just
@@ -470,6 +647,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: python uv just
@@ -487,6 +666,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: python uv just
@@ -504,6 +685,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: python uv just
@@ -521,6 +704,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: python uv ruff
@@ -540,6 +725,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: helm
@@ -559,6 +746,7 @@ jobs:
     - quint
     - unit-tests
     - cmd-full-build
+    - mutants-diff
     - shuttle-tests
     - turmoil-tests
     - operator-tests

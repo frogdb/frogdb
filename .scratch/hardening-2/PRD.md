@@ -612,3 +612,12 @@ Original questions kept for the record; ruling appended to each.
 7. **Coverage pipeline.** Left broken at campaign-1 exit. *Recommendation:* fix it in W0 or turn it
    off; a coverage number nobody trusts is worse than none.
    **Ruling: fix it in W0.** Issues 27/28/31 join wave 0 alongside c2-06.
+
+## Decisions — locked-areas-mechanical dispatch (2026-09-02)
+
+Grill-and-dispatch ledger for issues 13–16. Appended per answer; lines never edited.
+
+- D1: scope = issues 14, 15, 16; integration branch `locked-areas-mechanical/impl` off `worktree-locked-areas-mechanical` (13 unmerged on main); fu-a/b/c stay unfiled.
+- D2: gate command = `just workflow-gen --check && just lint-gates && just lint-py && just fmt-py-check && just scratch-check` (compile-free; per-issue extras live in that issue's acceptance criteria).
+- D3: live CI verification in-session = push `locked-areas-mechanical/impl` and open a draft `[ci-verify]` PR against `main` (closed unmerged) so the forcing tests run for real: a locked-crate touch spawns a red `mutants-diff` leg, a `frogdb-commands`-only change spawns none, and `mutants-weekly.yml` dispatched with `crate: frogdb-txn` prints the score against the header gate.
+- D4: refines issue 15's ruled concurrency group — `mutants-diff` legs are keyed by ref on `pull_request` (re-push cancels superseded legs) and by sha on `push` (back-to-back pushes to main never cancel each other; every pushed commit gets its verdict, since push N+1's base is push N's head).

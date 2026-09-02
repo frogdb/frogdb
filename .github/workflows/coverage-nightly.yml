@@ -20,7 +20,7 @@ jobs:
       skip: ${{ steps.gate.outputs.skip }}
     steps:
     - id: gate
-      name: Check for new commits since last successful run
+      name: Check for new commits since last successful scheduled run
       env:
         GH_TOKEN: ${{ github.token }}
         EVENT_NAME: ${{ github.event_name }}
@@ -34,16 +34,16 @@ jobs:
           exit 0
         fi
         last_sha=$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow "${WORKFLOW_FILE}" \
-          --status success --limit 1 --json headSha --jq '.[0].headSha // empty')
+          --event schedule --status success --limit 1 --json headSha --jq '.[0].headSha // empty')
         if [ -z "${last_sha}" ]; then
           echo "skip=false" >> "$GITHUB_OUTPUT"
-          echo "No previous successful run found; proceeding."
+          echo "No previous successful scheduled run found; proceeding."
         elif [ "${last_sha}" = "${CURRENT_SHA}" ]; then
           echo "skip=true" >> "$GITHUB_OUTPUT"
-          echo "No new commits since last successful run (${last_sha}); skipping."
+          echo "No new commits since last successful scheduled run (${last_sha}); skipping."
         else
           echo "skip=false" >> "$GITHUB_OUTPUT"
-          echo "New commits since last successful run (${last_sha} -> ${CURRENT_SHA}); proceeding."
+          echo "New commits since last successful scheduled run (${last_sha} -> ${CURRENT_SHA}); proceeding."
         fi
   coverage:
     needs: gate
@@ -56,6 +56,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: just cargo:cargo-nextest
