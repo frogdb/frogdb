@@ -1,6 +1,6 @@
 # `workflow_gen` cannot see the locked-areas manifest — give it one helper that reads it
 
-Status: ready-for-agent
+Status: done
 Type: mechanism (interface slice, carved from 15 and 16)
 Severity: n/a — enabling slice; 15 and 16 both need it and would otherwise each invent it
 Area: campaign mechanism / CI
@@ -57,3 +57,15 @@ def locked_areas() -> list[Spec]:
 ## Decisions
 
 D1
+
+## Resolution
+
+Landed as `23da7cb9` (merge `41351567`) on `locked-areas-mechanical/impl` (2026-09-02).
+`helpers.locked_areas()` returns the parser's `Spec` list for LOCKED areas only, sorted by
+spec path, raising `RuntimeError` on any manifest validation error. The repo-root walk is
+one `_repo_root()` shared with `_read_rust_version`. `workflow_gen` has no test layout, so
+the raise path is demonstrated in the report rather than pinned by a test. Review left four
+Minor items (prefer `sys.path.append`, private `_ROOT_MARKER`, no caching — callers call it
+once, no self-explaining error when `scripts/` is missing); the first two are folded into
+issue 15's brief since it edits the same file next. `Spec.area` is uppercase — job ids and
+matrix keys in 15/16 use `.area.lower()`.
