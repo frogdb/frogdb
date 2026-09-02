@@ -21,6 +21,7 @@ failure (same shape as test_spec_lint.py).
 
 from __future__ import annotations
 
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -154,6 +155,31 @@ def test_member_paths_locate_every_locked_crate() -> None:
         assert crate in paths, (crate, sorted(paths))
         manifest = locked_areas.ROOT / paths[crate] / "Cargo.toml"
         assert manifest.is_file(), (crate, paths[crate])
+
+
+def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
+    """Invoke the script the way `just mutants-diff` does — as a subprocess."""
+    return subprocess.run(
+        [str(locked_areas.ROOT / "scripts" / "locked_areas.py"), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_crate_path_cli_prints_the_directory() -> None:
+    """`just mutants-diff` shells out for this: stdout is the path, and only the path."""
+    done = _run_cli("--crate-path", "frogdb-txn")
+    assert done.returncode == 0, (done.returncode, done.stderr)
+    assert done.stdout.strip() == "frogdb-server/crates/txn", done.stdout
+
+
+def test_crate_path_cli_rejects_a_non_member() -> None:
+    """A typo must stop the recipe, not hand `git diff` an empty pathspec."""
+    done = _run_cli("--crate-path", "no-such-crate")
+    assert done.returncode == 1, (done.returncode, done.stdout)
+    assert done.stdout.strip() == "", done.stdout
+    assert "no-such-crate" in done.stderr, done.stderr
 
 
 def main() -> int:
