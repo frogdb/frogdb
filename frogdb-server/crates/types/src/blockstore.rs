@@ -238,21 +238,27 @@ impl BlockStore {
         let Some(victim) = self.compact_candidate.take() else {
             return;
         };
-        let buf = std::mem::take(&mut self.blocks[victim as usize].buf);
-        self.blocks[victim as usize].dead = 0;
+        let block = &mut self.blocks[victim as usize];
+        // A fully dead victim (insertion-order deletes, oversized blocks) has
+        // no live records — skip the O(entries) handle scan entirely.
+        let fully_dead = block.dead as usize == block.buf.len();
+        let buf = std::mem::take(&mut block.buf);
+        block.dead = 0;
         if self.tail == Some(victim) {
             // Only a fully dead tail is ever a candidate; nothing to move.
             self.tail = None;
         }
         let mut moved = 0usize;
-        for handle in handles {
-            if handle.block != victim {
-                continue;
+        if !fully_dead {
+            for handle in handles {
+                if handle.block != victim {
+                    continue;
+                }
+                let start = handle.offset as usize;
+                let bytes = &buf[start..start + handle.len as usize];
+                moved += bytes.len();
+                *handle = self.append(&[bytes]);
             }
-            let start = handle.offset as usize;
-            let bytes = &buf[start..start + handle.len as usize];
-            moved += bytes.len();
-            *handle = self.append(&[bytes]);
         }
         // The moved bytes were already counted live; append re-added them.
         self.live_bytes -= moved;
