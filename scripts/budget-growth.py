@@ -83,6 +83,7 @@ KEYSPACE_MODULES = (
     # the probabilistic/time-series types. Their bytes are keyspace bytes.
     "frogdb-server/crates/types/src/types/",
     "frogdb-server/crates/types/src/timeseries/",
+    "frogdb-server/crates/types/src/json/",
     "frogdb-server/crates/types/src/bloom.rs",
     "frogdb-server/crates/types/src/cuckoo.rs",
     # The block encoding those value representations are built from — a
