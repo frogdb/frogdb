@@ -241,6 +241,7 @@ jobs:
     - name: Run unit tests
       run: cargo nextest run --all
     - name: Spec ↔ test agreement
+      if: '!cancelled()'
       run: just lint-spec
   cmd-full-build:
     needs: changes
@@ -297,6 +298,7 @@ jobs:
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       env:
         MISE_DISABLE_TOOLS: rust
+        MISE_JOBS: '1'
       with:
         install: 'true'
         install_args: python uv just cargo:cargo-mutants cargo:cargo-nextest

@@ -203,11 +203,17 @@ def mise_setup_step(install_args: str | None = None) -> Step:
     # rust is unconfigured for mise (see RUST_TOOLCHAIN above), so a cargo:
     # tool's declared `rust` install dependency must fall back to ambient PATH
     # instead of failing mise's install-dependency check.
+    env = omap(MISE_DISABLE_TOOLS="rust")
+    cargo_tools = [tok for tok in (install_args or "").split() if tok.startswith("cargo:")]
+    if len(cargo_tools) >= 2:
+        # Parallel `cargo install`s race rustup's first-use toolchain install of
+        # the rust-toolchain.toml pin, so force them to install one at a time.
+        env["MISE_JOBS"] = SQ("1")
     return Step(
         name="Set up mise toolchain",
         uses=MISE_ACTION,
         with_=w,
-        env=omap(MISE_DISABLE_TOOLS="rust"),
+        env=env,
     )
 
 
