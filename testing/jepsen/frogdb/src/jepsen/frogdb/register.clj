@@ -159,17 +159,22 @@
 ;; ===========================================================================
 
 (defn checker
-  "Checker for single-key register workload."
+  "Checker for single-key register workload.
+
+   `:competition` races Knossos' :linear (JIT-linearization) and :wgl
+   (Wing-Gong-Lowe + bitset memoization) analyses and takes whichever decides
+   first, aborting the loser. :linear alone is exponential in concurrency on a
+   single hot key, which is what forced the old --concurrency caps in run.py."
   []
   (checker/linearizable {:model (model/cas-register)
-                         :algorithm :linear}))
+                         :algorithm :competition}))
 
 (defn independent-checker
   "Checker for multi-key register workload."
   []
   (independent/checker
     (checker/linearizable {:model (model/cas-register)
-                           :algorithm :linear})))
+                           :algorithm :competition})))
 
 ;; ===========================================================================
 ;; Workload
