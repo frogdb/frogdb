@@ -354,7 +354,8 @@ mutants crate *args:
 
 # Mutate only this branch's diff for one locked crate (PR-viable cost).
 # base defaults to the merge-base with origin/main; CI passes its own.
-# cargo-mutants exit 3 = timeouts only: reported, not fatal (see .cargo/mutants.toml).
+# cargo-mutants exit 3 means "at least one mutant timed out" and outranks its
+# exit 2 for missed ones, so a 3 is re-read against missed.txt below.
 mutants-diff crate base="" *args:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -373,9 +374,16 @@ mutants-diff crate base="" *args:
     status=0
     {{dyld-env}} {{rocksdb-env}} cargo mutants -p {{crate}} --in-diff "$patch" \
       --output target/mutants/{{crate}}-diff {{args}} || status=$?
-    # Exit 3 is cargo-mutants' "timeouts, nothing missed" — the verdict this
-    # ratchet enforces is *missed* mutants (exit 2), so a timeout warns and passes.
+    # cargo-mutants reports a timeout (3) in preference to a miss (2), so exit 3
+    # alone says nothing about misses. The verdict this ratchet enforces is
+    # *missed* mutants, so ask missed.txt directly before letting a 3 pass.
     if [ "$status" -eq 3 ]; then
+      missed="target/mutants/{{crate}}-diff/mutants.out/missed.txt"
+      if [ -s "$missed" ]; then
+        echo "mutants-diff: {{crate}} had timed-out mutants *and* missed ones — missed mutants are fatal:"
+        sed 's/^/  /' "$missed"
+        exit 2
+      fi
       echo "mutants-diff: {{crate}} had timed-out mutants and no missed ones — see the run output"
       exit 0
     fi
