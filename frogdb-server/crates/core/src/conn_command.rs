@@ -651,6 +651,16 @@ pub trait DebugProvider: Send + Sync {
     /// cheap enough to run at every Jepsen nemesis quiesce point in a release
     /// build.
     fn replication_check(&self) -> Option<Vec<crate::Violation>>;
+
+    /// DEBUG ARENA-DECAY — `(shard_id, arena)` for every shard bound to its own
+    /// allocator arena, in shard order.
+    ///
+    /// Deliberately plain integers: the decay values themselves are read and
+    /// written through the allocator chokepoint in the executor, and this seam
+    /// exists only to say *which* arenas a decay change would reach. Empty when
+    /// no shard owns an arena (simulation, or a build without jemalloc), which
+    /// the executor reports as such rather than pretending the setting applied.
+    fn shard_arenas(&self) -> Vec<(usize, u32)>;
 }
 
 /// The connection-local MONITOR machinery, abstracted so the connection-command
@@ -1146,6 +1156,9 @@ mod tests {
             unimplemented!()
         }
         fn replication_check(&self) -> Option<Vec<crate::Violation>> {
+            unimplemented!()
+        }
+        fn shard_arenas(&self) -> Vec<(usize, u32)> {
             unimplemented!()
         }
     }

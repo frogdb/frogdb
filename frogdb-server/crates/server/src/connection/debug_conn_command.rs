@@ -277,6 +277,7 @@ impl ConnectionCommand for DebugConnCommand {
                         Response::error("ERR Unknown DEBUG REPLICATION subcommand. Use CHECK.")
                     }
                 }
+                b"ARENA-DECAY" => arena_decay(debug, args),
                 b"PAUSE-SLOT" => debug_pause_slot(client_registry, args),
                 b"KEYSIZES-HIST-ASSERT" => keysizes_hist_assert(debug, args).await,
                 b"ALLOCSIZE-SLOTS-ASSERT" => allocsize_slots_assert(debug, args).await,
@@ -323,6 +324,86 @@ async fn debug_sleep(args: &[Bytes]) -> Response {
     Response::ok()
 }
 
+/// DEBUG ARENA-DECAY \[&lt;dirty_ms&gt; &lt;muzzy_ms&gt;\] — report or retune how long
+/// each shard arena holds on to freed pages before returning them to the OS.
+///
+/// The server sets both at startup through `MALLOC_CONF` (see
+/// [`crate::malloc_conf`]); this is the runtime half of that setting, so a
+/// fragmentation problem can be diagnosed and its decay retuned on a live node
+/// instead of waiting for a restart. Milliseconds, `0` = decay immediately,
+/// `-1` = never.
+///
+/// A write applies to every shard arena, which is what an operator retuning a
+/// node wants; per-arena divergence would make the per-shard metrics
+/// incomparable for no gain. It is applied one arena at a time because
+/// jemalloc's all-arenas index is not accepted by the `decay_ms` mallctls (it
+/// answers `EFAULT`), and a node with no bound arenas is told so rather than
+/// given an `+OK` for a setting that reached nothing.
+fn arena_decay(debug: &dyn DebugProvider, args: &[Bytes]) -> Response {
+    use frogdb_telemetry::jemalloc;
+
+    let arenas = debug.shard_arenas();
+    match args.len() {
+        1 => {
+            let Some(configured) = jemalloc::configured_decay() else {
+                return Response::error(
+                    "ERR DEBUG ARENA-DECAY requires a jemalloc build of the server",
+                );
+            };
+            let mut lines = vec![
+                "# Arena decay in milliseconds (0 = purge on free, -1 = never)".to_string(),
+                format!(
+                    "startup:dirty={},muzzy={}",
+                    configured.dirty_ms, configured.muzzy_ms
+                ),
+            ];
+            for (shard_id, arena) in arenas {
+                // An arena whose decay cannot be read is skipped rather than
+                // reported with the startup values: this reply exists to expose
+                // divergence, so guessing here would defeat it.
+                if let Some(decay) = jemalloc::read_arena_decay(arena) {
+                    lines.push(format!(
+                        "shard{shard_id}:arena={arena},dirty={},muzzy={}",
+                        decay.dirty_ms, decay.muzzy_ms
+                    ));
+                }
+            }
+            Response::Bulk(Some(Bytes::from(lines.join("\n"))))
+        }
+        3 => {
+            let (Some(dirty_ms), Some(muzzy_ms)) =
+                (parse_decay_ms(&args[1]), parse_decay_ms(&args[2]))
+            else {
+                return Response::error(
+                    "ERR DEBUG ARENA-DECAY milliseconds must be an integer >= -1",
+                );
+            };
+            if arenas.is_empty() {
+                return Response::error(
+                    "ERR DEBUG ARENA-DECAY has no shard arenas to retune on this node",
+                );
+            }
+            let decay = jemalloc::ArenaDecay { dirty_ms, muzzy_ms };
+            for (_, arena) in arenas {
+                if let Err(err) = jemalloc::set_arena_decay(arena, decay) {
+                    return Response::error(format!(
+                        "ERR DEBUG ARENA-DECAY failed on arena {arena}: {err}"
+                    ));
+                }
+            }
+            Response::ok()
+        }
+        _ => Response::error("ERR wrong number of arguments for 'DEBUG ARENA-DECAY' command"),
+    }
+}
+
+/// A decay setting in milliseconds: any non-negative count, or `-1` for "never
+/// decay". Anything below `-1` is not a jemalloc decay value.
+fn parse_decay_ms(arg: &Bytes) -> Option<i64> {
+    let ms = std::str::from_utf8(arg).ok()?.parse::<i64>().ok()?;
+    (ms >= -1).then_some(ms)
+}
+
 /// DEBUG HELP — usage lines.
 fn debug_help() -> Response {
     let help = vec![
@@ -348,6 +429,8 @@ fn debug_help() -> Response {
         "    Cross-check the expiry index against entry deadlines.",
         "DEBUG EXPIRE-BACKDATE <key> <ms>",
         "    Backdate a key's TTL <ms> into the past so it is already expired (test support).",
+        "DEBUG ARENA-DECAY [<dirty_ms> <muzzy_ms>]",
+        "    Report each shard arena's page-decay settings, or retune every arena (ms; -1 = never).",
         "DEBUG CLUSTER CHECK",
         "    Run the cluster invariant catalog against live state; empty array = clean.",
         "DEBUG REPLICATION CHECK",
@@ -1213,6 +1296,7 @@ mod tests {
         cluster_check: Option<Vec<frogdb_core::Violation>>,
         replication_check: Option<Vec<frogdb_core::Violation>>,
         object_info: Option<frogdb_core::shard::ObjectInfo>,
+        shard_arenas: Vec<(usize, u32)>,
     }
 
     impl StubDebug {
@@ -1222,7 +1306,13 @@ mod tests {
                 cluster_check: Some(Vec::new()),
                 replication_check: Some(Vec::new()),
                 object_info: None,
+                shard_arenas: Vec::new(),
             }
+        }
+
+        fn with_shard_arenas(mut self, shard_arenas: Vec<(usize, u32)>) -> Self {
+            self.shard_arenas = shard_arenas;
+            self
         }
 
         fn with_object_info(mut self, object_info: Option<frogdb_core::shard::ObjectInfo>) -> Self {
@@ -1325,6 +1415,107 @@ mod tests {
         fn replication_check(&self) -> Option<Vec<frogdb_core::Violation>> {
             self.replication_check.clone()
         }
+        fn shard_arenas(&self) -> Vec<(usize, u32)> {
+            self.shard_arenas.clone()
+        }
+    }
+
+    #[test]
+    fn decay_ms_accepts_never_and_rejects_below_it() {
+        assert_eq!(parse_decay_ms(&arg("0")), Some(0));
+        assert_eq!(parse_decay_ms(&arg("10000")), Some(10_000));
+        // -1 is jemalloc's "never decay"; -2 is not a decay value at all.
+        assert_eq!(parse_decay_ms(&arg("-1")), Some(-1));
+        assert_eq!(parse_decay_ms(&arg("-2")), None);
+        assert_eq!(parse_decay_ms(&arg("soon")), None);
+    }
+
+    #[tokio::test]
+    async fn arena_decay_rejects_a_wrong_argument_count() {
+        let stub = StubDebug::new(true);
+        let fx = super::tests_fixture::Deps::new();
+        let resp = DebugConnCommand
+            .execute(&mut fx.ctx(Some(&stub)), &[arg("ARENA-DECAY"), arg("10")])
+            .await;
+        assert!(matches!(resp, Response::Error(_)), "{resp:?}");
+    }
+
+    #[tokio::test]
+    async fn arena_decay_rejects_a_millisecond_value_below_never() {
+        let stub = StubDebug::new(true);
+        let fx = super::tests_fixture::Deps::new();
+        let resp = DebugConnCommand
+            .execute(
+                &mut fx.ctx(Some(&stub)),
+                &[arg("ARENA-DECAY"), arg("-2"), arg("0")],
+            )
+            .await;
+        assert!(matches!(resp, Response::Error(_)), "{resp:?}");
+    }
+
+    /// The report names every shard arena, alongside the startup setting the
+    /// runtime values can now diverge from.
+    #[cfg(not(target_env = "msvc"))]
+    #[tokio::test]
+    async fn arena_decay_reports_the_startup_setting_and_every_shard_arena() {
+        let arena = frogdb_telemetry::jemalloc::create_arena().expect("arenas.create");
+        let stub = StubDebug::new(true).with_shard_arenas(vec![(0, arena)]);
+        let fx = super::tests_fixture::Deps::new();
+        let resp = DebugConnCommand
+            .execute(&mut fx.ctx(Some(&stub)), &[arg("ARENA-DECAY")])
+            .await;
+        let Response::Bulk(Some(body)) = resp else {
+            panic!("expected a bulk report, got {resp:?}");
+        };
+        let body = String::from_utf8(body.to_vec()).expect("utf8");
+        assert!(body.contains("startup:dirty="), "{body}");
+        assert!(
+            body.contains(&format!("shard0:arena={arena},dirty=")),
+            "{body}"
+        );
+    }
+
+    /// The retune reaches the allocator: a set is visible in the next report.
+    #[cfg(not(target_env = "msvc"))]
+    #[tokio::test]
+    async fn arena_decay_retunes_every_arena_at_runtime() {
+        let arena = frogdb_telemetry::jemalloc::create_arena().expect("arenas.create");
+        let restore = frogdb_telemetry::jemalloc::read_arena_decay(arena).expect("decay");
+        let stub = StubDebug::new(true).with_shard_arenas(vec![(0, arena)]);
+        let fx = super::tests_fixture::Deps::new();
+
+        let resp = DebugConnCommand
+            .execute(
+                &mut fx.ctx(Some(&stub)),
+                &[arg("ARENA-DECAY"), arg("1234"), arg("-1")],
+            )
+            .await;
+        assert_eq!(resp, Response::ok(), "{resp:?}");
+        assert_eq!(
+            frogdb_telemetry::jemalloc::read_arena_decay(arena),
+            Some(frogdb_telemetry::jemalloc::ArenaDecay {
+                dirty_ms: 1234,
+                muzzy_ms: -1,
+            })
+        );
+
+        frogdb_telemetry::jemalloc::set_arena_decay(arena, restore)
+            .expect("restore this arena's decay");
+    }
+
+    /// A node with no bound arenas is told the setting reached nothing, rather
+    /// than given an `+OK` for a retune that did not happen.
+    #[tokio::test]
+    async fn arena_decay_refuses_to_retune_when_no_shard_owns_an_arena() {
+        let stub = StubDebug::new(true);
+        let fx = super::tests_fixture::Deps::new();
+        let resp = DebugConnCommand
+            .execute(
+                &mut fx.ctx(Some(&stub)),
+                &[arg("ARENA-DECAY"), arg("0"), arg("0")],
+            )
+            .await;
+        assert!(matches!(resp, Response::Error(_)), "{resp:?}");
     }
 
     #[tokio::test]

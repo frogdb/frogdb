@@ -409,6 +409,14 @@ impl DebugProvider for ConnectionHandler {
             &self.replication_view(handler),
         ))
     }
+
+    fn shard_arenas(&self) -> Vec<(usize, u32)> {
+        self.observability
+            .shard_arenas
+            .samples()
+            .map(|s| (s.shard_id, s.arena))
+            .collect()
+    }
 }
 
 impl ConnectionHandler {

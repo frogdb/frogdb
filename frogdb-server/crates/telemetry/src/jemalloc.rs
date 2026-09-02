@@ -341,7 +341,10 @@ mod imp {
     /// has already made overdue, so lowering `dirty_ms` returns pages
     /// immediately rather than at the next natural decay tick.
     ///
-    /// Pass [`ALL_ARENAS`] to set every arena at once.
+    /// One real arena at a time: jemalloc's [`ALL_ARENAS`] sentinel is *not*
+    /// accepted by the `decay_ms` mallctls (its handler looks the index up as a
+    /// real arena and answers `EFAULT`), unlike `purge`. A caller retuning a
+    /// whole node loops over the arenas it owns — see `DEBUG ARENA-DECAY`.
     pub fn set_arena_decay(arena: u32, decay: ArenaDecay) -> std::io::Result<()> {
         write_arena_decay_ms(arena, "dirty", decay.dirty_ms)?;
         write_arena_decay_ms(arena, "muzzy", decay.muzzy_ms)
@@ -420,10 +423,12 @@ mod imp {
         unsafe { raw::read::<u64>(b"thread.deallocated\0") }.ok()
     }
 
-    /// `jemalloc`'s `MALLCTL_ARENAS_ALL` sentinel arena index: purging, setting
-    /// decay on, or reading stats for this pseudo-arena operates over every real
-    /// arena in one call. It's a C preprocessor `#define` (`4096`), not a symbol
-    /// bindgen exposes, so it's pinned here as a plain constant.
+    /// `jemalloc`'s `MALLCTL_ARENAS_ALL` sentinel arena index: purging this
+    /// pseudo-arena operates over every real arena in one call. It's a C
+    /// preprocessor `#define` (`4096`), not a symbol bindgen exposes, so it's
+    /// pinned here as a plain constant.
+    ///
+    /// Not every per-arena mallctl accepts it — [`set_arena_decay`] does not.
     pub const ALL_ARENAS: u32 = 4096;
 
     /// `MEMORY PURGE`: force jemalloc to return unused dirty pages across
@@ -1009,6 +1014,26 @@ mod tests {
             configured_decay().is_some(),
             "opt.*_decay_ms is how a build proves its malloc_conf decay settings took effect"
         );
+    }
+
+    /// `arena.<i>.purge` takes [`ALL_ARENAS`]; `arena.<i>.*_decay_ms` does not —
+    /// its handler resolves the index to a real arena first and answers
+    /// `EFAULT`. Callers therefore loop. Pinned because the two mallctls look
+    /// interchangeable in the header and are not.
+    #[test]
+    #[cfg(not(target_env = "msvc"))]
+    fn the_all_arenas_sentinel_is_rejected_by_the_decay_mallctl() {
+        assert!(
+            set_arena_decay(
+                ALL_ARENAS,
+                ArenaDecay {
+                    dirty_ms: 0,
+                    muzzy_ms: 0
+                }
+            )
+            .is_err()
+        );
+        purge_all().expect("the same sentinel is accepted by arena.<i>.purge");
     }
 
     /// The spike left open whether `mallctlnametomib` resolves for a
