@@ -102,6 +102,11 @@ New memory behavior of any kind, relitigating dispositions or limits, locking fr
 (value representations are below the spec seam by design — `memory_size()` is the contract
 surface).
 
+Note for the spec text (from issue 13's review): `memory_size()` is a *contents hash*, not
+an RSS estimate — block-backed values deliberately exclude `Vec`/`VecDeque` spare capacity
+for run-stability, so true footprint can exceed the reported figure (worst case ~2× for a
+freshly doubled buffer). The OOM-verdict rows should state which figure they bind to.
+
 ## Depends on
 
 Everything: reserved [issues 10–12](../) (table, ownership, eviction) and issues

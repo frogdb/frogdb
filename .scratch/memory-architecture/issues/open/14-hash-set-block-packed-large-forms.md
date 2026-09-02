@@ -33,6 +33,14 @@ dead space; a block whose live ratio drops below a threshold (~50%) is compacted
 live entries into the current tail block. This is a per-value mini-arena with compaction, not a
 general allocator — keep it dumb.
 
+**Amendment (2026-09-01, from issue 13's review):** issue 13 built `types/src/listpack.rs`
+new (LEB128 len + reverse-varint backlen) rather than extracting the existing hash/set
+small-form codecs, so three encodings now coexist: `set.rs` (`[mlen:u16][member]`),
+`hash.rs` (`lp_hash_*`), and the new module. This issue is therefore a **re-encode**, not a
+lift: migrate the hash and set *small forms* onto the shared module too (killing their
+hand-rolled codecs), and check for persisted-form implications while doing it — the small
+forms serialize through the same persistence path as everything else.
+
 ### 2. Large-hash form
 
 Replace `HashEncoding::HashMap(HashMap<Bytes, Bytes>)` (`hash.rs:171`) with an index over
