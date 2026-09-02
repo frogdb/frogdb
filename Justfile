@@ -859,11 +859,12 @@ lint crate="": lint-gates lint-turmoil-features lint-turmoil lint-spec quint-che
 
 # Gate: the compile-free subset of the seam-lint family — every `lint-*` gate
 # except `lint-spec` (builds test binaries) and the turmoil lints
-# (compile via clippy, or exist only to police the turmoil feature). These are
-# grep/regex checks over source text, so the whole set runs in well under a
-# second (see agents/seam-lints.md) and is cheap enough to run
-# unconditionally on every commit, unlike `lint` (clippy compiles the
-# workspace). Wired into lefthook pre-commit with no CLAUDECODE skip.
+# (compile via clippy, or exist only to police the turmoil feature), plus
+# `test-mutants-gate`, the self-test for the scoring script the mutation gates
+# call. These are grep/regex checks over source text (and stdlib-only Python),
+# so the whole set runs in well under a second (see agents/seam-lints.md) and is
+# cheap enough to run unconditionally on every commit, unlike `lint` (clippy
+# compiles the workspace). Wired into lefthook pre-commit with no CLAUDECODE skip.
 lint-gates: lint-budget-growth lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-durable-ack lint-nested-config lint-error-sanitize lint-status-sanitize lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate lint-continuation-lock lint-script-write-seam lint-command-admission lint-ship-cmd-full lint-locked-areas test-mutants-gate
     @echo "OK: seam-lint gates passed"
 
