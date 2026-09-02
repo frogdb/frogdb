@@ -295,11 +295,21 @@ pub struct ObservabilityDeps {
     /// connection command asks "is a collector installed?" rather than naming
     /// the concrete `frogdb_debug` type. Empty for the test-default deps.
     pub collectors: Arc<crate::server_observability::ServerObservability>,
+
+    /// Which jemalloc arena each shard owns, and that arena's last sampled
+    /// figures — the source `INFO arenas` renders and `DEBUG ARENA-DECAY`
+    /// retunes. Kept current by `frogdb_telemetry::ArenaSampler`; read here,
+    /// never sampled, so an INFO call costs a few relaxed atomic loads.
+    ///
+    /// Empty for the test-default deps and under simulation, where no shard has
+    /// an arena — which is why both surfaces report nothing rather than zeros.
+    pub shard_arenas: Arc<frogdb_telemetry::ShardArenaRegistry>,
 }
 
 impl Default for ObservabilityDeps {
     fn default() -> Self {
         Self {
+            shard_arenas: Arc::new(frogdb_telemetry::ShardArenaRegistry::empty()),
             metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
             shared_tracer: None,
             tracing_config: TracingConfig::default(),

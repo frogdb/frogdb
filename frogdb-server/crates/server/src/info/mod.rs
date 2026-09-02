@@ -165,7 +165,18 @@ const DEFAULT_SECTIONS: &[&str] = &[
 ];
 
 /// Additional sections included only in `INFO all` / `INFO everything`.
-const EXTRA_SECTIONS: &[&str] = &["commandstats", "latencystats", "latency_baseline", "tiered"];
+///
+/// `arenas` is here rather than in Memory deliberately: the Memory section is
+/// the Redis-compatible one, and its per-shard allocator figures are a FrogDB
+/// concept (see `MemorySection::render`). It is also O(shards) lines, which is
+/// exactly the "line count is a concern" case a diagnostic section exists for.
+const EXTRA_SECTIONS: &[&str] = &[
+    "commandstats",
+    "latencystats",
+    "latency_baseline",
+    "tiered",
+    "arenas",
+];
 
 /// Resolved, deduplicated, ordered list of requested section names.
 ///
@@ -806,6 +817,11 @@ pub struct InfoSources {
     /// detector is configured — the Hotkeys section renders empty rather
     /// than fabricating shard-hotness data.
     pub(crate) hot_shards: Option<frogdb_core::HotShardSnapshot>,
+    /// Per-shard jemalloc arena depth, as of the arena sampler's last tick
+    /// (see [`frogdb_telemetry::ArenaSampler`]). Only *sampled* arenas are
+    /// carried: a shard with no arena, or one the sampler has not reached
+    /// yet, is absent rather than reported as a row of zeros.
+    pub(crate) arenas: Vec<frogdb_telemetry::ShardArenaSample>,
 }
 
 impl InfoSources {
@@ -925,6 +941,12 @@ impl InfoSources {
     pub fn hot_shards(&self) -> Option<&frogdb_core::HotShardSnapshot> {
         self.hot_shards.as_ref()
     }
+
+    /// Sampled per-shard arena depth. Empty when no shard owns an arena, or
+    /// before the sampler's first tick — see the `arenas` field doc.
+    pub fn arenas(&self) -> &[frogdb_telemetry::ShardArenaSample] {
+        &self.arenas
+    }
 }
 
 // ============================================================================
@@ -1000,6 +1022,7 @@ pub(crate) mod test_support {
             shards: NodeStateSnapshot::default(),
             keyspace_stats: Arc::new(frogdb_core::KeyspaceStats::new()),
             hot_shards: None,
+            arenas: Vec::new(),
         }
     }
 }

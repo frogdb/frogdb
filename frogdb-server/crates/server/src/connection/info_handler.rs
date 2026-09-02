@@ -264,6 +264,15 @@ impl ConnectionHandler {
             shards,
             keyspace_stats: self.observability.keyspace_stats.clone(),
             hot_shards,
+            // A few relaxed atomic loads off the arena sampler's slots — the
+            // unsampled ones are dropped here so the section never has to
+            // decide whether a zero is real (see `InfoSources::arenas`).
+            arenas: self
+                .observability
+                .shard_arenas
+                .samples()
+                .filter(|s| s.is_sampled())
+                .collect(),
         })
     }
 }

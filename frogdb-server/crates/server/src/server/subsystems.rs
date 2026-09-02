@@ -638,6 +638,7 @@ impl Server {
                 keyspace_stats: self.keyspace_stats.clone(),
                 status_collector: Some(status_collector.clone()),
                 collectors: observability_collectors.clone(),
+                shard_arenas: self.shard_arenas.clone(),
             },
             new_conn_senders: std::mem::take(&mut self.new_conn_senders),
             allow_cross_slot: self.config.server.allow_cross_slot_standalone,
