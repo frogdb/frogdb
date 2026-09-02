@@ -16,7 +16,8 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 #[cfg(not(target_env = "msvc"))]
 #[used]
 #[unsafe(export_name = "_rjem_malloc_conf")]
-static MALLOC_CONF: &[u8; 10] = frogdb_server::malloc_conf::MALLOC_CONF;
+static MALLOC_CONF: &[u8; frogdb_server::malloc_conf::MALLOC_CONF_LEN] =
+    frogdb_server::malloc_conf::MALLOC_CONF;
 
 use anyhow::Result;
 use clap::Parser;
@@ -190,12 +191,15 @@ mod tests {
     /// test binary does not, so this can only be checked here.
     #[cfg(not(target_env = "msvc"))]
     #[test]
-    fn jemalloc_applies_the_requested_arena_count() {
+    fn jemalloc_applies_the_requested_options() {
         assert_eq!(
             frogdb_server::malloc_conf::applied(),
             Some(true),
-            "jemalloc ignored `{}`; check the `_rjem_` symbol prefix",
-            frogdb_server::malloc_conf::requested()
+            "jemalloc ignored `{}` (it reports narenas={:?}, decay={:?}); check the `_rjem_` \
+             symbol prefix",
+            frogdb_server::malloc_conf::requested(),
+            frogdb_telemetry::jemalloc::configured_narenas(),
+            frogdb_telemetry::jemalloc::configured_decay(),
         );
     }
 }
