@@ -167,7 +167,7 @@ jobs:
       run: just quint-run
   unit-tests:
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.specs == 'true'
     name: Unit Tests
     runs-on: ubuntu-latest
     steps:
@@ -190,6 +190,8 @@ jobs:
         shared-key: stable
     - name: Run unit tests
       run: cargo nextest run --all
+    - name: Spec ↔ test agreement
+      run: just lint-spec
   cmd-full-build:
     needs: changes
     if: needs.changes.outputs.rust == 'true'

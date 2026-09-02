@@ -253,13 +253,20 @@ def test_workflow() -> Workflow:
         ),
     )
 
+    # `just lint-spec` (the spec <-> test agreement lint, `lint-gates` excludes it —
+    # see the comment above `seam_gates`) rides along here rather than getting its
+    # own job: it needs the compiled test binaries `cargo nextest run --all` just
+    # built, so it piggybacks on this job's warm `rust-cache` instead of paying for
+    # a second compile. Gated on `specs` in addition to `rust` since a spec content
+    # change (an `FM-<AREA>-NNN` row added, renamed, or dropped) can break the
+    # agreement without touching any Rust source the `rust` filter would catch.
     unit_tests = w.job(
         "unit-tests",
         Job(
             name="Unit Tests",
             runs_on=RUNS_ON,
             needs="changes",
-            if_="needs.changes.outputs.rust == 'true'",
+            if_="needs.changes.outputs.rust == 'true' || needs.changes.outputs.specs == 'true'",
             steps=[
                 checkout_step(),
                 mise_setup_step(install_args=MISE_JUST_NEXTEST_QUINT),
@@ -267,6 +274,7 @@ def test_workflow() -> Workflow:
                 libclang_step(),
                 cargo_cache_step(shared_key="stable"),
                 run_step(name="Run unit tests", run="cargo nextest run --all"),
+                run_step(name="Spec ↔ test agreement", run="just lint-spec"),
             ],
         ),
     )
