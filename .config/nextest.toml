@@ -73,6 +73,17 @@ filter = "test(simulation::test_cluster_)"
 slow-timeout = { period = "30s", terminate-after = 4 }
 test-group = "cluster"
 
+# The regression-seed replay list grows a whole 3-node sim per pinned seed and
+# already runs ~75s — only ~1.6x headroom against the generic scheduler tier's
+# 120s hard kill below, and it shares the machine with parallel builds. Give the
+# list its own 5 x 60s budget so a pinned-seed addition or CPU contention does
+# not tip it over. First match wins, so this must sit above the generic
+# `simulation::scheduler::` override.
+[[profile.default.overrides]]
+filter = "test(simulation::scheduler::test_cluster_scheduler_regression_seeds)"
+slow-timeout = { period = "60s", terminate-after = 5 }
+test-group = "cluster"
+
 # The seed-driven fault scheduler that generalizes those sims
 # (`simulation::scheduler`, cluster-correctness issue 09). Its default-suite entry points
 # each replay several whole 3-node sims back-to-back (the six-seed smoke sweep, the

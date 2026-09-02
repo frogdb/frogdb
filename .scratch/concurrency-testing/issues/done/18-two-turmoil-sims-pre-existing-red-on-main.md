@@ -1,6 +1,6 @@
 # Two turmoil sims are pre-existing red on main: expiry-suppression realpath + cluster WAIT-across-failover
 
-Status: ready-for-human
+Status: done
 Type: AFK
 Origin: whole-suite turmoil verification during memory-architecture issue 01 (ShardExecutor
 seam), 2026-08-31 — noted in passing in
@@ -323,3 +323,18 @@ than a red test.
 - Recent related fix on `main` (same bug class as the WAIT lead above; ancestor of `41ae1177`,
   so it does not cover this path): `a859e73c` ("cluster redirect outranks the link-down stale
   gate")
+
+## Resolution (2026-09-01)
+
+Both test fixes landed earlier (0af6c3be, c9d44e3b); the two human-gated residuals are now
+resolved with an explicit human ruling:
+
+- **LOCKED-spec wording amendment applied**: FM-REPLICATION-037's and FM-REPLICATION-040's
+  Observable sentences now qualify the replica role error with "whose link to its primary is
+  up" and name the `-MASTERDOWN`-first behavior of a link-down replica under
+  `replica-serve-stale-data no` (FM-REPLICATION-067). Docs-only; no FM row structure, test
+  tags, or Forced-by lists changed.
+- **Latent-vacuous assertion fixed**: `test_wait_rejected_on_cluster_replica`
+  (`frogdb-server/crates/server/tests/cluster_misc.rs`) now asserts the full
+  `WAIT cannot be used with replica instances` role-error text instead of
+  `contains("replica")`, which `-MASTERDOWN`'s message also matched. Test passes (1/1).

@@ -1180,9 +1180,12 @@ async fn test_wait_rejected_on_cluster_replica() {
         "WAIT on a cluster replica must be rejected, got {resp:?}"
     );
     let msg = get_error_message(&resp).unwrap_or("");
+    // The full role-error text, not just "replica": `-MASTERDOWN ... replica-serve-
+    // stale-data ...` also contains "replica", so a substring match cannot tell the
+    // role refusal from the link-down stale gate (FM-REPLICATION-067).
     assert!(
-        msg.contains("replica"),
-        "WAIT-on-replica error should mention 'replica', got: {msg}"
+        msg.contains("WAIT cannot be used with replica instances"),
+        "WAIT-on-replica must get the role error, got: {msg}"
     );
 
     harness.shutdown_all().await;
