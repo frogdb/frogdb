@@ -54,6 +54,7 @@ mod integration_metrics;
 mod integration_output_buffer_limits;
 #[cfg(not(feature = "turmoil"))]
 mod integration_persistence;
+#[cfg(not(feature = "turmoil"))]
 mod integration_pubsub;
 #[cfg(not(feature = "turmoil"))]
 mod integration_ratelimit;
