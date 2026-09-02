@@ -134,14 +134,6 @@ impl Listpack {
         }
     }
 
-    /// An empty listpack with room for `bytes` of encoded entries.
-    pub fn with_capacity(bytes: usize) -> Self {
-        Self {
-            buf: Vec::with_capacity(bytes),
-            len: 0,
-        }
-    }
-
     /// Encoded size of an entry holding a `value_len`-byte element.
     ///
     /// Use this to decide whether an element still fits a block *before*
@@ -367,16 +359,6 @@ impl Listpack {
         let at = self.offset_of(self.len - n).expect("n < len");
         self.buf.truncate(at);
         self.len -= n;
-    }
-}
-
-impl FromIterator<Vec<u8>> for Listpack {
-    fn from_iter<I: IntoIterator<Item = Vec<u8>>>(iter: I) -> Self {
-        let mut lp = Listpack::new();
-        for v in iter {
-            lp.push_back(&v);
-        }
-        lp
     }
 }
 

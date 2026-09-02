@@ -19,9 +19,9 @@ enum Op {
     PushBack { value: u8, size: u8 },
     PopFront,
     PopBack,
-    Set { index: i8, value: u8 },
-    InsertBefore { pivot: u8, value: u8 },
-    InsertAfter { pivot: u8, value: u8 },
+    Set { index: i8, value: u8, size: u8 },
+    InsertBefore { pivot: u8, value: u8, size: u8 },
+    InsertAfter { pivot: u8, value: u8, size: u8 },
     Remove { count: i8, value: u8 },
     Trim { start: i8, end: i8 },
 }
@@ -86,11 +86,24 @@ fn model_remove(model: &mut VecDeque<Bytes>, count: i64, target: &[u8]) {
     }
 }
 
+/// Mirrors `ListValue::trim` exactly, clamps included: an end index far below
+/// `-len` clamps to -1 (empty range) rather than wrapping.
 fn model_trim(model: &mut VecDeque<Bytes>, start: i64, end: i64) {
     let len = model.len() as i64;
-    let s = if start < 0 { (start + len).max(0) } else { start };
-    let e = if end < 0 { end + len } else { end.min(len - 1) };
-    if s > e || s >= len {
+    if len == 0 {
+        return;
+    }
+    let s = if start < 0 {
+        (start + len).max(0)
+    } else {
+        start.min(len)
+    };
+    let e = if end < 0 {
+        (end + len).max(-1)
+    } else {
+        end.min(len - 1)
+    };
+    if e < 0 || s > e {
         model.clear();
         return;
     }
@@ -171,8 +184,10 @@ fuzz_target!(|input: Input| {
             Op::PopBack => {
                 assert_eq!(list.pop_back(), model.pop_back(), "pop_back diverged");
             }
-            Op::Set { index, value } => {
-                let e = short(*value);
+            Op::Set { index, value, size } => {
+                // Sized, so LSET drops oversized values into packed blocks and
+                // small ones back over plain blocks.
+                let e = element(*value, *size);
                 let applied = list.set(*index as i64, e.clone());
                 match normalize(*index, model.len()) {
                     Some(i) => {
@@ -182,15 +197,17 @@ fuzz_target!(|input: Input| {
                     None => assert!(!applied, "set({index}) accepted an out-of-range index"),
                 }
             }
-            Op::InsertBefore { pivot, value } => {
+            Op::InsertBefore { pivot, value, size } => {
+                // The pivot stays short so it actually matches; the inserted
+                // element is sized, so mid-chain plain blocks get exercised.
                 let p = short(*pivot);
-                let e = short(*value);
+                let e = element(*value, *size);
                 list.insert(true, &p, e.clone());
                 model_insert(&mut model, true, &p, e);
             }
-            Op::InsertAfter { pivot, value } => {
+            Op::InsertAfter { pivot, value, size } => {
                 let p = short(*pivot);
-                let e = short(*value);
+                let e = element(*value, *size);
                 list.insert(false, &p, e.clone());
                 model_insert(&mut model, false, &p, e);
             }

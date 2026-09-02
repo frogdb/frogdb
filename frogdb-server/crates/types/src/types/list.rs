@@ -65,28 +65,25 @@ impl Block {
 ///   (`list-compress-depth`); its default is 0, i.e. off, and FrogDB does not
 ///   implement the tier at all. Revisit only with a workload that wants it.
 /// * **No per-list config.** Block limits are the [`QuicklistLimits`]
-///   constants rather than `list-max-listpack-size` at runtime.
-#[derive(Debug, Clone)]
+///   constants rather than `list-max-listpack-size` at runtime. They are an
+///   associated constant, not a field, so a list key costs nothing to carry
+///   them; a field can come back when the config gets plumbed through.
+#[derive(Debug, Clone, Default)]
 pub struct ListValue {
     blocks: VecDeque<Block>,
     /// Total element count across all blocks, kept in step with every edit.
     len: usize,
-    limits: QuicklistLimits,
-}
-
-impl Default for ListValue {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl ListValue {
+    /// Block limits every list is built to.
+    const LIMITS: QuicklistLimits = QuicklistLimits::DEFAULT_LIST;
+
     /// Create a new empty list.
     pub fn new() -> Self {
         Self {
             blocks: VecDeque::new(),
             len: 0,
-            limits: QuicklistLimits::DEFAULT_LIST,
         }
     }
 
@@ -115,24 +112,24 @@ impl ListValue {
 
     /// Whether an element is too large to share a packed block.
     #[inline]
-    fn is_large(&self, value_len: usize) -> bool {
-        Listpack::entry_size(value_len) > self.limits.max_bytes
+    fn is_large(value_len: usize) -> bool {
+        Listpack::entry_size(value_len) > Self::LIMITS.max_bytes
     }
 
     /// Whether `value` still fits packed block `lp`.
     #[inline]
-    fn fits(&self, lp: &Listpack, value_len: usize) -> bool {
-        lp.len() < self.limits.max_entries
-            && lp.byte_len() + Listpack::entry_size(value_len) <= self.limits.max_bytes
+    fn fits(lp: &Listpack, value_len: usize) -> bool {
+        lp.len() < Self::LIMITS.max_entries
+            && lp.byte_len() + Listpack::entry_size(value_len) <= Self::LIMITS.max_bytes
     }
 
     /// Whether two adjacent packed blocks can be combined into one.
     #[inline]
-    fn can_merge(&self, a: &Block, b: &Block) -> bool {
+    fn can_merge(a: &Block, b: &Block) -> bool {
         match (a, b) {
             (Block::Packed(x), Block::Packed(y)) => {
-                x.len() + y.len() <= self.limits.max_entries
-                    && x.byte_len() + y.byte_len() <= self.limits.max_bytes
+                x.len() + y.len() <= Self::LIMITS.max_entries
+                    && x.byte_len() + y.byte_len() <= Self::LIMITS.max_bytes
             }
             _ => false,
         }
@@ -140,13 +137,13 @@ impl ListValue {
 
     /// Push an element to the front (left).
     pub fn push_front(&mut self, value: Bytes) {
-        if self.is_large(value.len()) {
+        if Self::is_large(value.len()) {
             self.blocks.push_front(Block::Plain(value));
         } else {
             match self.blocks.front_mut() {
-                Some(Block::Packed(lp)) if lp.len() < self.limits.max_entries => {
+                Some(Block::Packed(lp)) if lp.len() < Self::LIMITS.max_entries => {
                     // Re-check the byte budget without holding the borrow.
-                    if lp.byte_len() + Listpack::entry_size(value.len()) <= self.limits.max_bytes {
+                    if lp.byte_len() + Listpack::entry_size(value.len()) <= Self::LIMITS.max_bytes {
                         lp.push_front(&value);
                     } else {
                         let mut lp = Listpack::new();
@@ -166,12 +163,12 @@ impl ListValue {
 
     /// Push an element to the back (right).
     pub fn push_back(&mut self, value: Bytes) {
-        if self.is_large(value.len()) {
+        if Self::is_large(value.len()) {
             self.blocks.push_back(Block::Plain(value));
         } else {
             match self.blocks.back_mut() {
-                Some(Block::Packed(lp)) if lp.len() < self.limits.max_entries => {
-                    if lp.byte_len() + Listpack::entry_size(value.len()) <= self.limits.max_bytes {
+                Some(Block::Packed(lp)) if lp.len() < Self::LIMITS.max_entries => {
+                    if lp.byte_len() + Listpack::entry_size(value.len()) <= Self::LIMITS.max_bytes {
                         lp.push_back(&value);
                     } else {
                         let mut lp = Listpack::new();
@@ -248,13 +245,13 @@ impl ListValue {
         let i = i.min(self.blocks.len() - 1);
         // Merge with the following block first so a single pass can absorb both
         // neighbours into block `i`.
-        if i + 1 < self.blocks.len() && self.can_merge(&self.blocks[i], &self.blocks[i + 1]) {
+        if i + 1 < self.blocks.len() && Self::can_merge(&self.blocks[i], &self.blocks[i + 1]) {
             let next = self.blocks.remove(i + 1).expect("index checked above");
             if let (Block::Packed(dst), Block::Packed(src)) = (&mut self.blocks[i], &next) {
                 dst.append(src);
             }
         }
-        if i > 0 && self.can_merge(&self.blocks[i - 1], &self.blocks[i]) {
+        if i > 0 && Self::can_merge(&self.blocks[i - 1], &self.blocks[i]) {
             let cur = self.blocks.remove(i).expect("index checked above");
             if let (Block::Packed(dst), Block::Packed(src)) = (&mut self.blocks[i - 1], &cur) {
                 dst.append(src);
@@ -321,6 +318,29 @@ impl ListValue {
         let Some(i) = self.normalize_index(index) else {
             return false;
         };
+        let (b, off) = self.locate(i).expect("index < len");
+
+        // Fast path: the replacement stays inside the block it is already in,
+        // so overwrite in place. The slow path below would delete first — which
+        // can merge the block with a neighbour — and then split it apart again.
+        let packed = match &self.blocks[b] {
+            Block::Packed(lp) => lp.get(off).map(|old| (lp.byte_len(), old.len())),
+            Block::Plain(_) => None,
+        };
+        if !Self::is_large(value.len())
+            && let Some((block_bytes, old_len)) = packed
+            // Rearranged to avoid underflow: block bytes after the swap must
+            // still be within the cap.
+            && block_bytes + Listpack::entry_size(value.len())
+                <= Self::LIMITS.max_bytes + Listpack::entry_size(old_len)
+        {
+            let Block::Packed(lp) = &mut self.blocks[b] else {
+                unreachable!("block b was packed")
+            };
+            lp.replace(off, &value);
+            return true;
+        }
+
         self.remove_at(i);
         self.insert_at(i, value);
         true
@@ -339,9 +359,9 @@ impl ListValue {
         let (b, off) = self.locate(index).expect("index < len");
 
         // The fast path: the element still fits the block it lands in.
-        if !self.is_large(value.len())
+        if !Self::is_large(value.len())
             && let Block::Packed(lp) = &self.blocks[b]
-            && self.fits(lp, value.len())
+            && Self::fits(lp, value.len())
         {
             let Block::Packed(lp) = &mut self.blocks[b] else {
                 unreachable!("block b was packed")
@@ -356,7 +376,7 @@ impl ListValue {
         // pass reabsorbs it into a neighbour whenever that still fits.
         self.split_block_at(b, off);
         let at = if off == 0 { b } else { b + 1 };
-        let block = if self.is_large(value.len()) {
+        let block = if Self::is_large(value.len()) {
             Block::Plain(value)
         } else {
             let mut fresh = Listpack::new();
@@ -803,6 +823,64 @@ mod quicklist_tests {
         assert_eq!(list.block_count(), 3);
         assert_eq!(list.plain_block_count(), 1);
         assert_eq!(list.len(), 3);
+    }
+
+    fn huge() -> Bytes {
+        Bytes::from(vec![b'x'; QuicklistLimits::DEFAULT_LIST.max_bytes + 1])
+    }
+
+    /// LSET of an oversized value into the middle of a packed block: the block
+    /// splits around the new plain block and every neighbour keeps its index.
+    #[test]
+    fn set_oversized_value_mid_block_splits_neighbours() {
+        let mut list = ListValue::new();
+        for i in 0..10 {
+            list.push_back(small(i));
+        }
+        assert_eq!(list.block_count(), 1);
+
+        assert!(list.set(5, huge()));
+
+        assert_eq!(list.len(), 10);
+        assert_eq!(list.plain_block_count(), 1);
+        // Head packed, the plain element, tail packed.
+        assert_eq!(list.block_count(), 3);
+        assert_eq!(list.get(5), Some(&huge()[..]));
+        for i in (0..10).filter(|i| *i != 5) {
+            assert_eq!(list.get(i as i64), Some(&small(i)[..]), "index {i} moved");
+        }
+        // Overwriting it back with a small value drops the plain block again.
+        assert!(list.set(5, small(5)));
+        assert_eq!(list.plain_block_count(), 0);
+        for i in 0..10 {
+            assert_eq!(list.get(i as i64), Some(&small(i)[..]));
+        }
+    }
+
+    /// LINSERT of an oversized value in the middle of a multi-block chain.
+    #[test]
+    fn insert_oversized_value_mid_chain_gets_a_plain_block() {
+        let mut list = ListValue::new();
+        for i in 0..300 {
+            list.push_back(small(i));
+        }
+        assert!(list.block_count() > 1);
+
+        // After the element at index 150, which is mid-block.
+        assert_eq!(list.insert(false, &small(150), huge()), 301);
+
+        assert_eq!(list.len(), 301);
+        assert_eq!(list.plain_block_count(), 1);
+        assert_eq!(list.get(150), Some(&small(150)[..]));
+        assert_eq!(list.get(151), Some(&huge()[..]));
+        assert_eq!(list.get(152), Some(&small(151)[..]));
+        assert_eq!(list.get(300), Some(&small(299)[..]));
+
+        // And before a pivot, on the other side of the plain block.
+        assert_eq!(list.insert(true, &small(151), huge()), 302);
+        assert_eq!(list.plain_block_count(), 2);
+        assert_eq!(list.get(152), Some(&huge()[..]));
+        assert_eq!(list.get(153), Some(&small(151)[..]));
     }
 
     /// Deleting down to underfull neighbours merges blocks back together.
