@@ -349,15 +349,15 @@ define_metrics! {
     /// Memory fragmentation ratio (RSS / used)
     gauge MemoryFragmentationRatio("frogdb_memory_fragmentation_ratio") {}
 
-    /// jemalloc `stats.allocated`: bytes allocated by the application
+    /// Bytes allocated by the application (jemalloc `stats.allocated`)
     gauge AllocatorAllocatedBytes("frogdb_allocator_allocated_bytes") {}
 
-    /// jemalloc `stats.active`: bytes in active pages allocated by the
-    /// application
+    /// Bytes in active pages allocated by the application (jemalloc
+    /// `stats.active`)
     gauge AllocatorActiveBytes("frogdb_allocator_active_bytes") {}
 
-    /// jemalloc `stats.resident`: bytes physically resident (metadata +
-    /// active pages + unused dirty pages)
+    /// Bytes physically resident: metadata, active pages, and unused dirty
+    /// pages (jemalloc `stats.resident`)
     gauge AllocatorResidentBytes("frogdb_allocator_resident_bytes") {}
 
     /// Allocator fragmentation ratio (allocator active / allocator

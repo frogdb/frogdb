@@ -86,7 +86,7 @@ DISPATCH: dict[str, tuple[str, int]] = {
     "dispatch_observability.rs": ("ObservabilityMsg", 18),
     "dispatch_vll.rs": ("VllMsg", 5),
     "dispatch_cluster.rs": ("ClusterMsg", 3),
-    "dispatch_debug_introspection.rs": ("DebugIntrospectionMsg", 7),
+    "dispatch_debug_introspection.rs": ("DebugIntrospectionMsg", 8),
     "dispatch_search.rs": ("SearchMsg", 3),
     "dispatch_replication.rs": ("ReplicationMsg", 2),
 }

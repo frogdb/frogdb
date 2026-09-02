@@ -4,7 +4,7 @@
     "source": "frogdb-server/crates/telemetry/src/definitions.rs",
     "regenerate": "just docs-gen"
   },
-  "count": 115,
+  "count": 119,
   "metrics": [
     {
       "name": "frogdb_active_version",
@@ -21,14 +21,14 @@
     {
       "name": "frogdb_allocator_active_bytes",
       "type": "gauge",
-      "help": "jemalloc `stats.active`: bytes in active pages allocated by the application",
+      "help": "Bytes in active pages allocated by the application (jemalloc `stats.active`)",
       "group": "allocator",
       "labels": []
     },
     {
       "name": "frogdb_allocator_allocated_bytes",
       "type": "gauge",
-      "help": "jemalloc `stats.allocated`: bytes allocated by the application",
+      "help": "Bytes allocated by the application (jemalloc `stats.allocated`)",
       "group": "allocator",
       "labels": []
     },
@@ -42,14 +42,38 @@
     {
       "name": "frogdb_allocator_resident_bytes",
       "type": "gauge",
-      "help": "jemalloc `stats.resident`: bytes physically resident (metadata + active pages + unused dirty pages)",
+      "help": "Bytes physically resident: metadata, active pages, and unused dirty pages (jemalloc `stats.resident`)",
       "group": "allocator",
       "labels": []
+    },
+    {
+      "name": "frogdb_allocator_shard_active_bytes",
+      "type": "gauge",
+      "help": "Bytes in the active pages of one shard's arena (`stats.arenas.<i>.pactive` × page size). The gap up from `frogdb_allocator_shard_allocated_bytes` is within-page fragmentation.",
+      "group": "allocator",
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "frogdb_allocator_shard_allocated_bytes",
       "type": "gauge",
       "help": "Upper bound on the bytes one shard has allocated, from the jemalloc arena bound to that shard's thread (`stats.arenas.<i>.{small,large}`). An upper bound, not a live figure: freed bytes stay charged until the thread cache flushes them. Absent — not zero — for a shard with no arena of its own.",
+      "group": "allocator",
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_allocator_shard_dirty_bytes",
+      "type": "gauge",
+      "help": "Bytes in one shard arena's dirty pages (`stats.arenas.<i>.pdirty` × page size) — freed, still resident, awaiting `dirty_decay_ms`. Rising here while allocated bytes hold steady is reclamation lag rather than growth, which is the distinction PRD R13 asks an operator to be able to make without an active defragmenter.",
       "group": "allocator",
       "labels": [
         {
@@ -71,6 +95,18 @@
       ]
     },
     {
+      "name": "frogdb_allocator_shard_muzzy_bytes",
+      "type": "gauge",
+      "help": "Bytes in one shard arena's muzzy pages (`stats.arenas.<i>.pmuzzy` × page size) — madvised away but still mapped. Zero under the server's `muzzy_decay_ms:0` default, and non-zero only where that was retuned.",
+      "group": "allocator",
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
+    },
+    {
       "name": "frogdb_allocator_shard_resident_bytes",
       "type": "gauge",
       "help": "Bytes physically resident in one shard's jemalloc arena (`stats.arenas.<i>.resident`)",
@@ -81,6 +117,25 @@
           "type": "string"
         }
       ]
+    },
+    {
+      "name": "frogdb_allocator_shard_retained_bytes",
+      "type": "gauge",
+      "help": "Address space one shard's arena keeps mapped rather than returning to the OS (`stats.arenas.<i>.retained`). Costs address space, not physical memory, so it is deliberately outside the resident figure.",
+      "group": "allocator",
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_arena_sampler_on_shard_thread_total",
+      "type": "counter",
+      "help": "Sampler ticks that woke up on a thread bound to a shard's arena. The arena sampler is a utility-thread job; a tick running on a pinned shard core steals time from request handling and shows up only as tail latency. Debug builds fail fast on it, release builds count it here, so the condition is never merely invisible. Any non-zero value is a bug.",
+      "group": "arena",
+      "labels": []
     },
     {
       "name": "frogdb_binary_version",
@@ -150,22 +205,6 @@
       "labels": [
         {
           "name": "shard",
-          "type": "string"
-        }
-      ]
-    },
-    {
-      "name": "frogdb_client_output_buffer_disconnects_total",
-      "type": "counter",
-      "help": "Total client connections disconnected by the `client-output-buffer-limit` seam. `class` is the Redis limit class (`normal`, `replica`, `pubsub`); `reason` is `hard_limit`, `soft_limit`, or `budget_refused` (the core's `NetworkOutput` budget shed the connection).",
-      "group": "client",
-      "labels": [
-        {
-          "name": "class",
-          "type": "string"
-        },
-        {
-          "name": "reason",
           "type": "string"
         }
       ]
