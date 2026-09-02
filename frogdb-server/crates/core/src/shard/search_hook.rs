@@ -155,12 +155,13 @@ impl ShardWorker {
             Err(_) => return,
         };
 
-        // Read JSON data from the store first to avoid borrow conflict.
+        // Clone the tape out of the store first to avoid borrow conflict; a
+        // tape clone is two Vec copies, not a tree materialization.
         let json_data = match self.store.get(key) {
             Some(value) => {
                 let value_ref: &crate::types::Value = &value;
                 match value_ref.as_json() {
-                    Some(jv) => jv.to_json_data(),
+                    Some(jv) => jv.clone(),
                     None => return,
                 }
             }

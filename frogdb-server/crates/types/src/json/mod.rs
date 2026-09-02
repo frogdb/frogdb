@@ -242,6 +242,11 @@ impl JsonValue {
     }
 
     /// Estimate memory usage of JSON values at a given path (for JSON.DEBUG MEMORY).
+    ///
+    /// Counts string bytes *per occurrence* ("uninterned"), so a subtree's
+    /// figure answers "what would this cost on its own" — which is why
+    /// `JSON.DEBUG MEMORY $` can exceed [`Self::memory_size`]: the tape's own
+    /// buffer stores each repeated string once.
     pub fn debug_memory(&self, path: &str) -> Result<Vec<usize>, JsonError> {
         Ok(self
             .match_offsets(path)?
@@ -627,9 +632,15 @@ impl JsonValue {
         for at in matches {
             let node = self.node(at);
             let emptied = if node.is_array() {
-                (node.container_len() != Some(0)).then(|| JsonData::Array(Vec::new()))
+                node.elements()
+                    .next()
+                    .is_some()
+                    .then(|| JsonData::Array(Vec::new()))
             } else if node.is_object() {
-                (node.container_len() != Some(0)).then(|| JsonData::Object(Default::default()))
+                node.members()
+                    .next()
+                    .is_some()
+                    .then(|| JsonData::Object(Default::default()))
             } else if node.is_number() {
                 Some(JsonData::Number(0.into()))
             } else {
@@ -760,6 +771,14 @@ impl JsonValue {
         if edits.is_empty() {
             return;
         }
+        // `emit` honors Remove only on a container's *children*; a Remove at
+        // the root would be silently ignored while the caller reports a
+        // deletion. `delete` guards the root, so this keeps a future caller
+        // honest rather than policing a reachable state.
+        debug_assert!(
+            !matches!(edits.get(&self.root().offset()), Some(TapeEdit::Remove)),
+            "a root-level Remove is not representable by emit"
+        );
         let mut next = TapeBuilder::new();
         emit(&mut next, self.root(), edits);
         self.tape = next.finish();
@@ -935,7 +954,7 @@ fn format_node(
         return format!("\"{}\"", escape_json_string(s));
     }
     if node.is_array() {
-        if node.container_len() == Some(0) {
+        if node.elements().next().is_none() {
             return "[]".to_string();
         }
         let inner_indent = indent.repeat(depth + 1);
@@ -959,7 +978,7 @@ fn format_node(
         );
     }
     if node.is_object() {
-        if node.container_len() == Some(0) {
+        if node.members().next().is_none() {
             return "{}".to_string();
         }
         let inner_indent = indent.repeat(depth + 1);
@@ -988,7 +1007,14 @@ fn format_node(
     node.to_json_string()
 }
 
-/// Escape a string for JSON output.
+/// Escape a string for *formatted* (INDENT/NEWLINE/SPACE) JSON output.
+///
+/// This deliberately differs from the compact path's `write_escaped` in
+/// `tape.rs`: `char::is_control()` also escapes U+007F–U+009F, preserving the
+/// pretty printer's historical output byte-for-byte, while `write_escaped`
+/// mirrors `serde_json` exactly (C0 only). Reconciling the two is a behavior
+/// change to formatted output — do not "fix" either one to match the other
+/// in passing.
 fn escape_json_string(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     for c in s.chars() {
@@ -1410,7 +1436,10 @@ mod tests {
     #[test]
     fn stored_size_stays_near_serialized_size() {
         // A representative ~10KB document: an array of records mixing strings,
-        // numbers, booleans and nesting.
+        // numbers, booleans and nesting. The 60 records are structurally
+        // identical, which is maximally favourable to string interning (each
+        // key and repeated tag is stored once) — the measured ratio is not a
+        // general bound; a key-diverse document lands materially higher.
         let records: Vec<JsonData> = (0..60)
             .map(|i| {
                 serde_json::json!({

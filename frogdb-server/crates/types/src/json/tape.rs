@@ -172,9 +172,15 @@ impl JsonTape {
     }
 
     fn text_at(&self, at: usize) -> &str {
+        std::str::from_utf8(self.text_bytes_at(at))
+            .expect("only &str bytes are appended to the text buffer, so every span is valid UTF-8")
+    }
+
+    /// The raw bytes of the string node at `at`, without UTF-8 revalidation —
+    /// for comparisons that can reject on bytes alone (see [`TapeRef::member`]).
+    fn text_bytes_at(&self, at: usize) -> &[u8] {
         let (len, start) = read_varint(&self.text, aux_of(self.words[at]) as usize);
-        // Only `&str` bytes are ever appended to `text`, so this never fails.
-        std::str::from_utf8(&self.text[start..start + len]).unwrap_or("")
+        &self.text[start..start + len]
     }
 
     fn number_at(&self, at: usize) -> Option<Num> {
@@ -471,8 +477,22 @@ impl<'a> TapeRef<'a> {
     }
 
     /// The value stored under `key`, if this node is an object holding it.
+    ///
+    /// Compares raw key bytes so the keys walked past are never UTF-8
+    /// revalidated; UTF-8 equality is byte equality.
     pub fn member(&self, key: &str) -> Option<TapeRef<'a>> {
-        self.members().find(|(k, _)| *k == key).map(|(_, v)| v)
+        let (mut at, end) = self.children_span(TAG_OBJECT);
+        while at < end {
+            let value_at = at + 1;
+            if self.tape.text_bytes_at(at) == key.as_bytes() {
+                return Some(TapeRef {
+                    tape: self.tape,
+                    at: value_at,
+                });
+            }
+            at = self.tape.node_end(value_at);
+        }
+        None
     }
 
     /// The element at `index`, if this node is an array holding it.
@@ -553,12 +573,14 @@ impl<'a> TapeRef<'a> {
                     && elements.next().is_none()
             }
             (TAG_OBJECT, JsonData::Object(members)) => {
-                let mut stored = self.members();
-                members.iter().all(|(key, value)| {
-                    stored
-                        .next()
-                        .is_some_and(|(k, v)| k == key && v.equals_json(value))
-                }) && stored.next().is_none()
+                // Key order is irrelevant, matching `serde_json::Map`'s own
+                // `PartialEq` (order-insensitive even under `preserve_order`):
+                // JSON.ARRINDEX with an object needle must find a stored
+                // object whose keys arrived in a different order.
+                self.container_len() == Some(members.len())
+                    && members
+                        .iter()
+                        .all(|(key, value)| self.member(key).is_some_and(|v| v.equals_json(value)))
             }
             _ => false,
         }
@@ -571,7 +593,7 @@ impl<'a> TapeRef<'a> {
             TAG_NULL => out.push_str("null"),
             TAG_TRUE => out.push_str("true"),
             TAG_FALSE => out.push_str("false"),
-            TAG_UINT | TAG_INT | TAG_NUMBER => out.push_str(&self.number_text()),
+            TAG_UINT | TAG_INT | TAG_NUMBER => self.write_number_text(out),
             TAG_STRING => write_escaped(out, self.tape.text_at(self.at)),
             TAG_ARRAY => {
                 out.push('[');
@@ -607,13 +629,31 @@ impl<'a> TapeRef<'a> {
 
     /// The rendered text of a number node, matching `serde_json`'s formatting.
     pub fn number_text(&self) -> String {
+        let mut out = String::new();
+        self.write_number_text(&mut out);
+        out
+    }
+
+    /// Append the number's canonical text to `out` without an intermediate
+    /// `String` — [`Self::write_json`] emits one number per node on the
+    /// JSON.GET path.
+    fn write_number_text(&self, out: &mut String) {
+        use std::fmt::Write;
         match self.number() {
-            Some(Num::U(u)) => u.to_string(),
-            Some(Num::I(i)) => i.to_string(),
-            Some(Num::F(f)) => serde_json::Number::from_f64(f)
-                .map(|n| n.to_string())
-                .unwrap_or_else(|| "null".to_string()),
-            None => String::new(),
+            Some(Num::U(u)) => {
+                let _ = write!(out, "{u}");
+            }
+            Some(Num::I(i)) => {
+                let _ = write!(out, "{i}");
+            }
+            // `serde_json::Number` displays as its JSON serialization.
+            Some(Num::F(f)) => match serde_json::Number::from_f64(f) {
+                Some(n) => {
+                    let _ = write!(out, "{n}");
+                }
+                None => out.push_str("null"),
+            },
+            None => {}
         }
     }
 }
@@ -705,6 +745,10 @@ fn escape_of(byte: u8) -> u8 {
 }
 
 /// Write `s` as a quoted JSON string, escaping exactly as `serde_json` does.
+///
+/// The formatted (INDENT/NEWLINE/SPACE) path uses `escape_json_string` in
+/// `mod.rs`, which additionally escapes U+007F–U+009F — a deliberate
+/// difference; see the note there before changing either table.
 fn write_escaped(out: &mut String, s: &str) {
     const HEX: &[u8; 16] = b"0123456789abcdef";
 
@@ -823,6 +867,28 @@ mod tests {
         assert_eq!(floats.root().json_type(), JsonType::Number);
         assert!(!ints.root().equals_json(&json!(1.0)));
         assert!(ints.root().equals_json(&json!(1)));
+    }
+
+    #[test]
+    fn object_equality_ignores_member_order() {
+        // JSON.ARRINDEX compares objects via `equals_json`; like
+        // serde_json's `Map` equality, member order must not matter.
+        let tape = JsonTape::from_value(&json!({"a": 1, "b": {"c": 2, "d": 3}}));
+        assert!(
+            tape.root()
+                .equals_json(&json!({"b": {"d": 3, "c": 2}, "a": 1}))
+        );
+        assert!(
+            !tape
+                .root()
+                .equals_json(&json!({"a": 1, "b": {"c": 2, "d": 4}}))
+        );
+        assert!(!tape.root().equals_json(&json!({"a": 1})));
+        assert!(
+            !tape
+                .root()
+                .equals_json(&json!({"a": 1, "b": {"c": 2, "d": 3}, "e": 5}))
+        );
     }
 
     #[test]

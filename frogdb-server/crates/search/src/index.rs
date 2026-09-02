@@ -129,12 +129,8 @@ pub struct HybridTextOptions {
 /// Returns `(field_name, string_value)` pairs suitable for `index_document()`.
 pub fn extract_json_fields(
     def: &SearchIndexDef,
-    json_data: &serde_json::Value,
+    jv: &frogdb_types::JsonValue,
 ) -> Vec<(String, String)> {
-    use frogdb_types::JsonValue;
-
-    // Wrap in a temporary JsonValue to use the JSONPath evaluator
-    let jv = JsonValue::new(json_data.clone());
     let mut fields = Vec::new();
 
     for field_def in &def.fields {
@@ -415,8 +411,8 @@ impl ShardSearchIndex {
     /// natively textual, so `as_bytes()` is faithful here (unlike the hash path, where
     /// the raw blob must be used). Owning the vector step here means the latent
     /// JSON+vector combination is handled in exactly one place.
-    pub fn index_json(&mut self, key: &str, json_data: &serde_json::Value) {
-        let fields = extract_json_fields(&self.def, json_data);
+    pub fn index_json(&mut self, key: &str, json: &frogdb_types::JsonValue) {
+        let fields = extract_json_fields(&self.def, json);
         self.index_document(key, &fields);
 
         for (field_name, value) in &fields {

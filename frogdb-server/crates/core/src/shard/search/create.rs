@@ -43,7 +43,7 @@ impl ShardWorker {
                 if let Some(value) = store.get(&key) {
                     if is_json {
                         if let Some(json_val) = value.as_json() {
-                            idx.index_json(key_str, &json_val.to_json_data());
+                            idx.index_json(key_str, json_val);
                         }
                     } else if let Some(hash) = value.as_hash() {
                         idx.index_hash(key_str, &hash.to_vec());
