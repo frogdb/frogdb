@@ -321,6 +321,14 @@ define_metrics! {
     /// output-buffer hard limit (slow / non-reading subscribers).
     counter PubsubOutputBufferDisconnects("frogdb_pubsub_output_buffer_disconnects_total") {}
 
+    /// Total client connections disconnected by the `client-output-buffer-limit`
+    /// seam. `class` is the Redis limit class (`normal`, `replica`, `pubsub`);
+    /// `reason` is `hard_limit`, `soft_limit`, or `budget_refused` (the core's
+    /// `NetworkOutput` budget shed the connection).
+    counter ClientOutputBufferDisconnects("frogdb_client_output_buffer_disconnects_total") {
+        labels: [class: &str, reason: &str],
+    }
+
     // ========================================================================
     // Memory/Eviction Metrics
     // ========================================================================

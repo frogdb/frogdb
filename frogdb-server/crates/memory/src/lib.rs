@@ -64,6 +64,7 @@
 pub mod arena;
 mod broker;
 mod budget;
+pub mod network_output;
 
 pub use arena::{ArenaSampler, NoArenaReading};
 pub use broker::{Breakdown, MemoryBroker, SubsystemCharge, defaults};

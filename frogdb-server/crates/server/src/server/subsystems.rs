@@ -629,6 +629,17 @@ impl Server {
             allow_cross_slot: self.config.server.allow_cross_slot_standalone,
             scatter_gather_timeout_ms: self.config.server.scatter_gather_timeout_ms,
             pubsub_output_buffer_hard_limit: self.config.server.pubsub_output_buffer_hard_limit,
+            // One limit source for pub/sub: `server.pubsub-output-buffer-hard-limit`
+            // already *is* Redis's `client-output-buffer-limit pubsub` hard
+            // limit, so the seam reads it rather than growing a second knob that
+            // could disagree with the queue bound built from the same number.
+            output_buffer_limits: crate::connection::output_buffer::OutputBufferLimits {
+                pubsub: crate::connection::output_buffer::OutputBufferLimit {
+                    hard_bytes: self.config.server.pubsub_output_buffer_hard_limit as u64,
+                    ..crate::connection::output_buffer::OutputBufferLimit::PUBSUB_DEFAULT
+                },
+                ..Default::default()
+            },
             admin_enabled,
             memory_diag_config: self.config.memory.to_diag_config(),
             max_clients: self.config_manager.max_clients_flag(),

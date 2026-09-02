@@ -1,10 +1,16 @@
 //! This core's [`Subsystem::NetworkOutput`] budget.
 //!
-//! Sibling of [`crate::buffers`], and per-core for the same reason: a
-//! connection runs on its shard's thread, so the bytes it buffers for its
-//! client are *this core's* network output. The budget is a thread local, which
-//! makes that true by construction — there is no handle to pass down, and no
-//! way to charge a foreign core's allowance.
+//! Per-core for the same reason `frogdb_net::buffers` is: a connection runs on
+//! its shard's thread, so the bytes it buffers for its client are *this core's*
+//! network output. The budget is a thread local, which makes that true by
+//! construction — there is no handle to pass down, and no way to charge a
+//! foreign core's allowance.
+//!
+//! It lives here, in the zero-dependency memory crate, rather than beside the
+//! buffer pool in `frogdb-net`, because both of its callers must reach it and
+//! they sit on opposite sides of that crate: the connection code in
+//! `frogdb-server` and the shard's broker in `frogdb-core`. This crate is the
+//! one they already share.
 //!
 //! # Who reaches it
 //!
@@ -30,7 +36,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use frogdb_memory::{Budget, Disposition, Subsystem};
+use crate::{Budget, Disposition, Subsystem};
 
 /// Default per-core ceiling on buffered client output.
 ///

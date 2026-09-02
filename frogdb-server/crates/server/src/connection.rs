@@ -210,7 +210,17 @@ pub struct ConnectionHandler {
     replica_announcement: ReplicaAnnouncement,
 
     /// Reusable buffer for RESP3 encoding to avoid per-response allocation.
+    ///
+    /// Leased from this core's pool ([`frogdb_net::buffers`]) and re-leased
+    /// small when the connection goes idle, so a client that once received a
+    /// megabyte reply does not hold a megabyte for the rest of its session.
     resp3_buf: BytesMut,
+
+    /// Buffered-output accounting and `client-output-buffer-limit` enforcement.
+    /// See [`crate::connection::output_buffer`] — every buffered out-byte on
+    /// this connection is charged here, and this is the only thing that decides
+    /// a connection is too far behind to keep.
+    output_buffer: output_buffer::OutputBufferAccount,
 
     /// Whether per-request tracing spans are enabled (shared AtomicBool).
     per_request_spans: Arc<std::sync::atomic::AtomicBool>,
@@ -342,7 +352,16 @@ impl ConnectionHandler {
             parked_frames: VecDeque::new(),
             parked_wait_exit: None,
             replica_announcement: ReplicaAnnouncement::default(),
-            resp3_buf: BytesMut::with_capacity(4096),
+            resp3_buf: frogdb_net::buffers::lease(frogdb_net::buffers::MIN_CLASS_BYTES)
+                .into_inner(),
+            output_buffer: output_buffer::OutputBufferAccount::new(
+                // Every connection starts normal; SUBSCRIBE and PSYNC move it,
+                // and `account_buffered_output` re-derives the class on every
+                // write so a class change cannot be missed.
+                output_buffer::OutputBufferClass::Normal,
+                config.output_buffer_limits,
+                &frogdb_memory::network_output::current(),
+            ),
             per_request_spans: config.per_request_spans,
             is_replica: config.is_replica,
             #[cfg(feature = "turmoil")]
@@ -613,17 +632,45 @@ impl ConnectionHandler {
         FrameAction::Continue
     }
 
-    /// Log and record the teardown of a subscriber whose pub/sub output buffer
+    /// Which `client-output-buffer-limit` class this connection is in *now*.
+    ///
+    /// Derived rather than stored: a connection changes class mid-session
+    /// (`SUBSCRIBE` makes it a subscriber, `REPLCONF listening-port` marks a
+    /// replica link), and a stored copy is a copy someone forgets to update at
+    /// one of those transitions. `account_buffered_output` re-derives it on
+    /// every write, so the class a connection is judged against is always the
+    /// class it is actually in.
+    fn output_class(&self) -> output_buffer::OutputBufferClass {
+        if self.replica_announcement.listening_port != 0 {
+            output_buffer::OutputBufferClass::Replica
+        } else if self.pubsub_rx.is_some() {
+            output_buffer::OutputBufferClass::PubSub
+        } else {
+            output_buffer::OutputBufferClass::Normal
+        }
+    }
+
+    /// Log and record the teardown of a subscriber whose pub/sub delivery queue
     /// exceeded the hard limit. The caller `break`s the delivery loop, dropping
     /// the socket — matching Redis's `client-output-buffer-limit pubsub`.
+    ///
+    /// The queue bound is that same pubsub hard limit reached one step earlier —
+    /// on messages the subscriber was too slow for the server to even buffer —
+    /// so the verdict is logged and counted through the one output-buffer seam,
+    /// exactly as a hard-limit kill on any other class. Only the dropped-message
+    /// count, which is peculiar to the queue, is recorded separately.
     fn disconnect_overflowed_subscriber(&self) {
         let dropped = self.pubsub_rx.as_ref().map(|rx| rx.dropped()).unwrap_or(0);
-        warn!(
+        debug!(
             conn_id = self.state.id,
-            dropped, "pub/sub output buffer hard limit exceeded; disconnecting slow subscriber"
+            dropped, "pub/sub delivery queue overflowed"
         );
         frogdb_telemetry::definitions::PubsubOutputBufferDisconnects::inc(
             &*self.observability.metrics_recorder,
+        );
+        let _ = self.shed_output(
+            output_buffer::ShedReason::HardLimit,
+            self.output_buffer.buffered_bytes(),
         );
     }
 

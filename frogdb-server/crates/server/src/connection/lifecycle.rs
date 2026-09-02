@@ -223,9 +223,15 @@ impl ConnectionHandler {
                 >= STATS_SYNC_INTERVAL_MS;
 
         if should_sync {
-            if self.state.local_stats.has_data() {
+            let busy = self.state.local_stats.has_data();
+            if busy {
                 self.sync_stats_to_registry();
             }
+            // Same schedule, because "shrink when idle" needs a tick and this is
+            // the one the connection already has. A connection that did nothing
+            // since the last sync is the definition of idle, and is where a
+            // buffer grown by one big reply gets handed back.
+            self.trim_idle_buffers(busy);
             // Always sync memory on the same schedule
             self.sync_memory_to_registry();
             // WATCH count on the same schedule — real per-connection state,
@@ -235,6 +241,40 @@ impl ConnectionHandler {
                 .update_watch_count(self.state.id, self.state.watched_key_iter().count());
             // Check if client eviction is needed
             self.maybe_evict_clients();
+        }
+    }
+
+    /// Hand oversized read/write buffers back to this core's pool.
+    ///
+    /// A connection that once served a megabyte reply otherwise keeps a
+    /// megabyte for the rest of its session — times every idle connection, which
+    /// is the retention this pool exists to stop. Only *empty* buffers are
+    /// swapped: a buffer with bytes in it is mid-conversation, and there is
+    /// nothing to reclaim from it.
+    ///
+    /// `busy` says whether this connection did anything since the last tick.
+    /// The core-wide sweep rides an idle tick only, because sweeping on a busy
+    /// one would trim the free lists the busy connections are about to lease
+    /// from.
+    pub(super) fn trim_idle_buffers(&mut self, busy: bool) {
+        use frogdb_net::buffers;
+
+        /// What an idle connection is re-leased down to — the pool's smallest
+        /// class, which is also a sensible size for the next command.
+        const IDLE_TARGET: usize = buffers::MIN_CLASS_BYTES;
+
+        fn shrink(buf: &mut bytes::BytesMut) {
+            if buf.is_empty() && buf.capacity() > IDLE_TARGET {
+                buffers::recycle(buf, IDLE_TARGET);
+            }
+        }
+
+        shrink(self.framed.read_buffer_mut());
+        shrink(self.framed.write_buffer_mut());
+        shrink(&mut self.resp3_buf);
+
+        if !busy {
+            buffers::sweep();
         }
     }
 
@@ -265,14 +305,21 @@ impl ConnectionHandler {
             })
             .unwrap_or(0);
 
-        // Output buffer: resp3_buf
-        let output_buf_len = self.resp3_buf.len();
+        // Output buffer — `obl`. Both protocol versions buffer (RESP2 in the
+        // codec's write buffer, RESP3 in `resp3_buf`), so this is the whole of
+        // what is queued for the client right now.
+        let output_buf_len = self.framed.write_buffer().len() + self.resp3_buf.len();
 
-        // Output list (pub/sub + invalidation channel pending messages)
-        // We can't directly read the channel length, but we track it via
-        // subscription counts as a proxy
+        // Output list — `oll` / `omem`. FrogDB has no Redis-style reply *list*:
+        // buffered output is one contiguous buffer, so there are no list nodes
+        // to count and `oll` stays 0. `omem` is the figure operators actually
+        // use — "how much memory is this client costing me in queued output" —
+        // and it is the same number the `NetworkOutput` budget is charged and
+        // the `client-output-buffer-limit` decision is made on. Reporting it
+        // from the account rather than recomputing it is what keeps `CLIENT
+        // INFO` honest about the limit that will kill the connection.
         let output_list_len = 0;
-        let output_list_mem = 0;
+        let output_list_mem = self.output_buffer.buffered_bytes() as usize;
 
         // Watched keys
         let watched_keys_mem: usize = self

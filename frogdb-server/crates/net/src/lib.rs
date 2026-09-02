@@ -37,7 +37,6 @@
 //! from that thread's pool.
 
 pub mod buffers;
-pub mod output_budget;
 
 // TcpListener
 #[cfg(feature = "turmoil")]
