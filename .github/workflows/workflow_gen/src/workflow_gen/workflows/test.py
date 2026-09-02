@@ -162,7 +162,14 @@ def mutants_diff_job() -> Job:
             mise_setup_step(install_args=MISE_JUST_MUTANTS),
             rust_toolchain_step(),
             libclang_step(),
-            cargo_cache_step(shared_key="stable"),
+            # Not the `stable` key the compiling jobs share: cargo-mutants copies
+            # the tree to a temp dir and builds *there*, so this job's `./target`
+            # is empty at save time. rust-cache saves after every run and a
+            # `shared-key` omits the job id, so a short `mutants-diff` leg would
+            # otherwise beat `unit-tests` to the save after a Cargo.lock or
+            # toolchain change and leave every later `stable` job restoring
+            # nothing. Own key, same one `mutants_weekly.py` uses.
+            cargo_cache_step(shared_key="mutants"),
             Step(
                 id="base",
                 name="Resolve the diff base",
@@ -197,7 +204,11 @@ def mutants_diff_job() -> Job:
             Step(
                 name="Mutate the diff",
                 if_="steps.base.outputs.skip != 'true'",
-                run="just mutants-diff ${{ matrix.crate }} ${{ steps.base.outputs.sha }} --jobs 2",
+                env=omap(
+                    CRATE="${{ matrix.crate }}",
+                    BASE="${{ steps.base.outputs.sha }}",
+                ),
+                run='just mutants-diff "${CRATE}" "${BASE}" --jobs 2',
             ),
             Step(
                 name="Summarize the run",
@@ -205,7 +216,10 @@ def mutants_diff_job() -> Job:
                 # `skip` empty and this reports "no mutants" for a job that
                 # never mutated anything.
                 if_="always() && steps.base.outcome == 'success' && steps.base.outputs.skip != 'true'",
-                env=omap(CRATE="${{ matrix.crate }}"),
+                env=omap(
+                    CRATE="${{ matrix.crate }}",
+                    BASE="${{ steps.base.outputs.sha }}",
+                ),
                 run=script("""\
                     set -uo pipefail
                     out="target/mutants/${CRATE}-diff/mutants.out"
@@ -218,7 +232,12 @@ def mutants_diff_job() -> Job:
                     {
                       echo "### mutants-diff: ${CRATE}"
                       echo
-                      if [ "${total}" -eq 0 ]; then
+                      if [ ! -d "${out}" ]; then
+                        # The recipe exits 0 before mutating when the crate-scoped
+                        # patch is empty, so no mutants.out exists — a different
+                        # outcome from "mutated, found nothing to mutate".
+                        echo "No changes under \\`${CRATE}\\` since \\`${BASE}\\`; nothing to mutate."
+                      elif [ "${total}" -eq 0 ]; then
                         echo "No mutants in this crate's share of the diff."
                       else
                         echo "${total} total, ${caught} caught, ${missed} missed, ${unviable} unviable, ${timeout} timeout"
