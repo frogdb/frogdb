@@ -1,0 +1,28 @@
+# THROWAWAY SPIKE CRATE — not a workspace member, not production code.
+# The empty `[workspace]` table below makes cargo treat this directory as its own
+# workspace root, so it never participates in (or slows down) FrogDB workspace builds
+# and keeps its own Cargo.lock.
+[workspace]
+
+[package]
+name = "memarch-spike-table"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "sweep"
+path = "src/bin/sweep.rs"
+
+[dependencies]
+# Same allocator the server links (frogdb-server/crates/server/src/main.rs), so
+# `stats.allocated` is the same ground truth the phase-1 spike measured against.
+tikv-jemallocator = "0.6"
+tikv-jemalloc-ctl = { version = "0.6", features = ["use_std", "stats"] }
+tikv-jemalloc-sys = { version = "0.6", features = ["stats"] }
+# The baseline under test: the shipped Store's table type and key type.
+griddle = "0.6"
+bytes = "1"
+
+[profile.release]
+debug = true
