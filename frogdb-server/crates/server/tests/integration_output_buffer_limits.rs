@@ -43,6 +43,7 @@ fn normal_hard_limit_spec() -> String {
 /// this test forces, is a single queued reply larger than the class allows.
 /// (Pub/sub is the case where output genuinely accumulates; it has its own test
 /// in `integration_pubsub`.)
+// FM-MEMORY-001
 #[tokio::test]
 async fn test_normal_class_hard_limit_disconnects_an_oversized_reply() {
     let server = TestServer::start_standalone_with_config(TestServerConfig {
@@ -98,6 +99,7 @@ async fn test_normal_class_hard_limit_disconnects_an_oversized_reply() {
 /// The companion to the test above: same server, same limit, a pipeline whose
 /// total reply stays under it. Without this, "disconnect everything" would pass
 /// the suite.
+// FM-MEMORY-001
 #[tokio::test]
 async fn test_a_pipeline_within_the_limit_is_served_in_full() {
     let server = TestServer::start_standalone_with_config(TestServerConfig {
@@ -142,6 +144,7 @@ async fn test_a_pipeline_within_the_limit_is_served_in_full() {
 /// protocol versions, which is what "the budget is opened and adopted" means
 /// observably. That the charge itself is real is pinned by the disconnect test
 /// above (the limit is enforced on the charge) and by the unit tests.
+// FM-MEMORY-002
 #[tokio::test]
 async fn test_network_output_budget_is_published_for_resp2_and_resp3() {
     let server = TestServer::start_standalone_with_config(TestServerConfig {

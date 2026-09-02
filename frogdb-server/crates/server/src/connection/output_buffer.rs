@@ -496,6 +496,7 @@ mod tests {
         assert_eq!(acct.buffered_bytes(), 1 << 30);
     }
 
+    // FM-MEMORY-002
     #[test]
     fn buffered_bytes_are_charged_to_the_network_output_budget() {
         let budget = budget(1_000);
@@ -520,6 +521,7 @@ mod tests {
         assert_eq!(budget.charged(), 0);
     }
 
+    // FM-MEMORY-002
     #[test]
     fn a_refused_charge_sheds_the_connection() {
         let budget = budget(100);
@@ -541,6 +543,7 @@ mod tests {
         assert_eq!(budget.refusals(), 1);
     }
 
+    // FM-MEMORY-001
     #[test]
     fn the_hard_limit_sheds_at_once() {
         let limits = OutputBufferLimits {
@@ -562,6 +565,7 @@ mod tests {
         );
     }
 
+    // FM-MEMORY-001
     #[test]
     fn the_soft_limit_sheds_only_after_the_window() {
         let limits = OutputBufferLimits {
@@ -592,6 +596,7 @@ mod tests {
         );
     }
 
+    // FM-MEMORY-001
     #[test]
     fn dropping_under_the_soft_limit_restarts_the_window() {
         let limits = OutputBufferLimits {
@@ -638,6 +643,7 @@ mod tests {
         );
     }
 
+    // FM-MEMORY-001
     #[test]
     fn changing_class_restarts_the_soft_window_and_switches_the_limit() {
         let limits = OutputBufferLimits {
@@ -670,6 +676,7 @@ mod tests {
         );
     }
 
+    // FM-MEMORY-002
     #[test]
     fn draining_releases_every_charged_byte() {
         let budget = budget(10_000);

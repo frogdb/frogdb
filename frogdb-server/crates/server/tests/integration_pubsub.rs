@@ -4852,6 +4852,7 @@ async fn test_subscriber_dereg_on_raw_close_cross_shard() {
 /// per-connection *server memory* stays bounded by the 32 KiB budget throughout
 /// (the kernel buffers are the OS's fixed ceiling, not unbounded growth) — the
 /// whole point of the bound.
+// FM-MEMORY-001
 #[tokio::test]
 async fn test_slow_subscriber_output_buffer_bound_disconnects() {
     // Small budget so accumulation overflows well before the flood ends, but

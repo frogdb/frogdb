@@ -1,14 +1,14 @@
 # Memory — failure modes
 
-Status: DRAFT — no rows yet. This file is the scope statement and the vocabulary the rows
-will be written in, published ahead of them so the memory work has one place to be
-spec-first *from*. It becomes the fifth locked area under
+Status: DRAFT — rows land as the behavior they describe lands. This file is the scope
+statement and the vocabulary the rows are written in, published ahead of them so the memory
+work has one place to be spec-first *from*. It becomes the fifth locked area under
 [`.scratch/memory-architecture/PRD.md`](../.scratch/memory-architecture/PRD.md) R15 —
 `Status: LOCKED`, behavior changes spec-first — once the broker and table crates exist and
-pass their mutation gate. Until that day there is deliberately **not one `FM-MEMORY-NNN`
-row and not one `Forced by` citation here**: a row arrives with the test that forces it, in
-the same commit, or it is a wish rather than a contract. `just lint-spec` therefore has
-nothing to check in this file and that is the intended state, not an oversight.
+pass their mutation gate. The discipline holds from the first row on: **a row arrives with
+the test that forces it, in the same commit**, or it is a wish rather than a contract.
+`just lint-spec` checks both directions for every row present, so the file is never ahead
+of the code.
 
 ## Scope
 
@@ -128,6 +128,35 @@ tell apart from a failed command. This is a documented deviation from Redis, whi
 such limit, and it replaces the open-ended non-guarantee
 [persistence.md FM-PERSISTENCE-001](persistence.md#fm-persistence-001--a-shards-write-batch-is-never-torn-across-storage-batches)
 currently records for un-size-capped write groups.
+
+## Failure modes
+
+The rows that have landed. Each one arrived with the tests that force it, in the same
+commit, per the DRAFT discipline at the top of this file.
+
+## FM-MEMORY-001 — a connection past its `client-output-buffer-limit` class is disconnected and its buffered output released
+
+| Field | Value |
+|---|---|
+| Trigger | A connection whose queued reply bytes reach the hard limit of its class, or stay at or above the soft limit continuously for `soft-seconds`. The class is the connection's role at the moment of the judgement: `replica` if it has announced a replica listening port, else `pubsub` if it holds a subscription channel, else `normal`. Limits come from `server.client-output-buffer-limit`, spelled as Redis spells it (`<class> <hard> <soft> <soft-seconds>`, repeated per class, `slave` an alias for `replica`, Redis's size suffixes and Redis's defaults `normal 0 0 0`, `replica 256mb 64mb 60`, `pubsub 32mb 8mb 60`; `0` disables a limit). |
+| Observable | The connection is torn down rather than served — the client sees a close or a reset, never the reply that exceeded the allowance. Its buffered bytes are discarded and released from `Subsystem::NetworkOutput` before the error propagates, so a shed connection costs the shard nothing after the verdict. `frogdb_client_output_buffer_disconnects_total{class,reason}` counts it, with `reason` distinguishing `hard_limit`, `soft_limit` and `budget_refused`, and a `warn` log names class, reason and byte count. A connection whose output stays inside its class's allowance is served in full. |
+| NOT observable | A limit applied to a class the operator did not configure — an unnamed class keeps its Redis default rather than inheriting another class's number. A malformed `client-output-buffer-limit` silently replaced by the default: the parse refuses the boot, because a limit the operator believes they set and does not have is worse than none. A shed connection whose bytes stay charged (the pre-fix behavior wrote the condemned buffer out on the way to the error). Also not observable: the soft window forced end to end — the reply path applies backpressure at the codec's boundary rather than accumulating, so an accumulating `normal` client is not reachable over a socket and the window is forced at the unit seam. |
+| Invariant | One seam decides. `OutputBufferAccount::judge` is the only place a class limit is compared against buffered bytes, `frame_io::account_buffered_output` is the only caller that measures them (codec write buffer + `resp3_buf`, both protocol versions), and `frame_io::shed_output` is the only exit — it clears both buffers, releases the charge, emits the metric and returns the error. The pub/sub overflow path was migrated onto that exit rather than keeping its own disconnect. `OutputVerdict` is `#[must_use]`, so a caller cannot take a verdict and ignore it. |
+| Outcome variant | `OutputVerdict::{Keep, Shed(ShedReason)}` / `ShedReason::{HardLimit, SoftLimit, BudgetRefused}` |
+| Forced by | `the_hard_limit_sheds_at_once`, `the_soft_limit_sheds_only_after_the_window`, `dropping_under_the_soft_limit_restarts_the_window`, `changing_class_restarts_the_soft_window_and_switches_the_limit`, `test_normal_class_hard_limit_disconnects_an_oversized_reply`, `test_a_pipeline_within_the_limit_is_served_in_full`, `test_slow_subscriber_output_buffer_bound_disconnects` |
+| Bug refs | — |
+
+## FM-MEMORY-002 — buffered reply bytes are charged to a per-core `NetworkOutput` budget and released when they drain
+
+| Field | Value |
+|---|---|
+| Trigger | Any reply buffered for a client, on either protocol version, and any drain of that buffer. |
+| Observable | The shard broker publishes a `NetworkOutput` row: `frogdb_memory_budget_limit_bytes{shard,subsystem="network_output"}` carries the per-core ceiling, and the per-subsystem breakdown carries what is currently held. Charged bytes track the buffer exactly — a connection's charge is the delta against what it already held, and a drain releases every byte it was holding. A budget that refuses a charge sheds the connection with `ShedReason::BudgetRefused` (FM-MEMORY-001's exit), rather than the bytes being buffered anyway. |
+| NOT observable | A budget shared between cores — the handle is thread-local, so a charge on one shard thread is invisible to another and no cross-core atomic is taken on the reply path. A charge that outlives its bytes: repeated accounting of the same buffer sets the charge rather than adding to it, so a connection cannot inflate the subsystem by being measured twice. A nonzero steady-state `charged_bytes` in a healthy sample is also not promised — the write path drains a batch before returning, so the observable that pins adoption is the published row and its limit, not a sampled charge. |
+| Invariant | `frogdb_memory::network_output` owns one `Budget` per core in a `thread_local!`, opened against `Subsystem::NetworkOutput` on the shard's own thread; `OutputBufferAccount` holds the single `Charge` for a connection and `set_buffered`/`note_drained` are the only mutations of it. |
+| Outcome variant | `Charge` / `OutputVerdict::Shed(ShedReason::BudgetRefused)` |
+| Forced by | `buffered_bytes_are_charged_to_the_network_output_budget`, `a_refused_charge_sheds_the_connection`, `draining_releases_every_charged_byte`, `a_core_has_one_budget`, `budgets_do_not_cross_cores`, `test_network_output_budget_is_published_for_resp2_and_resp3` |
+| Bug refs | — |
 
 ## What the simulation cannot force
 

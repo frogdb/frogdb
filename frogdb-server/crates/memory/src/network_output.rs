@@ -89,6 +89,7 @@ pub fn current() -> Budget {
 mod tests {
     use super::*;
 
+    // FM-MEMORY-002
     #[test]
     fn a_core_has_one_budget() {
         let a = current();
@@ -103,6 +104,7 @@ mod tests {
         assert_eq!(b.charged(), 0);
     }
 
+    // FM-MEMORY-002
     #[test]
     fn budgets_do_not_cross_cores() {
         let mine = current();
