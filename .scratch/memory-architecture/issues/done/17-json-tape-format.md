@@ -1,6 +1,6 @@
 # 17: JSON tape format replacing the serde_json tree
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Origin: memory-architecture PRD phase filing, 2026-09-01 — [PRD.md](../../PRD.md) R7
 Area: frogdb-types (json.rs) + commands (json family, `json` feature)
@@ -92,3 +92,24 @@ JSONPath feature extensions, changing persistence encoding.
 Nothing in phases 3–5 — the tape shares no machinery with the listpack blocks. Filed in
 phase 4 with the other R7 conversions; can proceed in parallel with
 [issues 13–16](../).
+
+## Resolution
+
+Landed 2026-09-02 on `mem-arch-integration` (picks `cda0d82e`..`c4972526`, 6 commits).
+
+What shipped: `JsonValue` stores a flat tape (`Vec<u64>` of tagged words + interned side
+text buffer, one word per node, O(1) subtree skip) instead of a `serde_json::Value` tree.
+`TapeRef` cursor API; JSONPath evaluator and all JSON commands ported; mutations rebuild in
+one streaming pass (multi-match mutations now atomic — deliberate improvement). Search
+extractor takes the tape directly (no per-document tree materialization). Memory: 1.38x
+stored/serialized on the representative fixture, under the ~1.5x target (tree draft was
+2.78x). Fuzz: round-trip vs serde's own output + a widened mutation proptest (7 ops x
+Key/Nested/Wild paths against a serde model).
+
+Review round 1 (2 Important, several Minors) fixed, re-review clean. Gates: full
+`frogdb-server` suite 2116/2116 (one unrelated auto-failover flaky retry), redis-regression
+2321 green, lint-gates via lefthook.
+
+Known trade-offs carried in the report: `container_len()` O(children) by design; fragment
+parse does one extra O(fragment) pass; `frogdb-protocol` float behavior for U+007F-U+009F on
+the pretty-print path kept byte-identical to before.

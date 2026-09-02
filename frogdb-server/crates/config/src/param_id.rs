@@ -265,8 +265,6 @@ param_id_enum! {
         JsonMaxDepth => "json-max-depth",
         JsonMaxSize => "json-max-size",
         ReplAckIntervalMs => "repl-ack-interval-ms",
-        // === issue-29: pub/sub slow-subscriber output-buffer bound (immutable) ===
-        PubsubOutputBufferHardLimit => "pubsub-output-buffer-hard-limit",
         // === config-mutability round: 2 newly-exposed immutable params ===
         // The cert watcher's existence and poll cadence are both fixed when the
         // task is spawned at startup, so both are GET-only.
@@ -280,6 +278,11 @@ param_id_enum! {
         // Same reason: the empty-data-dir refusal is decided in recovery phase 0,
         // before any client exists. GET reports the startup value.
         RequireExistingData => "require-existing-data",
+        // === memory-architecture issue 18: per-class output-buffer limits ===
+        // Read once when a connection is built (`OutputBufferAccount::new`), so
+        // an existing connection keeps the limits it started with and a SET has
+        // no seam to act on; GET reports the startup value.
+        ClientOutputBufferLimit => "client-output-buffer-limit",
     }
 }
 
@@ -373,11 +376,15 @@ mod tests {
         // justify as dead config) + 20 promote-immutable startup-consumed params
         // added by 13-01 Pass 2b + 7 promote-immutable params added by the
         // issue-14 wire pass (metrics OTLP ×3, json limits ×2, replica ACK
-        // cadence, TLS ciphersuites) + 1 promote-immutable param added by
-        // issue-29 (`pubsub-output-buffer-hard-limit`) + 2 added by the
+        // cadence, TLS ciphersuites) + 2 added by the
         // config-mutability round (`tls-watch-*`), minus the 23 that same round
         // promoted to `MutableParamId` + 2 added by the persistence hardening
         // round (`recovery-on-decode-failure`, `require-existing-data`).
+        // + 1 added by memory-architecture issue 18
+        // (`client-output-buffer-limit`, consumed when a connection is built),
+        // which also *retired* issue-29's `pubsub-output-buffer-hard-limit`:
+        // the pub/sub delivery queue is now bounded by that value's `pubsub`
+        // class, so the two knobs became one.
         assert_eq!(ImmutableParamId::ALL.len(), 47);
     }
 }

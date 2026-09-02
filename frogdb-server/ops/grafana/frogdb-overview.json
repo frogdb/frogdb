@@ -1032,14 +1032,477 @@
       "type": "timeseries"
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Bytes in the active pages of one shard's arena (`stats.arenas.<i>.pactive` × page size). The gap up from `frogdb_allocator_shard_allocated_bytes` is within-page fragmentation.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 37
+      },
+      "id": 15,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (shard) (frogdb_allocator_shard_active_bytes{instance=~\"$instance\", job=~\"$job\"})",
+          "legendFormat": "{{__name__}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Frogdb Allocator Shard Active Bytes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Bytes in one shard arena's dirty pages (`stats.arenas.<i>.pdirty` × page size) — freed, still resident, awaiting `dirty_decay_ms`. Rising here while allocated bytes hold steady is reclamation lag rather than growth, which is the distinction PRD R13 asks an operator to be able to make without an active defragmenter.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 45
+      },
+      "id": 16,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (shard) (frogdb_allocator_shard_dirty_bytes{instance=~\"$instance\", job=~\"$job\"})",
+          "legendFormat": "{{__name__}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Frogdb Allocator Shard Dirty Bytes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Bytes in one shard arena's muzzy pages (`stats.arenas.<i>.pmuzzy` × page size) — madvised away but still mapped. Zero under the server's `muzzy_decay_ms:0` default, and non-zero only where that was retuned.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 45
+      },
+      "id": 17,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (shard) (frogdb_allocator_shard_muzzy_bytes{instance=~\"$instance\", job=~\"$job\"})",
+          "legendFormat": "{{__name__}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Frogdb Allocator Shard Muzzy Bytes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Address space one shard's arena keeps mapped rather than returning to the OS (`stats.arenas.<i>.retained`). Costs address space, not physical memory, so it is deliberately outside the resident figure.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 53
+      },
+      "id": 18,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (shard) (frogdb_allocator_shard_retained_bytes{instance=~\"$instance\", job=~\"$job\"})",
+          "legendFormat": "{{__name__}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Frogdb Allocator Shard Retained Bytes",
+      "type": "timeseries"
+    },
+    {
       "collapsed": true,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 45
+        "y": 61
       },
-      "id": 15,
+      "id": 19,
+      "panels": [],
+      "title": "Arena",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Sampler ticks that woke up on a thread bound to a shard's arena. The arena sampler is a utility-thread job; a tick running on a pinned shard core steals time from request handling and shows up only as tail latency. Debug builds fail fast on it, release builds count it here, so the condition is never merely invisible. Any non-zero value is a bug.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 62
+      },
+      "id": 20,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "rate(frogdb_arena_sampler_on_shard_thread_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])",
+          "legendFormat": "{{__name__}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Frogdb Arena Sampler On Shard Thread Total",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 70
+      },
+      "id": 21,
       "panels": [],
       "title": "Binary",
       "type": "row"
@@ -1103,9 +1566,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 46
+        "y": 71
       },
-      "id": 16,
+      "id": 22,
       "options": {
         "legend": {
           "calcs": [],
@@ -1140,9 +1603,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 54
+        "y": 79
       },
-      "id": 17,
+      "id": 23,
       "panels": [],
       "title": "Blocked",
       "type": "row"
@@ -1206,9 +1669,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 55
+        "y": 80
       },
-      "id": 18,
+      "id": 24,
       "options": {
         "legend": {
           "calcs": [],
@@ -1296,9 +1759,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 55
+        "y": 80
       },
-      "id": 19,
+      "id": 25,
       "options": {
         "legend": {
           "calcs": [],
@@ -1386,9 +1849,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 63
+        "y": 88
       },
-      "id": 20,
+      "id": 26,
       "options": {
         "legend": {
           "calcs": [],
@@ -1476,9 +1939,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 63
+        "y": 88
       },
-      "id": 21,
+      "id": 27,
       "options": {
         "legend": {
           "calcs": [],
@@ -1566,9 +2029,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 71
+        "y": 96
       },
-      "id": 22,
+      "id": 28,
       "options": {
         "legend": {
           "calcs": [],
@@ -1603,9 +2066,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 79
+        "y": 104
       },
-      "id": 23,
+      "id": 29,
       "panels": [],
       "title": "Cluster",
       "type": "row"
@@ -1669,9 +2132,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 80
+        "y": 105
       },
-      "id": 24,
+      "id": 30,
       "options": {
         "legend": {
           "calcs": [],
@@ -1706,9 +2169,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 88
+        "y": 113
       },
-      "id": 25,
+      "id": 31,
       "panels": [],
       "title": "Commands",
       "type": "row"
@@ -1772,9 +2235,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 89
+        "y": 114
       },
-      "id": 26,
+      "id": 32,
       "options": {
         "legend": {
           "calcs": [],
@@ -1862,9 +2325,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 89
+        "y": 114
       },
-      "id": 27,
+      "id": 33,
       "options": {
         "legend": {
           "calcs": [],
@@ -1974,9 +2437,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 97
+        "y": 122
       },
-      "id": 28,
+      "id": 34,
       "options": {
         "legend": {
           "calcs": [],
@@ -2011,9 +2474,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 105
+        "y": 130
       },
-      "id": 29,
+      "id": 35,
       "panels": [],
       "title": "Connections",
       "type": "row"
@@ -2077,9 +2540,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 106
+        "y": 131
       },
-      "id": 30,
+      "id": 36,
       "options": {
         "legend": {
           "calcs": [],
@@ -2167,9 +2630,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 106
+        "y": 131
       },
-      "id": 31,
+      "id": 37,
       "options": {
         "legend": {
           "calcs": [],
@@ -2257,9 +2720,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 114
+        "y": 139
       },
-      "id": 32,
+      "id": 38,
       "options": {
         "legend": {
           "calcs": [],
@@ -2347,9 +2810,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 114
+        "y": 139
       },
-      "id": 33,
+      "id": 39,
       "options": {
         "legend": {
           "calcs": [],
@@ -2384,9 +2847,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 122
+        "y": 147
       },
-      "id": 34,
+      "id": 40,
       "panels": [],
       "title": "Cpu",
       "type": "row"
@@ -2450,9 +2913,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 123
+        "y": 148
       },
-      "id": 35,
+      "id": 41,
       "options": {
         "legend": {
           "calcs": [],
@@ -2540,9 +3003,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 123
+        "y": 148
       },
-      "id": 36,
+      "id": 42,
       "options": {
         "legend": {
           "calcs": [],
@@ -2577,9 +3040,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 131
+        "y": 156
       },
-      "id": 37,
+      "id": 43,
       "panels": [],
       "title": "Eviction",
       "type": "row"
@@ -2643,9 +3106,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 132
+        "y": 157
       },
-      "id": 38,
+      "id": 44,
       "options": {
         "legend": {
           "calcs": [],
@@ -2733,9 +3196,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 132
+        "y": 157
       },
-      "id": 39,
+      "id": 45,
       "options": {
         "legend": {
           "calcs": [],
@@ -2823,9 +3286,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 140
+        "y": 165
       },
-      "id": 40,
+      "id": 46,
       "options": {
         "legend": {
           "calcs": [],
@@ -2913,9 +3376,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 140
+        "y": 165
       },
-      "id": 41,
+      "id": 47,
       "options": {
         "legend": {
           "calcs": [],
@@ -2950,9 +3413,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 148
+        "y": 173
       },
-      "id": 42,
+      "id": 48,
       "panels": [],
       "title": "Fields",
       "type": "row"
@@ -3016,9 +3479,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 149
+        "y": 174
       },
-      "id": 43,
+      "id": 49,
       "options": {
         "legend": {
           "calcs": [],
@@ -3053,9 +3516,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 157
+        "y": 182
       },
-      "id": 44,
+      "id": 50,
       "panels": [],
       "title": "Flush",
       "type": "row"
@@ -3119,9 +3582,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 158
+        "y": 183
       },
-      "id": 45,
+      "id": 51,
       "options": {
         "legend": {
           "calcs": [],
@@ -3209,9 +3672,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 158
+        "y": 183
       },
-      "id": 46,
+      "id": 52,
       "options": {
         "legend": {
           "calcs": [],
@@ -3246,9 +3709,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 166
+        "y": 191
       },
-      "id": 47,
+      "id": 53,
       "panels": [],
       "title": "Info",
       "type": "row"
@@ -3312,9 +3775,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 167
+        "y": 192
       },
-      "id": 48,
+      "id": 54,
       "options": {
         "legend": {
           "calcs": [],
@@ -3349,9 +3812,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 175
+        "y": 200
       },
-      "id": 49,
+      "id": 55,
       "panels": [],
       "title": "Keys",
       "type": "row"
@@ -3415,9 +3878,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 176
+        "y": 201
       },
-      "id": 50,
+      "id": 56,
       "options": {
         "legend": {
           "calcs": [],
@@ -3505,9 +3968,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 176
+        "y": 201
       },
-      "id": 51,
+      "id": 57,
       "options": {
         "legend": {
           "calcs": [],
@@ -3595,9 +4058,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 184
+        "y": 209
       },
-      "id": 52,
+      "id": 58,
       "options": {
         "legend": {
           "calcs": [],
@@ -3632,9 +4095,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 192
+        "y": 217
       },
-      "id": 53,
+      "id": 59,
       "panels": [],
       "title": "Keyspace",
       "type": "row"
@@ -3698,9 +4161,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 193
+        "y": 218
       },
-      "id": 54,
+      "id": 60,
       "options": {
         "legend": {
           "calcs": [],
@@ -3788,9 +4251,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 193
+        "y": 218
       },
-      "id": 55,
+      "id": 61,
       "options": {
         "legend": {
           "calcs": [],
@@ -3878,9 +4341,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 201
+        "y": 226
       },
-      "id": 56,
+      "id": 62,
       "options": {
         "legend": {
           "calcs": [],
@@ -3915,9 +4378,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 209
+        "y": 234
       },
-      "id": 57,
+      "id": 63,
       "panels": [],
       "title": "Latency",
       "type": "row"
@@ -3981,9 +4444,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 210
+        "y": 235
       },
-      "id": 58,
+      "id": 64,
       "options": {
         "legend": {
           "calcs": [],
@@ -4018,9 +4481,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 218
+        "y": 243
       },
-      "id": 59,
+      "id": 65,
       "panels": [],
       "title": "Lua",
       "type": "row"
@@ -4084,9 +4547,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 219
+        "y": 244
       },
-      "id": 60,
+      "id": 66,
       "options": {
         "legend": {
           "calcs": [],
@@ -4174,9 +4637,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 219
+        "y": 244
       },
-      "id": 61,
+      "id": 67,
       "options": {
         "legend": {
           "calcs": [],
@@ -4286,9 +4749,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 227
+        "y": 252
       },
-      "id": 62,
+      "id": 68,
       "options": {
         "legend": {
           "calcs": [],
@@ -4376,9 +4839,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 227
+        "y": 252
       },
-      "id": 63,
+      "id": 69,
       "options": {
         "legend": {
           "calcs": [],
@@ -4466,9 +4929,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 235
+        "y": 260
       },
-      "id": 64,
+      "id": 70,
       "options": {
         "legend": {
           "calcs": [],
@@ -4503,9 +4966,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 243
+        "y": 268
       },
-      "id": 65,
+      "id": 71,
       "panels": [],
       "title": "Memory",
       "type": "row"
@@ -4569,9 +5032,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 244
+        "y": 269
       },
-      "id": 66,
+      "id": 72,
       "options": {
         "legend": {
           "calcs": [],
@@ -4659,9 +5122,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 244
+        "y": 269
       },
-      "id": 67,
+      "id": 73,
       "options": {
         "legend": {
           "calcs": [],
@@ -4749,9 +5212,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 252
+        "y": 277
       },
-      "id": 68,
+      "id": 74,
       "options": {
         "legend": {
           "calcs": [],
@@ -4839,9 +5302,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 252
+        "y": 277
       },
-      "id": 69,
+      "id": 75,
       "options": {
         "legend": {
           "calcs": [],
@@ -4929,9 +5392,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 260
+        "y": 285
       },
-      "id": 70,
+      "id": 76,
       "options": {
         "legend": {
           "calcs": [],
@@ -5019,9 +5482,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 260
+        "y": 285
       },
-      "id": 71,
+      "id": 77,
       "options": {
         "legend": {
           "calcs": [],
@@ -5109,9 +5572,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 268
+        "y": 293
       },
-      "id": 72,
+      "id": 78,
       "options": {
         "legend": {
           "calcs": [],
@@ -5199,9 +5662,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 268
+        "y": 293
       },
-      "id": 73,
+      "id": 79,
       "options": {
         "legend": {
           "calcs": [],
@@ -5236,9 +5699,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 276
+        "y": 301
       },
-      "id": 74,
+      "id": 80,
       "panels": [],
       "title": "Persistence",
       "type": "row"
@@ -5302,9 +5765,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 277
+        "y": 302
       },
-      "id": 75,
+      "id": 81,
       "options": {
         "legend": {
           "calcs": [],
@@ -5339,9 +5802,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 285
+        "y": 310
       },
-      "id": 76,
+      "id": 82,
       "panels": [],
       "title": "Pubsub",
       "type": "row"
@@ -5405,9 +5868,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 286
+        "y": 311
       },
-      "id": 77,
+      "id": 83,
       "options": {
         "legend": {
           "calcs": [],
@@ -5495,9 +5958,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 286
+        "y": 311
       },
-      "id": 78,
+      "id": 84,
       "options": {
         "legend": {
           "calcs": [],
@@ -5585,9 +6048,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 294
+        "y": 319
       },
-      "id": 79,
+      "id": 85,
       "options": {
         "legend": {
           "calcs": [],
@@ -5675,9 +6138,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 294
+        "y": 319
       },
-      "id": 80,
+      "id": 86,
       "options": {
         "legend": {
           "calcs": [],
@@ -5765,9 +6228,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 302
+        "y": 327
       },
-      "id": 81,
+      "id": 87,
       "options": {
         "legend": {
           "calcs": [],
@@ -5855,9 +6318,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 302
+        "y": 327
       },
-      "id": 82,
+      "id": 88,
       "options": {
         "legend": {
           "calcs": [],
@@ -5892,9 +6355,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 310
+        "y": 335
       },
-      "id": 83,
+      "id": 89,
       "panels": [],
       "title": "Recovery",
       "type": "row"
@@ -5958,9 +6421,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 311
+        "y": 336
       },
-      "id": 84,
+      "id": 90,
       "options": {
         "legend": {
           "calcs": [],
@@ -6048,9 +6511,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 311
+        "y": 336
       },
-      "id": 85,
+      "id": 91,
       "options": {
         "legend": {
           "calcs": [],
@@ -6085,9 +6548,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 319
+        "y": 344
       },
-      "id": 86,
+      "id": 92,
       "panels": [],
       "title": "Rocksdb",
       "type": "row"
@@ -6151,9 +6614,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 320
+        "y": 345
       },
-      "id": 87,
+      "id": 93,
       "options": {
         "legend": {
           "calcs": [],
@@ -6241,9 +6704,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 320
+        "y": 345
       },
-      "id": 88,
+      "id": 94,
       "options": {
         "legend": {
           "calcs": [],
@@ -6331,9 +6794,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 328
+        "y": 353
       },
-      "id": 89,
+      "id": 95,
       "options": {
         "legend": {
           "calcs": [],
@@ -6421,9 +6884,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 328
+        "y": 353
       },
-      "id": 90,
+      "id": 96,
       "options": {
         "legend": {
           "calcs": [],
@@ -6511,9 +6974,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 336
+        "y": 361
       },
-      "id": 91,
+      "id": 97,
       "options": {
         "legend": {
           "calcs": [],
@@ -6548,9 +7011,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 344
+        "y": 369
       },
-      "id": 92,
+      "id": 98,
       "panels": [],
       "title": "Scatter",
       "type": "row"
@@ -6614,9 +7077,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 345
+        "y": 370
       },
-      "id": 93,
+      "id": 99,
       "options": {
         "legend": {
           "calcs": [],
@@ -6704,9 +7167,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 345
+        "y": 370
       },
-      "id": 94,
+      "id": 100,
       "options": {
         "legend": {
           "calcs": [],
@@ -6816,9 +7279,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 353
+        "y": 378
       },
-      "id": 95,
+      "id": 101,
       "options": {
         "legend": {
           "calcs": [],
@@ -6875,9 +7338,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 361
+        "y": 386
       },
-      "id": 96,
+      "id": 102,
       "panels": [],
       "title": "Shard",
       "type": "row"
@@ -6941,9 +7404,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 362
+        "y": 387
       },
-      "id": 97,
+      "id": 103,
       "options": {
         "legend": {
           "calcs": [],
@@ -7031,9 +7494,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 362
+        "y": 387
       },
-      "id": 98,
+      "id": 104,
       "options": {
         "legend": {
           "calcs": [],
@@ -7121,9 +7584,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 370
+        "y": 395
       },
-      "id": 99,
+      "id": 105,
       "options": {
         "legend": {
           "calcs": [],
@@ -7211,9 +7674,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 370
+        "y": 395
       },
-      "id": 100,
+      "id": 106,
       "options": {
         "legend": {
           "calcs": [],
@@ -7323,9 +7786,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 378
+        "y": 403
       },
-      "id": 101,
+      "id": 107,
       "options": {
         "legend": {
           "calcs": [],
@@ -7360,9 +7823,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 386
+        "y": 411
       },
-      "id": 102,
+      "id": 108,
       "panels": [],
       "title": "Snapshot",
       "type": "row"
@@ -7426,9 +7889,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 387
+        "y": 412
       },
-      "id": 103,
+      "id": 109,
       "options": {
         "legend": {
           "calcs": [],
@@ -7516,9 +7979,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 387
+        "y": 412
       },
-      "id": 104,
+      "id": 110,
       "options": {
         "legend": {
           "calcs": [],
@@ -7606,9 +8069,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 395
+        "y": 420
       },
-      "id": 105,
+      "id": 111,
       "options": {
         "legend": {
           "calcs": [],
@@ -7696,9 +8159,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 395
+        "y": 420
       },
-      "id": 106,
+      "id": 112,
       "options": {
         "legend": {
           "calcs": [],
@@ -7808,9 +8271,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 403
+        "y": 428
       },
-      "id": 107,
+      "id": 113,
       "options": {
         "legend": {
           "calcs": [],
@@ -7845,9 +8308,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 411
+        "y": 436
       },
-      "id": 108,
+      "id": 114,
       "panels": [],
       "title": "Split",
       "type": "row"
@@ -7911,9 +8374,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 412
+        "y": 437
       },
-      "id": 109,
+      "id": 115,
       "options": {
         "legend": {
           "calcs": [],
@@ -8001,9 +8464,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 412
+        "y": 437
       },
-      "id": 110,
+      "id": 116,
       "options": {
         "legend": {
           "calcs": [],
@@ -8091,9 +8554,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 420
+        "y": 445
       },
-      "id": 111,
+      "id": 117,
       "options": {
         "legend": {
           "calcs": [],
@@ -8181,9 +8644,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 420
+        "y": 445
       },
-      "id": 112,
+      "id": 118,
       "options": {
         "legend": {
           "calcs": [],
@@ -8218,9 +8681,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 428
+        "y": 453
       },
-      "id": 113,
+      "id": 119,
       "panels": [],
       "title": "Task",
       "type": "row"
@@ -8284,9 +8747,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 429
+        "y": 454
       },
-      "id": 114,
+      "id": 120,
       "options": {
         "legend": {
           "calcs": [],
@@ -8374,9 +8837,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 429
+        "y": 454
       },
-      "id": 115,
+      "id": 121,
       "options": {
         "legend": {
           "calcs": [],
@@ -8464,9 +8927,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 437
+        "y": 462
       },
-      "id": 116,
+      "id": 122,
       "options": {
         "legend": {
           "calcs": [],
@@ -8554,9 +9017,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 437
+        "y": 462
       },
-      "id": 117,
+      "id": 123,
       "options": {
         "legend": {
           "calcs": [],
@@ -8644,9 +9107,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 445
+        "y": 470
       },
-      "id": 118,
+      "id": 124,
       "options": {
         "legend": {
           "calcs": [],
@@ -8734,9 +9197,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 445
+        "y": 470
       },
-      "id": 119,
+      "id": 125,
       "options": {
         "legend": {
           "calcs": [],
@@ -8771,9 +9234,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 453
+        "y": 478
       },
-      "id": 120,
+      "id": 126,
       "panels": [],
       "title": "Tiered",
       "type": "row"
@@ -8837,9 +9300,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 454
+        "y": 479
       },
-      "id": 121,
+      "id": 127,
       "options": {
         "legend": {
           "calcs": [],
@@ -8927,9 +9390,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 454
+        "y": 479
       },
-      "id": 122,
+      "id": 128,
       "options": {
         "legend": {
           "calcs": [],
@@ -8964,9 +9427,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 462
+        "y": 487
       },
-      "id": 123,
+      "id": 129,
       "panels": [],
       "title": "Tls",
       "type": "row"
@@ -9030,9 +9493,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 463
+        "y": 488
       },
-      "id": 124,
+      "id": 130,
       "options": {
         "legend": {
           "calcs": [],
@@ -9067,9 +9530,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 471
+        "y": 496
       },
-      "id": 125,
+      "id": 131,
       "panels": [],
       "title": "Tracking",
       "type": "row"
@@ -9133,9 +9596,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 472
+        "y": 497
       },
-      "id": 126,
+      "id": 132,
       "options": {
         "legend": {
           "calcs": [],
@@ -9223,9 +9686,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 472
+        "y": 497
       },
-      "id": 127,
+      "id": 133,
       "options": {
         "legend": {
           "calcs": [],
@@ -9260,9 +9723,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 480
+        "y": 505
       },
-      "id": 128,
+      "id": 134,
       "panels": [],
       "title": "Transactions",
       "type": "row"
@@ -9326,9 +9789,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 481
+        "y": 506
       },
-      "id": 129,
+      "id": 135,
       "options": {
         "legend": {
           "calcs": [],
@@ -9416,9 +9879,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 481
+        "y": 506
       },
-      "id": 130,
+      "id": 136,
       "options": {
         "legend": {
           "calcs": [],
@@ -9528,9 +9991,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 489
+        "y": 514
       },
-      "id": 131,
+      "id": 137,
       "options": {
         "legend": {
           "calcs": [],
@@ -9640,9 +10103,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 489
+        "y": 514
       },
-      "id": 132,
+      "id": 138,
       "options": {
         "legend": {
           "calcs": [],
@@ -9677,9 +10140,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 497
+        "y": 522
       },
-      "id": 133,
+      "id": 139,
       "panels": [],
       "title": "Uptime",
       "type": "row"
@@ -9743,9 +10206,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 498
+        "y": 523
       },
-      "id": 134,
+      "id": 140,
       "options": {
         "legend": {
           "calcs": [],
@@ -9780,9 +10243,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 506
+        "y": 531
       },
-      "id": 135,
+      "id": 141,
       "panels": [],
       "title": "Version",
       "type": "row"
@@ -9846,9 +10309,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 507
+        "y": 532
       },
-      "id": 136,
+      "id": 142,
       "options": {
         "legend": {
           "calcs": [],
@@ -9883,9 +10346,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 515
+        "y": 540
       },
-      "id": 137,
+      "id": 143,
       "panels": [],
       "title": "Wal",
       "type": "row"
@@ -9949,9 +10412,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 516
+        "y": 541
       },
-      "id": 138,
+      "id": 144,
       "options": {
         "legend": {
           "calcs": [],
@@ -10039,9 +10502,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 516
+        "y": 541
       },
-      "id": 139,
+      "id": 145,
       "options": {
         "legend": {
           "calcs": [],
@@ -10129,9 +10592,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 524
+        "y": 549
       },
-      "id": 140,
+      "id": 146,
       "options": {
         "legend": {
           "calcs": [],
@@ -10241,9 +10704,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 524
+        "y": 549
       },
-      "id": 141,
+      "id": 147,
       "options": {
         "legend": {
           "calcs": [],
@@ -10331,9 +10794,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 532
+        "y": 557
       },
-      "id": 142,
+      "id": 148,
       "options": {
         "legend": {
           "calcs": [],
@@ -10421,9 +10884,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 532
+        "y": 557
       },
-      "id": 143,
+      "id": 149,
       "options": {
         "legend": {
           "calcs": [],
@@ -10511,9 +10974,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 540
+        "y": 565
       },
-      "id": 144,
+      "id": 150,
       "options": {
         "legend": {
           "calcs": [],
@@ -10601,9 +11064,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 540
+        "y": 565
       },
-      "id": 145,
+      "id": 151,
       "options": {
         "legend": {
           "calcs": [],
@@ -10691,9 +11154,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 548
+        "y": 573
       },
-      "id": 146,
+      "id": 152,
       "options": {
         "legend": {
           "calcs": [],
@@ -10781,9 +11244,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 548
+        "y": 573
       },
-      "id": 147,
+      "id": 153,
       "options": {
         "legend": {
           "calcs": [],
@@ -10871,9 +11334,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 556
+        "y": 581
       },
-      "id": 148,
+      "id": 154,
       "options": {
         "legend": {
           "calcs": [],
@@ -10961,9 +11424,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 556
+        "y": 581
       },
-      "id": 149,
+      "id": 155,
       "options": {
         "legend": {
           "calcs": [],
@@ -11051,9 +11514,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 564
+        "y": 589
       },
-      "id": 150,
+      "id": 156,
       "options": {
         "legend": {
           "calcs": [],
@@ -11141,9 +11604,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 564
+        "y": 589
       },
-      "id": 151,
+      "id": 157,
       "options": {
         "legend": {
           "calcs": [],

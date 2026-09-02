@@ -1,7 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
-    EventSpec, ExecutionStrategy, JsonValue, KeySpec, LookupSpec, Value, WaiterWake, WalStrategy,
+    EventSpec, ExecutionStrategy, JsonValue, KeySpec, LookupSpec, TapeRef, Value, WaiterWake,
+    WalStrategy,
 };
 use frogdb_protocol::Response;
 use serde_json::Value as JsonData;
@@ -10,6 +11,33 @@ use super::{
     enforce_growth_limits, get_json, get_json_mut, json_error_to_command_error,
     parse_json_value_limited, parse_path, single_or_multi,
 };
+
+/// Render the values a single JSON.GET path matched, wrapped in an array.
+///
+/// The compact reply is written straight off the tape cursors. Only the
+/// INDENT/NEWLINE/SPACE form materializes, because the pretty-printer formats a
+/// whole document rather than a list of subtrees.
+fn render_matches(
+    values: &[TapeRef<'_>],
+    indent: Option<&str>,
+    newline: Option<&str>,
+    space: Option<&str>,
+) -> String {
+    if indent.is_none() && newline.is_none() && space.is_none() {
+        let mut out = String::from("[");
+        for (i, value) in values.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            value.write_json(&mut out);
+        }
+        out.push(']');
+        return out;
+    }
+
+    let wrapper = JsonData::Array(values.iter().map(TapeRef::to_json_data).collect());
+    JsonValue::new(wrapper).to_formatted_string(indent, newline, space)
+}
 
 // ============================================================================
 // JSON.SET - Set a JSON value at a path
@@ -212,27 +240,22 @@ impl Command for JsonGetCommand {
                 return Ok(Response::null());
             }
 
-            let result: Vec<JsonData> = values.into_iter().cloned().collect();
-            let result_json = JsonData::Array(result);
-
-            let output = if indent.is_some() || newline.is_some() || space.is_some() {
-                let temp_json = JsonValue::new(result_json);
-                temp_json.to_formatted_string(
-                    indent.as_deref(),
-                    newline.as_deref(),
-                    space.as_deref(),
-                )
-            } else {
-                serde_json::to_string(&result_json).unwrap_or_default()
-            };
+            let output = render_matches(
+                &values,
+                indent.as_deref(),
+                newline.as_deref(),
+                space.as_deref(),
+            );
 
             Ok(Response::bulk(Bytes::from(output)))
         } else {
-            // Multiple paths: return object with path -> values
+            // Multiple paths: return object with path -> values. The reply is
+            // keyed by path, and `serde_json::Map` orders those keys, so this
+            // form materializes rather than writing straight off the tape.
             let mut result_obj = serde_json::Map::new();
             for path in &paths {
                 let values = json.get(path).map_err(json_error_to_command_error)?;
-                let arr: Vec<JsonData> = values.into_iter().cloned().collect();
+                let arr: Vec<JsonData> = values.iter().map(TapeRef::to_json_data).collect();
                 result_obj.insert(path.clone(), JsonData::Array(arr));
             }
 
@@ -348,10 +371,8 @@ impl Command for JsonMgetCommand {
                 Some(value) => match value.as_json() {
                     Some(json) => match json.get(&path) {
                         Ok(values) if !values.is_empty() => {
-                            let arr: Vec<JsonData> = values.into_iter().cloned().collect();
-                            let json_str =
-                                serde_json::to_string(&JsonData::Array(arr)).unwrap_or_default();
-                            Response::bulk(Bytes::from(json_str))
+                            let body = render_matches(&values, None, None, None);
+                            Response::bulk(Bytes::from(body))
                         }
                         _ => Response::null(),
                     },

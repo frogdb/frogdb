@@ -430,3 +430,323 @@ mod edge_case_tests {
         }
     }
 }
+
+/// Arbitrary JSON documents: scalars at the leaves, arrays and objects a few
+/// levels deep. Object keys stay short so a generated document is also cheap to
+/// address by JSONPath.
+fn arb_json() -> impl Strategy<Value = serde_json::Value> {
+    let leaf = prop_oneof![
+        Just(serde_json::Value::Null),
+        any::<bool>().prop_map(serde_json::Value::Bool),
+        any::<i64>().prop_map(|n| json!(n)),
+        any::<u64>().prop_map(|n| json!(n)),
+        (-1e18f64..1e18f64).prop_map(|f| json!(f)),
+        "(?s).{0,12}".prop_map(serde_json::Value::String),
+        // Escape-heavy strings: quotes, backslashes and C0 controls exercise the
+        // tape's escaping against serde_json's.
+        "[\\x00-\\x1f\"\\\\ ]{0,8}".prop_map(serde_json::Value::String),
+    ];
+    leaf.prop_recursive(4, 48, 5, |inner| {
+        prop_oneof![
+            prop::collection::vec(inner.clone(), 0..5).prop_map(serde_json::Value::Array),
+            prop::collection::vec(("[a-z]{1,4}", inner), 0..5)
+                .prop_map(|entries| serde_json::Value::Object(entries.into_iter().collect())),
+        ]
+    })
+}
+
+/// Where a mutation lands: a single top-level member, a member one level
+/// deeper, or every top-level member at once. Nested targets push edits deeper
+/// into `emit`'s recursion; the wildcard produces multi-entry edit maps.
+#[derive(Debug, Clone)]
+enum Target {
+    Key(String),
+    Nested(String, String),
+    Wild,
+}
+
+impl Target {
+    fn path(&self) -> String {
+        match self {
+            Target::Key(k) => format!("$.{k}"),
+            Target::Nested(a, b) => format!("$.{a}.{b}"),
+            Target::Wild => "$.*".to_string(),
+        }
+    }
+}
+
+/// Mutable references to every model value the target's JSONPath matches, in
+/// document order — the model-side mirror of `match_offsets`. A nested target
+/// matches only through an object, and a wildcard matches every top-level
+/// member, like the evaluator.
+fn model_matches<'a>(
+    entries: &'a mut serde_json::Map<String, serde_json::Value>,
+    target: &Target,
+) -> Vec<&'a mut serde_json::Value> {
+    match target {
+        Target::Key(k) => entries.get_mut(k).into_iter().collect(),
+        Target::Nested(a, b) => entries
+            .get_mut(a)
+            .and_then(|v| v.as_object_mut())
+            .and_then(|o| o.get_mut(b))
+            .into_iter()
+            .collect(),
+        Target::Wild => entries.values_mut().collect(),
+    }
+}
+
+fn arb_target() -> impl Strategy<Value = Target> {
+    prop_oneof![
+        3 => "[a-e]{1,2}".prop_map(Target::Key),
+        2 => ("[a-e]{1,2}", "[a-e]{1,2}").prop_map(|(a, b)| Target::Nested(a, b)),
+        1 => Just(Target::Wild),
+    ]
+}
+
+/// One mutation applied to both the stored document and the model. SET stays
+/// top-level (a missing deeper path walks `create_path`, whose
+/// invent-containers semantics belong to their own model); the array ops and
+/// NUMINCRBY reach nested and wildcard targets, which is where the rebuild's
+/// index arithmetic and multi-match edit maps live.
+#[derive(Debug, Clone)]
+enum Op {
+    Set(String, serde_json::Value),
+    Delete(Target),
+    ArrAppend(Target, serde_json::Value),
+    ArrInsert(Target, i64, serde_json::Value),
+    ArrTrim(Target, i64, i64),
+    ArrPop(Target, Option<i64>),
+    NumIncrBy(Target, f64),
+}
+
+fn arb_op() -> impl Strategy<Value = Op> {
+    prop_oneof![
+        2 => ("[a-e]{1,2}", arb_json()).prop_map(|(k, v)| Op::Set(k, v)),
+        2 => arb_target().prop_map(Op::Delete),
+        2 => (arb_target(), arb_json()).prop_map(|(t, v)| Op::ArrAppend(t, v)),
+        2 => (arb_target(), -6i64..6, arb_json()).prop_map(|(t, i, v)| Op::ArrInsert(t, i, v)),
+        2 => (arb_target(), -6i64..6, -6i64..6).prop_map(|(t, a, b)| Op::ArrTrim(t, a, b)),
+        2 => (arb_target(), prop::option::of(-6i64..6)).prop_map(|(t, i)| Op::ArrPop(t, i)),
+        2 => (arb_target(), -1e6f64..1e6).prop_map(|(t, n)| Op::NumIncrBy(t, n)),
+    ]
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(512))]
+
+    /// The tape is a lossless encoding: parsing a document and serializing it
+    /// again produces exactly what `serde_json` produces from the same text.
+    ///
+    /// The baseline is serde's *re-serialization*, not the original text:
+    /// serde_json's default float parser is allowed to land one ULP off the
+    /// nearest double, so `parse -> print` is not the identity for either
+    /// representation. What must hold is that the tape does not add any loss of
+    /// its own.
+    #[test]
+    fn tape_round_trips_serde_json(value in arb_json()) {
+        let text = serde_json::to_string(&value).unwrap();
+        let doc = JsonValue::parse(text.as_bytes()).unwrap();
+        let canonical =
+            serde_json::to_string(&serde_json::from_str::<serde_json::Value>(&text).unwrap())
+                .unwrap();
+        prop_assert_eq!(String::from_utf8(doc.to_bytes()).unwrap(), canonical);
+    }
+
+    /// `memory_size` is a pure function of the document, so MEMORY USAGE does
+    /// not drift between two stores holding the same bytes.
+    #[test]
+    fn tape_memory_size_is_run_stable(value in arb_json()) {
+        let text = serde_json::to_string(&value).unwrap();
+        let a = JsonValue::parse(text.as_bytes()).unwrap();
+        let b = JsonValue::parse(text.as_bytes()).unwrap();
+        prop_assert_eq!(a.memory_size(), b.memory_size());
+    }
+
+    /// Path mutations agree with a `serde_json::Value` model applied the same
+    /// way: after every step the tape serializes to the model's canonical text.
+    #[test]
+    fn tape_mutations_track_a_serde_json_model(
+        base in prop::collection::vec(("[a-e]{1,2}", arb_json()), 0..5),
+        ops in prop::collection::vec(arb_op(), 1..12),
+    ) {
+        // Both sides start from the same parsed document, so the model carries
+        // the doubles serde's parser produced rather than the generator's.
+        let text = serde_json::to_string(&serde_json::Value::Object(base.into_iter().collect()))
+            .unwrap();
+        let mut model: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let mut doc = JsonValue::parse(text.as_bytes()).unwrap();
+
+        for op in ops {
+            let entries = match &mut model {
+                serde_json::Value::Object(entries) => entries,
+                _ => unreachable!("the model document is an object"),
+            };
+            match op {
+                Op::Set(key, value) => {
+                    let path = format!("$.{key}");
+                    prop_assert!(doc.set(&path, value.clone(), false, false).is_ok());
+                    entries.insert(key, value);
+                }
+                Op::Delete(target) => {
+                    let expected = match &target {
+                        Target::Key(k) => usize::from(entries.contains_key(k)),
+                        Target::Nested(a, b) => entries
+                            .get(a)
+                            .and_then(|v| v.as_object())
+                            .map_or(0, |o| usize::from(o.contains_key(b))),
+                        Target::Wild => entries.len(),
+                    };
+                    let deleted = doc.delete(&target.path()).unwrap();
+                    prop_assert_eq!(deleted, expected);
+                    // Not `Map::remove`: with serde_json's `preserve_order`
+                    // feature unified on (it is, workspace-wide), that is a
+                    // swap-remove and moves the last key into the hole.
+                    // JSON.DEL leaves the surviving keys where they were.
+                    match target {
+                        Target::Key(k) => {
+                            *entries = std::mem::take(entries)
+                                .into_iter()
+                                .filter(|(name, _)| name != &k)
+                                .collect();
+                        }
+                        Target::Nested(a, b) => {
+                            if let Some(o) = entries.get_mut(&a).and_then(|v| v.as_object_mut()) {
+                                *o = std::mem::take(o)
+                                    .into_iter()
+                                    .filter(|(name, _)| name != &b)
+                                    .collect();
+                            }
+                        }
+                        Target::Wild => entries.clear(),
+                    }
+                }
+                // A structural array op errors when the path matches nothing
+                // or any match is not an array, and the whole command aborts
+                // with the document untouched (the edit map is only applied
+                // after every match has been sized).
+                Op::ArrAppend(target, value) => {
+                    let path = target.path();
+                    let matches = model_matches(entries, &target);
+                    if matches.is_empty() || matches.iter().any(|v| !v.is_array()) {
+                        prop_assert!(doc.arr_append(&path, vec![value]).is_err());
+                    } else {
+                        prop_assert!(doc.arr_append(&path, vec![value.clone()]).is_ok());
+                        for m in matches {
+                            m.as_array_mut().unwrap().push(value.clone());
+                        }
+                    }
+                }
+                Op::ArrInsert(target, index, value) => {
+                    let path = target.path();
+                    let matches = model_matches(entries, &target);
+                    if matches.is_empty() || matches.iter().any(|v| !v.is_array()) {
+                        prop_assert!(doc.arr_insert(&path, index, vec![value]).is_err());
+                    } else {
+                        prop_assert!(doc.arr_insert(&path, index, vec![value.clone()]).is_ok());
+                        for m in matches {
+                            let arr = m.as_array_mut().unwrap();
+                            let len = arr.len();
+                            // JSON.ARRINSERT clamps: a negative index counts
+                            // from the end (one past, so -1 appends), and a
+                            // positive one saturates at the length.
+                            let at = if index < 0 {
+                                (len as i64 + index + 1).max(0) as usize
+                            } else {
+                                (index as usize).min(len)
+                            };
+                            arr.insert(at, value.clone());
+                        }
+                    }
+                }
+                Op::ArrTrim(target, start, stop) => {
+                    let path = target.path();
+                    let matches = model_matches(entries, &target);
+                    if matches.is_empty() || matches.iter().any(|v| !v.is_array()) {
+                        prop_assert!(doc.arr_trim(&path, start, stop).is_err());
+                    } else {
+                        prop_assert!(doc.arr_trim(&path, start, stop).is_ok());
+                        for m in matches {
+                            let arr = m.as_array_mut().unwrap();
+                            let len = arr.len() as i64;
+                            let norm = |i: i64| if i < 0 { (len + i).max(0) } else { i };
+                            let start_idx = norm(start).max(0) as usize;
+                            let stop_idx = (norm(stop) + 1).max(0) as usize;
+                            let kept = if start_idx >= len as usize || start_idx >= stop_idx {
+                                0..0
+                            } else {
+                                start_idx..stop_idx.min(len as usize)
+                            };
+                            *arr = arr[kept].to_vec();
+                        }
+                    }
+                }
+                // ARRPOP is the lenient one: a non-array, empty or
+                // out-of-range match yields None for that match instead of
+                // failing the command.
+                Op::ArrPop(target, index) => {
+                    let path = target.path();
+                    let matches = model_matches(entries, &target);
+                    if matches.is_empty() {
+                        prop_assert!(doc.arr_pop(&path, index).is_err());
+                    } else {
+                        let popped = doc.arr_pop(&path, index).unwrap();
+                        prop_assert_eq!(popped.len(), matches.len());
+                        for (m, result) in matches.into_iter().zip(popped) {
+                            let Some(arr) = m.as_array_mut() else {
+                                prop_assert!(result.is_none());
+                                continue;
+                            };
+                            if arr.is_empty() {
+                                prop_assert!(result.is_none());
+                                continue;
+                            }
+                            let len = arr.len() as i64;
+                            let idx = match index {
+                                Some(i) => {
+                                    let n = if i < 0 { len + i } else { i };
+                                    (0..len).contains(&n).then_some(n as usize)
+                                }
+                                None => Some(arr.len() - 1),
+                            };
+                            match idx {
+                                None => prop_assert!(result.is_none()),
+                                Some(i) => {
+                                    let removed = arr.remove(i);
+                                    prop_assert_eq!(result, Some(removed));
+                                }
+                            }
+                        }
+                    }
+                }
+                Op::NumIncrBy(target, incr) => {
+                    let path = target.path();
+                    let matches = model_matches(entries, &target);
+                    if matches.is_empty() || matches.iter().any(|v| !v.is_number()) {
+                        prop_assert!(doc.num_incr_by(&path, incr).is_err());
+                    } else {
+                        let results = doc.num_incr_by(&path, incr).unwrap();
+                        prop_assert_eq!(results.len(), matches.len());
+                        for m in matches {
+                            let result = m.as_f64().unwrap() + incr;
+                            // Mirror the command's classification: an integral
+                            // in-range result is stored as an integer.
+                            let number = if result.fract() == 0.0
+                                && result >= i64::MIN as f64
+                                && result <= i64::MAX as f64
+                            {
+                                serde_json::Number::from(result as i64)
+                            } else {
+                                serde_json::Number::from_f64(result).unwrap()
+                            };
+                            *m = serde_json::Value::Number(number);
+                        }
+                    }
+                }
+            }
+            prop_assert_eq!(
+                String::from_utf8(doc.to_bytes()).unwrap(),
+                serde_json::to_string(&model).unwrap()
+            );
+        }
+    }
+}

@@ -138,10 +138,10 @@ pub use persistence::{
     serialize, spawn_periodic_sync,
 };
 pub use pubsub::{
-    ConnId, DEFAULT_PUBSUB_OUTPUT_BUFFER_HARD_LIMIT, Drained, GlobPattern, IntrospectionRequest,
-    IntrospectionResponse, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
-    MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION, PubSubClosed,
-    PubSubConfirmation, PubSubMessage, PubSubReceiver, PubSubSender, ShardSubscriptions,
+    ConnId, Drained, GlobPattern, IntrospectionRequest, IntrospectionResponse,
+    MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION, MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION,
+    MAX_SUBSCRIPTIONS_PER_CONNECTION, PubSubClosed, PubSubConfirmation, PubSubMessage,
+    PubSubReceiver, PubSubSender, ShardSubscriptions,
 };
 pub use registry::{CommandEntry, CommandImpl, CommandRegistry};
 pub use replication::{

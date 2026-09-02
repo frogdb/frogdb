@@ -49,8 +49,8 @@ pub use glob::glob_match;
 pub use histogram::{KeysizeHistograms, KeysizeType, PowerOfTwoHistogram};
 pub use hyperloglog::{HLL_DENSE_SIZE, HLL_REGISTERS, HyperLogLogValue};
 pub use json::{
-    DEFAULT_JSON_MAX_DEPTH, DEFAULT_JSON_MAX_SIZE, JsonError, JsonLimits, JsonType, JsonValue,
-    estimate_json_size,
+    DEFAULT_JSON_MAX_DEPTH, DEFAULT_JSON_MAX_SIZE, Elements, JsonError, JsonLimits, JsonType,
+    JsonValue, Members, TapeRef,
 };
 pub use listpack::{Listpack, ListpackIter, ListpackRevIter};
 pub use redis_version::{

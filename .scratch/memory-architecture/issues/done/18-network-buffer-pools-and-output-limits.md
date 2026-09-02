@@ -1,6 +1,6 @@
 # 18: per-core network buffer pools and output-buffer limits
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Origin: memory-architecture PRD phase filing, 2026-09-01 — [PRD.md](../../PRD.md) R11
 Area: frogdb-server (connection/, frame_io.rs) + frogdb-net + frogdb-memory
@@ -106,3 +106,29 @@ rework beyond swapping its buffers to the pool.
 
 [Issue 05](../) (broker + `NetworkOutput` subsystem — done), [issue 02](../)
 (per-core pinning — done). No phase-3/4 dependencies.
+
+## Resolution
+
+Landed 2026-09-02 on `mem-arch-integration` (picks `b012272d`..`1ae40795`, 17 commits).
+
+What shipped: per-core size-classed network buffer pool (`frogdb-net/src/buffers.rs`) with
+idle-tick decay and close-time release; one `client-output-buffer-limit` enforcement seam
+(`connection/output_buffer.rs`) covering normal/replica/pubsub classes with Redis's
+spelling; per-core `NetworkOutput` budget (`frogdb-memory/src/network_output.rs`) charged
+from the frame path and, after fix round 2, from the server's transient reply accumulators
+via `net_charge.rs` (budget-growth ratchet moved 3/100/35 -> 20/83/32); the legacy
+`pubsub-output-buffer-hard-limit` knob retired; limits parsed before boot commits to
+anything; FM-MEMORY-001/002 spec rows with forcing tests; housekeeping tick drives soft-window
+judgement, buffer decay and pool sweep.
+
+Review: round 1 (11 findings, 1 Critical) fixed; re-review r1 rejected the finding-10
+disposition — accumulator conversion then done in round 2 plus a pub/sub counter-race fix;
+re-review r2: no Critical/Important remain. Gates: full `frogdb-server` suite 2141/2141,
+lint-spec (315 rows / 1751 refs), quint-check, workspace clippy, budget-growth all green.
+
+Known gaps carried: replication feed's post-PSYNC bytes charged to no budget (spec-first
+follow-up under specs/replication.md, noted in FM-MEMORY-001); `client-output-buffer-limit`
+startup-fixed, not CONFIG SET-able; `frogdb-protocol` reply.rs accumulators still pinned
+(wire-format leaf crate, charged at feed time). Accepted r2 Minors (follow-up material):
+broadcast shed errors name internal merge strategies; `SectionWriter` saturates instead of
+refusing; WITHCURSOR stash drops its charge; duplicate over-charge in TagVals/Spellcheck.

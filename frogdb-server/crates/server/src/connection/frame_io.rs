@@ -2,11 +2,13 @@
 
 use bytes::Bytes;
 use frogdb_core::InvalidationMessage;
+use frogdb_core::clock;
 use frogdb_protocol::{ProtocolVersion, Response, WireResponse};
 use futures::SinkExt;
 use tokio::io::AsyncWriteExt;
 
 use super::codec::{RESP2_NULL_ARRAY, Resp2Outbound};
+use super::output_buffer::{OutputVerdict, ShedReason};
 use super::{ConnectionHandler, estimate_resp2_frame_size};
 
 /// Narrow a [`WireResponse`] to the RESP2 codec's outbound item, returning the
@@ -68,41 +70,19 @@ impl ConnectionHandler {
     ///
     /// This is the type-safe version that only accepts wire-serializable responses.
     /// Use this when you have already extracted a WireResponse from a Response.
+    ///
+    /// Buffer, then flush — rather than a second, immediate-write encoding of
+    /// its own. A `send` that bypassed the buffer would jump ahead of anything
+    /// already fed but not yet flushed, which is precisely the ordering bug
+    /// proposal 49 fixed for the array-null; going through the same buffer makes
+    /// that unrepresentable, and gives the output-buffer seam a single place to
+    /// account for both.
     async fn send_wire_response(
         &mut self,
         response: frogdb_protocol::WireResponse,
     ) -> std::io::Result<()> {
-        match self.state.protocol_version {
-            ProtocolVersion::Resp2 => {
-                // Narrow to the codec's outbound item and send it through the
-                // Framed codec. NullArray rides `Resp2Outbound::NullArray` so its
-                // `*-1\r\n` bytes are queued in the codec write buffer in feed
-                // order; `send` flushes after buffering.
-                let (outbound, frame_size) = narrow_to_resp2_outbound(response);
-                self.state.local_stats.add_bytes_sent(frame_size as u64);
-                self.framed
-                    .send(outbound)
-                    .await
-                    .map_err(std::io::Error::other)
-            }
-            ProtocolVersion::Resp3 => {
-                // Manually encode RESP3 and write to socket
-                let frame = response.to_resp3_frame();
-                self.resp3_buf.clear();
-                redis_protocol::resp3::encode::complete::extend_encode(
-                    &mut self.resp3_buf,
-                    &frame,
-                    false,
-                )
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
-                // Track actual encoded size
-                self.state
-                    .local_stats
-                    .add_bytes_sent(self.resp3_buf.len() as u64);
-                self.framed.get_mut().write_all(&self.resp3_buf).await?;
-                self.framed.get_mut().flush().await
-            }
-        }
+        self.feed_wire_response(response).await?;
+        self.flush_responses().await
     }
 
     /// Buffer a wire response without flushing (for write coalescing).
@@ -114,10 +94,17 @@ impl ConnectionHandler {
     }
 
     /// Buffer a wire response without flushing.
+    ///
+    /// Both protocol versions buffer and neither writes: RESP2 into the codec's
+    /// write buffer, RESP3 into [`Self::resp3_buf`]. That symmetry is what lets
+    /// the output-buffer seam be one call at the end of this function instead of
+    /// one per protocol version — and it is why `omem` and the `NetworkOutput`
+    /// budget mean the same thing on a RESP3 connection as on a RESP2 one.
     async fn feed_wire_response(
         &mut self,
         response: frogdb_protocol::WireResponse,
     ) -> std::io::Result<()> {
+        self.drain_other_protocol_buffer().await?;
         match self.state.protocol_version {
             ProtocolVersion::Resp2 => {
                 // Narrow to the codec's outbound item and buffer it without
@@ -129,34 +116,168 @@ impl ConnectionHandler {
                 self.framed
                     .feed(outbound)
                     .await
-                    .map_err(std::io::Error::other)
+                    .map_err(std::io::Error::other)?;
             }
             ProtocolVersion::Resp3 => {
                 let frame = response.to_resp3_frame();
-                // Don't clear resp3_buf here — accumulate across multiple feeds
+                // Accumulate across feeds; `flush_responses` drains the buffer.
+                let before = self.resp3_buf.len();
                 redis_protocol::resp3::encode::complete::extend_encode(
                     &mut self.resp3_buf,
                     &frame,
                     false,
                 )
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
-                let encoded_len = self.resp3_buf.len() as u64;
+                // The bytes *this* frame added, not the running total: charging
+                // the total per feed would count a pipeline of n replies
+                // quadratically.
+                let encoded_len = (self.resp3_buf.len() - before) as u64;
                 self.state.local_stats.add_bytes_sent(encoded_len);
-                self.framed.get_mut().write_all(&self.resp3_buf).await?;
-                self.resp3_buf.clear();
-                Ok(())
             }
         }
+        self.account_buffered_output()
+    }
+
+    /// Put whatever is buffered under the *other* protocol version on the wire
+    /// before appending to this one's buffer.
+    ///
+    /// Two buffers share one socket — the codec's write buffer for RESP2 and
+    /// `resp3_buf` for RESP3 — so a `HELLO` in the middle of a pipeline would
+    /// otherwise leave replies in both with no ordering between them that
+    /// `flush_responses` could recover: after `RESP2, HELLO 3, HELLO 2` the codec
+    /// buffer holds bytes from both before and after the RESP3 ones.
+    ///
+    /// Draining here keeps the invariant that **at most one of the two buffers
+    /// is ever non-empty**, which makes the order well defined: whatever is held
+    /// under the other version is strictly older than the frame about to be fed,
+    /// so it goes out first. The cost is one length check per reply and a flush
+    /// only on the reply that follows a protocol switch.
+    async fn drain_other_protocol_buffer(&mut self) -> std::io::Result<()> {
+        match self.state.protocol_version {
+            ProtocolVersion::Resp2 if !self.resp3_buf.is_empty() => {
+                self.framed.get_mut().write_all(&self.resp3_buf).await?;
+                self.resp3_buf.clear();
+            }
+            ProtocolVersion::Resp3 if !self.framed.write_buffer().is_empty() => {
+                SinkExt::<redis_protocol::resp2::types::BytesFrame>::flush(&mut self.framed)
+                    .await
+                    .map_err(std::io::Error::other)?;
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     /// Flush all buffered responses to the client.
     pub(super) async fn flush_responses(&mut self) -> std::io::Result<()> {
+        // Either buffer may hold the pending replies, but never both with bytes
+        // that interleave: `drain_other_protocol_buffer` puts the older one on
+        // the wire at the protocol switch, so the order here is free.
+        if !self.resp3_buf.is_empty() {
+            self.framed.get_mut().write_all(&self.resp3_buf).await?;
+            self.resp3_buf.clear();
+        }
         // Flush the RESP2 codec buffer and then the underlying stream.
         // Disambiguate: Resp2 now implements Encoder for both BytesFrame and BorrowedFrame.
         SinkExt::<redis_protocol::resp2::types::BytesFrame>::flush(&mut self.framed)
             .await
             .map_err(std::io::Error::other)?;
-        self.framed.get_mut().flush().await
+        self.framed.get_mut().flush().await?;
+        // Re-measure rather than assume the client is caught up: the socket
+        // buffers are empty now, but a subscriber's delivery queue may still
+        // hold messages this flush did not reach. Crediting a drain here would
+        // reset the soft-limit window on every flush and the soft limit could
+        // never fire. `account_buffered_output` releases what actually drained
+        // and keeps the window running on what did not.
+        self.account_buffered_output()
+    }
+
+    /// **The write-path seam.** Charge what is buffered for this client right
+    /// now and act on the verdict.
+    ///
+    /// Reads the true buffer lengths rather than accumulating estimates, so the
+    /// `NetworkOutput` charge, `CLIENT INFO`'s `omem` and the
+    /// `client-output-buffer-limit` decision are all the same number.
+    ///
+    /// A shed verdict surfaces as an `io::Error`, which every caller on the
+    /// write path already treats as "this connection is over" — so enforcement
+    /// needs no new control flow, and a caller cannot accidentally keep serving
+    /// a connection the seam has condemned.
+    pub(super) fn account_buffered_output(&mut self) -> std::io::Result<()> {
+        let buffered = self.buffered_output_bytes();
+        self.output_buffer.set_class(self.output_class());
+        match self.output_buffer.set_buffered(buffered, clock::now()) {
+            OutputVerdict::Keep => Ok(()),
+            OutputVerdict::Shed(reason) => Err(self.shed_output(reason, buffered)),
+        }
+    }
+
+    /// Everything the server is currently holding *for* this client: the codec's
+    /// write buffer, the RESP3 encode buffer, and a subscriber's undelivered
+    /// pub/sub messages.
+    ///
+    /// The queue counts because Redis counts it: `client-output-buffer-limit
+    /// pubsub` is one limit over everything owed to a subscriber, not a separate
+    /// bound on a separate queue. Including it here is also what makes the soft
+    /// window observable — the socket buffers are empty after every flush, so a
+    /// figure built from them alone can never stay above the soft mark.
+    pub(super) fn buffered_output_bytes(&self) -> u64 {
+        let queued = self
+            .pubsub_rx
+            .as_ref()
+            .map(|rx| rx.queued_bytes())
+            .unwrap_or(0);
+        (self.framed.write_buffer().len() + self.resp3_buf.len() + queued) as u64
+    }
+
+    /// Release, log, count and describe a connection the output-buffer seam is
+    /// closing.
+    ///
+    /// Releasing first is the point of the limit: the reply this client will
+    /// never be allowed to finish reading is dropped here rather than pushed at
+    /// a socket the connection is about to close, so the memory the limit exists
+    /// to protect is actually returned — and the client sees the disconnect
+    /// instead of a reply that was supposed to be refused. Redis does the same:
+    /// the output buffer is freed with the client.
+    pub(super) fn shed_output(&mut self, reason: ShedReason, buffered: u64) -> std::io::Error {
+        self.framed.write_buffer_mut().clear();
+        self.resp3_buf.clear();
+        self.output_buffer.release_all();
+
+        let class = self.output_class();
+        let limit = self.output_buffer.limit();
+        // `buffered` is the caller's *triggering* figure — measured before the
+        // buffers above were cleared. Reading it here instead would report 0 on
+        // every kill and tell an operator nothing.
+        tracing::warn!(
+            conn_id = self.state.id,
+            class = class.as_str(),
+            reason = reason.as_str(),
+            buffered,
+            hard_limit = limit.hard_bytes,
+            soft_limit = limit.soft_bytes,
+            "client output buffer limit exceeded; disconnecting"
+        );
+        frogdb_telemetry::definitions::ClientOutputBufferDisconnects::inc(
+            &*self.observability.metrics_recorder,
+            class.as_str(),
+            reason.as_str(),
+        );
+        // The pubsub-specific counter lives here, on the one shed seam, not on
+        // the delivery-queue overflow latch: a slow subscriber can be shed by
+        // any verdict this seam produces (hard limit on buffered bytes, soft
+        // window, budget refusal) before the queue latch ever trips, and every
+        // one of those is "a subscriber torn down for undelivered output".
+        if class == super::output_buffer::OutputBufferClass::PubSub {
+            frogdb_telemetry::definitions::PubsubOutputBufferDisconnects::inc(
+                &*self.observability.metrics_recorder,
+            );
+        }
+        std::io::Error::other(format!(
+            "client-output-buffer-limit {} exceeded ({})",
+            class.as_str(),
+            reason.as_str()
+        ))
     }
 
     /// Try to decode the next frame from the codec's internal read buffer

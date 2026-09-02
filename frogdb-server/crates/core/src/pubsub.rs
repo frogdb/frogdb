@@ -34,12 +34,6 @@ pub type ConnId = u64;
 /// with no subscribers registered.
 pub const BROADCAST_SHARD: usize = 0;
 
-/// Default hard cap (32 MiB) on the bytes of pending pub/sub messages buffered
-/// for a single slow / non-reading subscriber before further messages are
-/// dropped and the connection is torn down. Mirrors Redis's
-/// `client-output-buffer-limit pubsub 32mb ...` hard limit.
-pub const DEFAULT_PUBSUB_OUTPUT_BUFFER_HARD_LIMIT: usize = 32 * 1024 * 1024;
-
 /// Shared byte budget backing one connection's pub/sub delivery channel.
 ///
 /// Every clone of the connection's [`PubSubSender`] (one per shard the

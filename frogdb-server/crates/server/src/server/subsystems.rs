@@ -317,15 +317,24 @@ impl Server {
         // against, so it has to exist whether or not anyone is scraping. Runs
         // only where there are arenas to read — under simulation this spawns
         // nothing at all.
+        // The rate is budgeted against the arena count, not taken as configured:
+        // sampling cost is `hz × arenas × epoch-cost`, so a rate that is free on
+        // an eight-shard box is not free on a sixty-four-shard one.
+        let arena_sample_rate = frogdb_telemetry::ArenaSampleRate::for_arena_count(
+            self.config.memory.arena_sample_hz,
+            self.shard_arenas.len(),
+        );
         let arena_sampler_handle = frogdb_telemetry::ArenaSampler::spawn(
             self.shard_arenas.clone(),
-            frogdb_telemetry::ArenaSampleRate::new(self.config.memory.arena_sample_hz),
+            arena_sample_rate,
+            self.metrics_recorder.clone(),
         );
         if arena_sampler_handle.is_some() {
             info!(
                 shards = self.shard_arenas.len(),
-                hz =
-                    frogdb_telemetry::ArenaSampleRate::new(self.config.memory.arena_sample_hz).hz(),
+                hz = arena_sample_rate.hz(),
+                configured_hz = self.config.memory.arena_sample_hz,
+                arenas_per_tick = frogdb_telemetry::arena_stride(self.shard_arenas.len(), 0).len(),
                 "Per-shard arena sampler started"
             );
         }
@@ -578,6 +587,11 @@ impl Server {
             });
         }
 
+        // Redis's `client-output-buffer-limit`, parsed once at construction
+        // (`Server::with_listeners`) so a malformed spec refuses the boot before
+        // any listener is bound.
+        let output_buffer_limits = self.output_buffer_limits;
+
         // Shared dependencies for every acceptor (main, admin, TLS ports).
         // Built once here; only the per-listener `PortSpec` (listener,
         // is_admin, TLS manager) differs between the three ports below.
@@ -624,11 +638,12 @@ impl Server {
                 keyspace_stats: self.keyspace_stats.clone(),
                 status_collector: Some(status_collector.clone()),
                 collectors: observability_collectors.clone(),
+                shard_arenas: self.shard_arenas.clone(),
             },
             new_conn_senders: std::mem::take(&mut self.new_conn_senders),
             allow_cross_slot: self.config.server.allow_cross_slot_standalone,
             scatter_gather_timeout_ms: self.config.server.scatter_gather_timeout_ms,
-            pubsub_output_buffer_hard_limit: self.config.server.pubsub_output_buffer_hard_limit,
+            output_buffer_limits,
             admin_enabled,
             memory_diag_config: self.config.memory.to_diag_config(),
             max_clients: self.config_manager.max_clients_flag(),

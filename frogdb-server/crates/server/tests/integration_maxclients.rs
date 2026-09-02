@@ -13,6 +13,39 @@ async fn start_with_max_clients(max_clients: u32) -> TestServer {
     .await
 }
 
+/// Wait until the server reports exactly `expected` connected clients.
+///
+/// `TestServer::wait_for_ready` probes the port with a connect-and-drop, and
+/// the acceptor's slot for that probe is only released when its connection
+/// task observes the EOF — asynchronously, after `start` has returned. A test
+/// that counts connections against `maxclients` must therefore wait for the
+/// registry to drain to a known baseline instead of assuming it; under a
+/// loaded test run the probe's cleanup can lag past several accepts.
+/// (The registry deregisters before the acceptor's atomic slot count is
+/// decremented, with no await point between the two, so once INFO reports the
+/// expected count the next accept observes the freed slot.)
+async fn wait_for_client_count(
+    client: &mut crate::common::test_server::TestClient,
+    expected: usize,
+) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let r = client.command(&["INFO", "clients"]).await;
+        if let frogdb_protocol::Response::Bulk(Some(data)) = &r {
+            let info = String::from_utf8_lossy(data);
+            if info.contains(&format!("connected_clients:{expected}\r\n")) {
+                return;
+            }
+            if std::time::Instant::now() > deadline {
+                panic!("timed out waiting for connected_clients:{expected}, got: {info}");
+            }
+        } else {
+            panic!("Expected bulk response for INFO clients, got: {r:?}");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
 /// Try to connect raw TCP and read any initial error the server sends.
 async fn try_raw_connect(port: u16) -> Result<String, String> {
     let mut stream = TcpStream::connect(("127.0.0.1", port))
@@ -34,8 +67,10 @@ async fn try_raw_connect(port: u16) -> Result<String, String> {
 async fn test_maxclients_rejects_when_limit_reached() {
     let server = start_with_max_clients(2).await;
 
-    // Connect two clients (at the limit)
+    // Connect two clients (at the limit). The startup probe's slot must be
+    // confirmed released before the second connect, or it counts against us.
     let mut c1 = server.connect().await;
+    wait_for_client_count(&mut c1, 1).await;
     let mut c2 = server.connect().await;
 
     // Verify they work
@@ -53,8 +88,7 @@ async fn test_maxclients_rejects_when_limit_reached() {
 
     // Drop c1 and try again - should succeed now
     drop(c1);
-    // Give the server a moment to decrement the connection count
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    wait_for_client_count(&mut c2, 1).await;
 
     let mut c3 = server.connect().await;
     let r3 = c3.command(&["PING"]).await;
@@ -91,10 +125,12 @@ async fn test_maxclients_admin_port_exempt() {
     })
     .await;
 
-    // Fill up the regular port limit
+    // Fill up the regular port limit (waiting out the startup probe's slot
+    // first — see `wait_for_client_count`)
     let mut c1 = server.connect().await;
     let r1 = c1.command(&["PING"]).await;
     assert_eq!(r1, frogdb_protocol::Response::pong());
+    wait_for_client_count(&mut c1, 1).await;
     let mut c2 = server.connect().await;
     let r2 = c2.command(&["PING"]).await;
     assert_eq!(r2, frogdb_protocol::Response::pong());

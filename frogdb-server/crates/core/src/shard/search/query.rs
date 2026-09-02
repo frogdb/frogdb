@@ -118,7 +118,7 @@ fn execute_ft_knn_search(
                 if is_json {
                     if let Some(json_val) = value.as_json() {
                         let json_fields =
-                            frogdb_search::extract_json_fields(idx.definition(), json_val.data());
+                            frogdb_search::extract_json_fields(idx.definition(), json_val);
                         for (k, v) in json_fields {
                             let include = match &request.return_fields {
                                 Some(rf) => rf.contains(&k),
@@ -209,7 +209,7 @@ impl ShardWorker {
                         if is_json_index {
                             if let Some(json_val) = val.as_json() {
                                 let all_fields =
-                                    frogdb_search::extract_json_fields(&idx_def, json_val.data());
+                                    frogdb_search::extract_json_fields(&idx_def, json_val);
                                 for field_name in fields {
                                     if row.iter().any(|(k, _)| k == field_name) {
                                         continue;
@@ -757,10 +757,8 @@ impl ShardWorker {
                     let mut fields = Vec::new();
                     if is_json {
                         if let Some(json_val) = value.as_json() {
-                            let json_fields = frogdb_search::extract_json_fields(
-                                idx.definition(),
-                                json_val.data(),
-                            );
+                            let json_fields =
+                                frogdb_search::extract_json_fields(idx.definition(), json_val);
                             for (k, v) in json_fields {
                                 let include = match &return_fields {
                                     Some(rf) => rf.contains(&k),

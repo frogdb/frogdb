@@ -37,6 +37,7 @@ mod info_handler;
 mod lifecycle;
 pub(crate) mod monitor_conn_command;
 pub(crate) mod observability_conn_command;
+pub mod output_buffer;
 pub(crate) mod pause_gate;
 pub(crate) mod permission_guard;
 pub(crate) mod persistence_conn_command;
@@ -100,6 +101,15 @@ pub use crate::server::next_txid;
 // Re-export utility functions used by connection submodules and internally
 pub(crate) use util::{estimate_command_size, estimate_resp2_frame_size};
 
+/// How often an otherwise-idle connection wakes to judge its output buffer and
+/// return buffers it no longer needs.
+///
+/// One second, matching Redis's `serverCron` cadence for the same job and the
+/// granularity of `client-output-buffer-limit`'s `soft-seconds` — a finer tick
+/// would buy no accuracy the configuration can express, and every open
+/// connection pays for this timer.
+const IDLE_TICK: Duration = Duration::from_secs(1);
+
 /// Connection handler that processes client commands.
 pub struct ConnectionHandler {
     // -- Connection I/O --
@@ -146,11 +156,6 @@ pub struct ConnectionHandler {
     /// Receiver for pub/sub messages from shards.
     /// Lazily initialized on first pub/sub command.
     pubsub_rx: Option<PubSubReceiver>,
-
-    /// Hard limit (bytes) applied to this connection's pub/sub delivery queue
-    /// when it is lazily allocated. `0` disables the bound. A slow subscriber
-    /// that exceeds it has further messages dropped and is disconnected.
-    pubsub_output_buffer_hard_limit: usize,
 
     /// Client-tracking IO plumbing (invalidation channel + REDIRECT forwarding
     /// task). Grouped so the CLIENT executor can borrow it mutably as a
@@ -209,7 +214,17 @@ pub struct ConnectionHandler {
     replica_announcement: ReplicaAnnouncement,
 
     /// Reusable buffer for RESP3 encoding to avoid per-response allocation.
+    ///
+    /// Leased from this core's pool ([`frogdb_net::buffers`]) and re-leased
+    /// small when the connection goes idle, so a client that once received a
+    /// megabyte reply does not hold a megabyte for the rest of its session.
     resp3_buf: BytesMut,
+
+    /// Buffered-output accounting and `client-output-buffer-limit` enforcement.
+    /// See [`crate::connection::output_buffer`] — every buffered out-byte on
+    /// this connection is charged here, and this is the only thing that decides
+    /// a connection is too far behind to keep.
+    output_buffer: output_buffer::OutputBufferAccount,
 
     /// Whether per-request tracing spans are enabled (shared AtomicBool).
     per_request_spans: Arc<std::sync::atomic::AtomicBool>,
@@ -326,7 +341,6 @@ impl ConnectionHandler {
             scatter_gather_timeout: config.scatter_gather_timeout,
             pubsub_tx: None,
             pubsub_rx: None,
-            pubsub_output_buffer_hard_limit: config.pubsub_output_buffer_hard_limit,
             tracking_io: TrackingIo::default(),
             pending_track_reads: false,
             pending_slot_fence: None,
@@ -341,7 +355,16 @@ impl ConnectionHandler {
             parked_frames: VecDeque::new(),
             parked_wait_exit: None,
             replica_announcement: ReplicaAnnouncement::default(),
-            resp3_buf: BytesMut::with_capacity(4096),
+            resp3_buf: frogdb_net::buffers::lease(frogdb_net::buffers::MIN_CLASS_BYTES)
+                .into_inner(),
+            output_buffer: output_buffer::OutputBufferAccount::new(
+                // Every connection starts normal; SUBSCRIBE and PSYNC move it,
+                // and `account_buffered_output` re-derives the class on every
+                // write so a class change cannot be missed.
+                output_buffer::OutputBufferClass::Normal,
+                config.output_buffer_limits,
+                &frogdb_memory::network_output::current(),
+            ),
             per_request_spans: config.per_request_spans,
             is_replica: config.is_replica,
             #[cfg(feature = "turmoil")]
@@ -612,23 +635,62 @@ impl ConnectionHandler {
         FrameAction::Continue
     }
 
-    /// Log and record the teardown of a subscriber whose pub/sub output buffer
+    /// Which `client-output-buffer-limit` class this connection is in *now*.
+    ///
+    /// Derived rather than stored: a connection changes class mid-session
+    /// (`SUBSCRIBE` makes it a subscriber, `REPLCONF listening-port` marks a
+    /// replica link), and a stored copy is a copy someone forgets to update at
+    /// one of those transitions. `account_buffered_output` re-derives it on
+    /// every write, so the class a connection is judged against is always the
+    /// class it is actually in.
+    fn output_class(&self) -> output_buffer::OutputBufferClass {
+        if self.replica_announcement.listening_port != 0 {
+            output_buffer::OutputBufferClass::Replica
+        } else if self.pubsub_rx.is_some() {
+            output_buffer::OutputBufferClass::PubSub
+        } else {
+            output_buffer::OutputBufferClass::Normal
+        }
+    }
+
+    /// Log and record the teardown of a subscriber whose pub/sub delivery queue
     /// exceeded the hard limit. The caller `break`s the delivery loop, dropping
     /// the socket — matching Redis's `client-output-buffer-limit pubsub`.
-    fn disconnect_overflowed_subscriber(&self) {
+    ///
+    /// The queue bound is that same pubsub hard limit reached one step earlier —
+    /// on messages the subscriber was too slow for the server to even buffer —
+    /// so the verdict is logged and counted through the one output-buffer seam,
+    /// exactly as a hard-limit kill on any other class. Only the dropped-message
+    /// count, which is peculiar to the queue, is recorded separately.
+    fn disconnect_overflowed_subscriber(&mut self) {
         let dropped = self.pubsub_rx.as_ref().map(|rx| rx.dropped()).unwrap_or(0);
-        warn!(
+        debug!(
             conn_id = self.state.id,
-            dropped, "pub/sub output buffer hard limit exceeded; disconnecting slow subscriber"
+            dropped, "pub/sub delivery queue overflowed"
         );
-        frogdb_telemetry::definitions::PubsubOutputBufferDisconnects::inc(
-            &*self.observability.metrics_recorder,
-        );
+        // Measure now rather than reading the account: the account was zeroed by
+        // the flush that preceded this check, so it would report `buffered=0`
+        // for a kill caused by megabytes of undelivered messages.
+        let buffered = self.buffered_output_bytes();
+        let _ = self.shed_output(output_buffer::ShedReason::HardLimit, buffered);
     }
 
     /// Run the connection handling loop.
     pub async fn run(mut self) -> Result<()> {
         debug!(conn_id = self.state.id, "Connection handler started");
+
+        // The connection's own housekeeping tick. Everything a connection must
+        // do *when nothing is happening to it* hangs off this one timer: judge
+        // the output-buffer limits (the soft limit is a clock, not a threshold,
+        // so without a tick it can only ever fire on a write), and hand buffers
+        // grown by a past burst back to the core's pool. A connection that
+        // buffered a megabyte and then went quiet is precisely the case neither
+        // the command path nor the write path can reach.
+        let mut idle_tick =
+            tokio::time::interval_at(tokio::time::Instant::now() + IDLE_TICK, IDLE_TICK);
+        // Delay, not Burst: a connection descheduled for a while must not then
+        // run a backlog of ticks it gained nothing from.
+        idle_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         loop {
             // `biased;` (determinism audit R7/A52): fixes the poll order so a
@@ -653,6 +715,11 @@ impl ConnectionHandler {
             //      correctness problem. Relative order among these three is
             //      untouched (pub/sub, invalidation, MONITOR) — no
             //      asymmetry between them is called out by the audit.
+            //   6. Housekeeping tick — output-buffer judgment and idle buffer
+            //      trimming. Last because it serves the server, not the client,
+            //      and losing a tick to real traffic costs nothing: the next
+            //      one is a second away, and a busy connection is judged on
+            //      every write anyway.
             tokio::select! {
                 biased;
 
@@ -872,6 +939,17 @@ impl ConnectionHandler {
                         }
                     }
                 }
+
+                // 6. Housekeeping tick. Last on purpose: it is the only arm that
+                // does no work for the client, so any real traffic outranks it.
+                _ = idle_tick.tick() => {
+                    if self.on_idle_tick().is_err() {
+                        // The output-buffer seam condemned this connection while
+                        // it sat idle (the soft window ran out). `on_idle_tick`
+                        // has already released the buffer, logged and counted.
+                        break;
+                    }
+                }
             }
         }
 
@@ -900,6 +978,18 @@ impl ConnectionHandler {
                     "ReplicationHandshake gates handler presence before yielding a handoff",
                 );
 
+            // ACCOUNTING GAP: the socket leaves output-buffer accounting here.
+            // `OutputBufferAccount`'s `Charge` is dropped with `self` at the end
+            // of this branch, which correctly releases the bytes this connection
+            // still held, but nothing takes over: from this point the
+            // replication feed's buffering is charged to no `NetworkOutput`
+            // budget and judged against no `client-output-buffer-limit` class,
+            // so the `replica` class governs only the pre-handoff connection.
+            // Closing this means charging inside the replication crates, which
+            // is spec-first work under `specs/replication.md`; it is filed
+            // separately and recorded in `specs/memory.md` FM-MEMORY-001's
+            // "NOT observable" and in the `client-output-buffer-limit` docs.
+            //
             // Extract the ConnectionStream from the Framed codec and type-erase
             // it for the replication handler (`handle_psync` takes a
             // `BoxedStream`). Non-turmoil: `into_boxed` preserves TLS if
@@ -939,6 +1029,14 @@ impl ConnectionHandler {
 
         // Cleanup: notify all shards that this connection is closed
         self.notify_connection_closed().await;
+
+        // Return this connection's buffers to the core's pool instead of freeing
+        // them. A closing connection is exactly when the next one is likely to
+        // be accepted on this core, and its read buffer is the right size for
+        // that connection's first command. Both buffers are dead here, so the
+        // usual "only trim what is empty" guard does not apply — anything still
+        // in them is bytes we are never going to write.
+        self.release_buffers_to_pool();
 
         debug!(conn_id = self.state.id, "Connection handler finished");
         Ok(())

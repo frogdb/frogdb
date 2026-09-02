@@ -13,9 +13,10 @@ use crate::jemalloc;
 use crate::shard_arenas::ShardArenaRegistry;
 use frogdb_types::metrics::definitions::{
     AllocatorActiveBytes, AllocatorAllocatedBytes, AllocatorFragRatio, AllocatorResidentBytes,
-    AllocatorShardAllocatedBytes, AllocatorShardFragRatio, AllocatorShardResidentBytes,
-    CpuSystemSeconds, CpuUserSeconds, MemoryFragmentationRatio, MemoryMaxmemoryBytes,
-    MemoryRssBytes, UptimeSeconds,
+    AllocatorShardActiveBytes, AllocatorShardAllocatedBytes, AllocatorShardDirtyBytes,
+    AllocatorShardFragRatio, AllocatorShardMuzzyBytes, AllocatorShardResidentBytes,
+    AllocatorShardRetainedBytes, CpuSystemSeconds, CpuUserSeconds, MemoryFragmentationRatio,
+    MemoryMaxmemoryBytes, MemoryRssBytes, UptimeSeconds,
 };
 
 /// Get cumulative CPU times (user, system) via getrusage.
@@ -162,6 +163,14 @@ impl SystemMetricsCollector {
                 &shard,
             );
             AllocatorShardResidentBytes::set(&*self.recorder, sample.resident_bytes as f64, &shard);
+            // The depth behind that resident figure: what the arena is serving
+            // from, what it is holding on to, and what it has kept mapped. This
+            // is what separates "this shard grew" from "this shard's pages have
+            // not decayed yet" without an active defragmenter (PRD R13).
+            AllocatorShardActiveBytes::set(&*self.recorder, sample.active_bytes as f64, &shard);
+            AllocatorShardDirtyBytes::set(&*self.recorder, sample.dirty_bytes as f64, &shard);
+            AllocatorShardMuzzyBytes::set(&*self.recorder, sample.muzzy_bytes as f64, &shard);
+            AllocatorShardRetainedBytes::set(&*self.recorder, sample.retained_bytes as f64, &shard);
             if let Some(ratio) = sample.fragmentation_ratio() {
                 AllocatorShardFragRatio::set(&*self.recorder, ratio, &shard);
             }
@@ -264,6 +273,12 @@ mod tests {
         let output = recorder.encode();
         assert!(output.contains("frogdb_allocator_shard_allocated_bytes"));
         assert!(output.contains("frogdb_allocator_shard_resident_bytes"));
+        for depth in ["active", "dirty", "muzzy", "retained"] {
+            assert!(
+                output.contains(&format!("frogdb_allocator_shard_{depth}_bytes")),
+                "the per-arena {depth} series is missing: {output}"
+            );
+        }
         assert!(
             output.contains(r#"shard="0""#),
             "the per-shard series must be labelled by shard: {output}"

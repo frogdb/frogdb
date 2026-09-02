@@ -70,7 +70,9 @@ pub use node_state::{NodeStateSnapshot, ShardScatterError, ShardState};
 pub use prometheus_recorder::{
     CommandSnapshot, DashboardMetrics, PrometheusRecorder, ShardSnapshot,
 };
-pub use shard_arenas::{ArenaSampleRate, ArenaSampler, ShardArenaRegistry, ShardArenaSample};
+pub use shard_arenas::{
+    ArenaSampleRate, ArenaSampler, ShardArenaRegistry, ShardArenaSample, arena_stride, sweep_ticks,
+};
 pub use status::{LiveMode, ServerStatus, StatusCollector, StatusThresholds};
 pub use system::SystemMetricsCollector;
 pub use task_monitors::TaskMonitorRegistry;

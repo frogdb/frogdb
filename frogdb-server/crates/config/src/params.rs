@@ -463,18 +463,6 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
         ));
         rows.push(pick(TlsConfig::PARAMS, "tls-ciphersuites"));
 
-        // --- issue-29: pub/sub slow-subscriber output-buffer bound. One
-        // promote-immutable (startup-consumed, CONFIG GET-only) row, appended
-        // after the issue-14 block so the golden snapshot's first 111 rows stay
-        // byte-identical. Consumed once when a connection lazily allocates its
-        // pub/sub channel (`PubSubIo::ensure_pubsub_channel`): GET reports the
-        // honest startup value, SET has no runtime seam (existing channels keep
-        // their limit). ---
-        rows.push(pick(
-            ServerConfig::PARAMS,
-            "pubsub-output-buffer-hard-limit",
-        ));
-
         // --- config-mutability round: 5 newly-exposed rows, appended after the
         // issue-29 row so the golden snapshot's first 112 rows stay
         // byte-identical. (This round also *promoted* 23 already-registered rows
@@ -571,6 +559,12 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
             ReplicationConfigSection::PARAMS,
             "replica-serve-stale-data",
         ));
+
+        // --- memory-architecture issue 18 (per-class output-buffer limits):
+        // appended last so the golden snapshot's first 126 rows stay
+        // byte-identical. Immutable: a connection reads the limits once when it
+        // is built, so GET reports the startup value and SET has no seam. ---
+        rows.push(pick(ServerConfig::PARAMS, "client-output-buffer-limit"));
 
         rows
     });
@@ -1374,14 +1368,6 @@ mod tests {
             mutable: true,
             noop: false,
         },
-        // issue-29: pub/sub slow-subscriber output-buffer bound (immutable).
-        ConfigParamInfo {
-            name: "pubsub-output-buffer-hard-limit",
-            section: Some("server"),
-            field: Some("pubsub-output-buffer-hard-limit"),
-            mutable: false,
-            noop: false,
-        },
         ConfigParamInfo {
             name: "hotshards-hot-threshold-percent",
             section: Some("hotshards"),
@@ -1480,6 +1466,14 @@ mod tests {
             mutable: true,
             noop: false,
         },
+        // memory-architecture issue 18: per-class output-buffer limits (immutable).
+        ConfigParamInfo {
+            name: "client-output-buffer-limit",
+            section: Some("server"),
+            field: Some("client-output-buffer-limit"),
+            mutable: false,
+            noop: false,
+        },
     ];
 
     #[test]
@@ -1530,6 +1524,12 @@ mod tests {
         // giving 125. Redis-feel issue 17 appended the mutable
         // `replica-serve-stale-data` (the stale-read gate, defaulted to `no`
         // where Redis defaults `yes`), giving 126.
+        // Memory-architecture issue 18 appended the immutable
+        // `client-output-buffer-limit` (Redis's per-class buffered-reply
+        // limits), giving 127, and retired issue-29's
+        // `pubsub-output-buffer-hard-limit` — a subscriber's delivery queue is
+        // bounded by the new value's `pubsub` class, so one Redis knob is again
+        // one FrogDB knob — giving 126.
         assert_eq!(GOLDEN_SNAPSHOT.len(), 126);
     }
 
