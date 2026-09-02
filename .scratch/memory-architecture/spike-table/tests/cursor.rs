@@ -112,6 +112,10 @@ fn linear_directory_cursor_breaks_under_mid_scan_splits() {
             Some(_) => duplicated += 1,
         }
     }
+    eprintln!(
+        "linear cursor over {preexisting} pre-existing keys, {splits} mid-scan splits: \
+         {missing} missing, {duplicated} duplicated"
+    );
     assert!(
         missing > 0 || duplicated > 0,
         "linear cursor unexpectedly held the guarantee — the counter-example is stale"
@@ -145,9 +149,16 @@ fn scan_without_mutation_is_exactly_once() {
 #[test]
 fn aliased_directory_entries_are_visited_once() {
     let mut table = TableStr7::new();
-    for i in 0..30_000 {
+    // Aliasing appears the moment one segment splits at the global depth and doubles
+    // the directory: every other segment is then one depth short and owns two entries.
+    // With a uniform hash the segments catch up again, so stop at the first insert that
+    // leaves the directory aliased with a non-trivial number of segments.
+    for i in 0..200_000 {
         let key = format!("a:{i}").into_bytes();
         table.insert(&key, Val::Int(i));
+        if table.segments() >= 8 && table.directory_entries() > table.segments() {
+            break;
+        }
     }
     assert!(
         table.directory_entries() > table.segments(),
