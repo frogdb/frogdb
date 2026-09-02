@@ -1,6 +1,6 @@
 # `just lint-spec` is enforced nowhere — put it in CI
 
-Status: ready-for-agent
+Status: done
 Type: mechanism (enforcement gap)
 Severity: likelihood 3/3 (campaign 2 already found two mis-tagged rows, c2-09, and a
 34% weak-tag rate — consistent with a lint nobody is forced to run), consequence 2/3
@@ -55,3 +55,12 @@ can land a row naming a test that does not exist, or a tag naming a row that doe
 `just workflow-gen --check` passes after the change; a deliberately broken tag (`// FM-TXN-999`
 on any test) pushed to a branch turns the `Unit Tests` job red at the new step, and the
 step name appears in the failure. Remove the tag before merging.
+
+## Resolution
+
+Landed as `2dad09e6` on `locked-areas-mechanical/impl` (2026-09-02). `Unit Tests` gains a
+trailing `Spec ↔ test agreement` step running `just lint-spec`; the job's `if:` is
+`rust == 'true' || specs == 'true'`. Generator and regenerated `test.yml` committed together;
+the only downstream consumer (`ci-pass`, `if: always()`) already tolerated a skipped
+`unit-tests`, so widening the trigger breaks nothing. The live forcing test (a pushed
+`// FM-TXN-999` tag turning the step red) runs against a PR, not in the worktree.
