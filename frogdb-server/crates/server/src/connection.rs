@@ -659,7 +659,7 @@ impl ConnectionHandler {
     /// so the verdict is logged and counted through the one output-buffer seam,
     /// exactly as a hard-limit kill on any other class. Only the dropped-message
     /// count, which is peculiar to the queue, is recorded separately.
-    fn disconnect_overflowed_subscriber(&self) {
+    fn disconnect_overflowed_subscriber(&mut self) {
         let dropped = self.pubsub_rx.as_ref().map(|rx| rx.dropped()).unwrap_or(0);
         debug!(
             conn_id = self.state.id,
@@ -668,10 +668,8 @@ impl ConnectionHandler {
         frogdb_telemetry::definitions::PubsubOutputBufferDisconnects::inc(
             &*self.observability.metrics_recorder,
         );
-        let _ = self.shed_output(
-            output_buffer::ShedReason::HardLimit,
-            self.output_buffer.buffered_bytes(),
-        );
+        let buffered = self.output_buffer.buffered_bytes();
+        let _ = self.shed_output(output_buffer::ShedReason::HardLimit, buffered);
     }
 
     /// Run the connection handling loop.

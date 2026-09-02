@@ -178,8 +178,20 @@ impl ConnectionHandler {
         }
     }
 
-    /// Log, count and describe a connection the output-buffer seam is closing.
-    pub(super) fn shed_output(&self, reason: ShedReason, buffered: u64) -> std::io::Error {
+    /// Release, log, count and describe a connection the output-buffer seam is
+    /// closing.
+    ///
+    /// Releasing first is the point of the limit: the reply this client will
+    /// never be allowed to finish reading is dropped here rather than pushed at
+    /// a socket the connection is about to close, so the memory the limit exists
+    /// to protect is actually returned — and the client sees the disconnect
+    /// instead of a reply that was supposed to be refused. Redis does the same:
+    /// the output buffer is freed with the client.
+    pub(super) fn shed_output(&mut self, reason: ShedReason, buffered: u64) -> std::io::Error {
+        self.framed.write_buffer_mut().clear();
+        self.resp3_buf.clear();
+        self.output_buffer.note_drained();
+
         let class = self.output_class();
         tracing::warn!(
             conn_id = self.state.id,
