@@ -88,10 +88,10 @@ fn read_varint(buf: &[u8], pos: usize) -> (u64, usize) {
 #[inline]
 fn write_backlen(dst: &mut [u8], v: u64) -> usize {
     let n = varint_len(v);
-    for i in 0..n {
+    for (i, slot) in dst.iter_mut().enumerate().take(n) {
         // Most significant group first; continuation bit on all but the first.
         let group = ((v >> (7 * (n - 1 - i))) & 0x7f) as u8;
-        dst[i] = if i == 0 { group } else { group | 0x80 };
+        *slot = if i == 0 { group } else { group | 0x80 };
     }
     n
 }
