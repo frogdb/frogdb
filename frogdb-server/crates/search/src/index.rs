@@ -145,7 +145,7 @@ pub fn extract_json_fields(
 
         if let Ok(matches) = jv.get(path) {
             for val in matches {
-                let s = json_value_to_string(val);
+                let s = json_value_to_string(&val.to_json_data());
                 if !s.is_empty() {
                     fields.push((field_def.name.clone(), s));
                 }

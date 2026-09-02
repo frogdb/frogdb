@@ -430,3 +430,112 @@ mod edge_case_tests {
         }
     }
 }
+
+/// Arbitrary JSON documents: scalars at the leaves, arrays and objects a few
+/// levels deep. Object keys stay short so a generated document is also cheap to
+/// address by JSONPath.
+fn arb_json() -> impl Strategy<Value = serde_json::Value> {
+    let leaf = prop_oneof![
+        Just(serde_json::Value::Null),
+        any::<bool>().prop_map(serde_json::Value::Bool),
+        any::<i64>().prop_map(|n| json!(n)),
+        any::<u64>().prop_map(|n| json!(n)),
+        (-1e18f64..1e18f64).prop_map(|f| json!(f)),
+        "(?s).{0,12}".prop_map(serde_json::Value::String),
+        // Escape-heavy strings: quotes, backslashes and C0 controls exercise the
+        // tape's escaping against serde_json's.
+        "[\\x00-\\x1f\"\\\\ ]{0,8}".prop_map(serde_json::Value::String),
+    ];
+    leaf.prop_recursive(4, 48, 5, |inner| {
+        prop_oneof![
+            prop::collection::vec(inner.clone(), 0..5).prop_map(serde_json::Value::Array),
+            prop::collection::vec(("[a-z]{1,4}", inner), 0..5)
+                .prop_map(|entries| serde_json::Value::Object(entries.into_iter().collect())),
+        ]
+    })
+}
+
+/// One mutation applied to both the stored document and the model.
+#[derive(Debug, Clone)]
+enum Op {
+    Set(String, serde_json::Value),
+    Delete(String),
+    ArrAppend(String, serde_json::Value),
+}
+
+fn arb_op() -> impl Strategy<Value = Op> {
+    prop_oneof![
+        ("[a-e]{1,2}", arb_json()).prop_map(|(k, v)| Op::Set(k, v)),
+        "[a-e]{1,2}".prop_map(Op::Delete),
+        ("[a-e]{1,2}", arb_json()).prop_map(|(k, v)| Op::ArrAppend(k, v)),
+    ]
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(512))]
+
+    /// The tape is a lossless encoding: a parsed document re-serializes to
+    /// exactly the text `serde_json` produces for the same value.
+    #[test]
+    fn tape_round_trips_serde_json(value in arb_json()) {
+        let text = serde_json::to_string(&value).unwrap();
+        let doc = JsonValue::parse(text.as_bytes()).unwrap();
+        prop_assert_eq!(String::from_utf8(doc.to_bytes()).unwrap(), text);
+    }
+
+    /// `memory_size` is a pure function of the document, so MEMORY USAGE does
+    /// not drift between two stores holding the same bytes.
+    #[test]
+    fn tape_memory_size_is_run_stable(value in arb_json()) {
+        let text = serde_json::to_string(&value).unwrap();
+        let a = JsonValue::parse(text.as_bytes()).unwrap();
+        let b = JsonValue::parse(text.as_bytes()).unwrap();
+        prop_assert_eq!(a.memory_size(), b.memory_size());
+    }
+
+    /// Path mutations agree with a `serde_json::Value` model applied the same
+    /// way: after every step the tape serializes to the model's canonical text.
+    #[test]
+    fn tape_mutations_track_a_serde_json_model(
+        base in prop::collection::vec(("[a-e]{1,2}", arb_json()), 0..5),
+        ops in prop::collection::vec(arb_op(), 1..12),
+    ) {
+        let mut model = serde_json::Value::Object(base.into_iter().collect());
+        let mut doc = JsonValue::parse(serde_json::to_string(&model).unwrap().as_bytes()).unwrap();
+
+        for op in ops {
+            let entries = match &mut model {
+                serde_json::Value::Object(entries) => entries,
+                _ => unreachable!("the model document is an object"),
+            };
+            match op {
+                Op::Set(key, value) => {
+                    let path = format!("$.{key}");
+                    prop_assert!(doc.set(&path, value.clone(), false, false).is_ok());
+                    entries.insert(key, value);
+                }
+                Op::Delete(key) => {
+                    let path = format!("$.{key}");
+                    let deleted = doc.delete(&path).unwrap();
+                    prop_assert_eq!(deleted, usize::from(entries.remove(&key).is_some()));
+                }
+                Op::ArrAppend(key, value) => {
+                    let path = format!("$.{key}");
+                    match entries.get_mut(&key) {
+                        Some(serde_json::Value::Array(array)) => {
+                            prop_assert!(doc.arr_append(&path, vec![value.clone()]).is_ok());
+                            array.push(value);
+                        }
+                        // Missing key or non-array target: the command is
+                        // rejected and the document is left untouched.
+                        _ => prop_assert!(doc.arr_append(&path, vec![value]).is_err()),
+                    }
+                }
+            }
+            prop_assert_eq!(
+                String::from_utf8(doc.to_bytes()).unwrap(),
+                serde_json::to_string(&model).unwrap()
+            );
+        }
+    }
+}
