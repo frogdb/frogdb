@@ -252,3 +252,6 @@ Session decisions layered on the R1–R15 rulings above; D-numbers are cited by 
   cross-slot txn/VLL and turmoil pinning fidelity → issue-11 drafting; promotion
   thresholds → Redis defaults unless 13/14 benches disagree. Interview design tree
   closed 2026-09-01.
+- D6: `just lint-spec`'s `RUSTC_WRAPPER=""` sccache bypass (concurrent full recompiles
+  starved sim suites → phantom nextest timeouts) gets investigate-and-fix, not a doc-only
+  rule — filed as `.scratch/concurrency-testing/issues/19`.
