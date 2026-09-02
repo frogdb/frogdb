@@ -144,10 +144,17 @@ def mutants_diff_job() -> Job:
             ),
             fail_fast=False,
         ),
-        # Per crate and per ref, so a rapid re-push cancels only the legs it
-        # supersedes and two crates' legs never queue behind one another.
+        # Per crate. On a PR the group is the ref, so a rapid re-push cancels
+        # only the legs it supersedes. On a push to main it is the sha: every
+        # push shares `refs/heads/main`, and a ref-keyed group would let push
+        # N+1 cancel push N's leg while N+1's base (`event.before`) starts at
+        # N's head — N's diff would never get a verdict (D4).
         concurrency=Concurrency(
-            group="mutants-diff-${{ github.ref }}-${{ matrix.crate }}",
+            group=(
+                "mutants-diff-"
+                "${{ github.event_name == 'pull_request' && github.ref || github.sha }}"
+                "-${{ matrix.crate }}"
+            ),
             cancel_in_progress=True,
         ),
         steps=[

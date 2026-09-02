@@ -272,7 +272,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     concurrency:
-      group: mutants-diff-${{ github.ref }}-${{ matrix.crate }}
+      group: mutants-diff-${{ github.event_name == 'pull_request' && github.ref || github.sha }}-${{ matrix.crate }}
       cancel-in-progress: true
     strategy:
       matrix:
