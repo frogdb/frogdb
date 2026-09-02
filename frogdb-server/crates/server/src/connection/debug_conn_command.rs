@@ -20,7 +20,8 @@
 //! DEBUG is registered *only* as a `CommandImpl::Connection` executor. `COMMAND
 //! GETKEYS` resolves it through the registry union (`get_entry`), so this
 //! executor's [`dynamic_keys`] override supplies the key of each
-//! [keyed subcommand](KEYED_SUBCOMMANDS) — OBJECT and EXPIRE-BACKDATE — directly;
+//! [keyed subcommand](KEYED_SUBCOMMANDS) — OBJECT, EXPIRE-BACKDATE and
+//! RE-ENCODE — directly;
 //! no shard-local key-extraction stub is required. The spec declares
 //! `KeySpec::Dynamic` + `MOVABLEKEYS` so `COMMAND` metadata is correct. The two
 //! halves are held in agreement by `every_keyed_subcommand_is_dispatched`: a
@@ -82,7 +83,7 @@ static DEBUG_SPEC: CommandSpec = CommandSpec {
 /// dispatch rejects is untruthful metadata, so
 /// `every_keyed_subcommand_is_dispatched` cross-checks this list against the
 /// dispatch.
-const KEYED_SUBCOMMANDS: [&[u8]; 2] = [b"OBJECT", b"EXPIRE-BACKDATE"];
+const KEYED_SUBCOMMANDS: [&[u8]; 3] = [b"OBJECT", b"EXPIRE-BACKDATE", b"RE-ENCODE"];
 
 /// The registrable, `'static` DEBUG executor. Registered via
 /// [`frogdb_core::CommandRegistry::register_connection`] in `server/register.rs`.
@@ -253,6 +254,23 @@ impl ConnectionCommand for DebugConnCommand {
                     match debug.object_info(shard_id, key).await {
                         Ok(Some(info)) => format_object_info(&info),
                         // Redis's reply for a key DEBUG OBJECT cannot find.
+                        Ok(None) => Response::error("ERR no such key"),
+                        Err(err) => err,
+                    }
+                }
+                b"RE-ENCODE" => {
+                    // args[0] = "RE-ENCODE", args[1] = key
+                    if args.len() != 2 {
+                        return Response::error(
+                            "ERR wrong number of arguments for 'DEBUG RE-ENCODE' command",
+                        );
+                    }
+                    let key = args[1].clone();
+                    let shard_id = shard_for_key(&key, num_shards);
+                    match debug.re_encode(shard_id, key).await {
+                        Ok(Some(result)) => format_re_encode(&result),
+                        // The same reply DEBUG OBJECT gives for a key it cannot
+                        // find, for the same reason.
                         Ok(None) => Response::error("ERR no such key"),
                         Err(err) => err,
                     }
@@ -444,6 +462,8 @@ fn debug_help() -> Response {
         "    Generate a diagnostic bundle.",
         "DEBUG BUNDLE LIST",
         "    List available diagnostic bundles.",
+        "DEBUG RE-ENCODE <key>",
+        "    Rebuild one key's value through its encoding, compacting the slack churn left behind.",
         "DEBUG OBJECT <key>",
         "    Inspect key internals: refcount, encoding, serializedlength, lru stamps.",
         "DEBUG HASHING <key> [key ...]",
@@ -502,6 +522,19 @@ fn format_object_info(info: &frogdb_core::shard::ObjectInfo) -> Response {
     Response::Simple(SafeStatus::sanitized(format!(
         "refcount:{} encoding:{} serializedlength:{} lru:{} lru_seconds_idle:{}",
         info.refcount, info.encoding, info.serialized_length, info.lru, info.lru_seconds_idle,
+    )))
+}
+
+/// DEBUG RE-ENCODE's reply: the resulting encoding and the accounted memory on
+/// either side of the rewrite, in the same `field:value` shape
+/// [`format_object_info`] uses.
+///
+/// `after` equalling `before` is a real answer, not a failure: the value was
+/// already compact, or its type has only one representation.
+fn format_re_encode(result: &frogdb_core::store::ReEncodeResult) -> Response {
+    Response::Simple(SafeStatus::sanitized(format!(
+        "encoding:{} memory_before:{} memory_after:{}",
+        result.encoding, result.before_bytes, result.after_bytes,
     )))
 }
 
@@ -1297,6 +1330,7 @@ mod tests {
         replication_check: Option<Vec<frogdb_core::Violation>>,
         object_info: Option<frogdb_core::shard::ObjectInfo>,
         shard_arenas: Vec<(usize, u32)>,
+        re_encode: Option<frogdb_core::store::ReEncodeResult>,
     }
 
     impl StubDebug {
@@ -1307,7 +1341,13 @@ mod tests {
                 replication_check: Some(Vec::new()),
                 object_info: None,
                 shard_arenas: Vec::new(),
+                re_encode: None,
             }
+        }
+
+        fn with_re_encode(mut self, re_encode: frogdb_core::store::ReEncodeResult) -> Self {
+            self.re_encode = Some(re_encode);
+            self
         }
 
         fn with_shard_arenas(mut self, shard_arenas: Vec<(usize, u32)>) -> Self {
@@ -1417,6 +1457,14 @@ mod tests {
         }
         fn shard_arenas(&self) -> Vec<(usize, u32)> {
             self.shard_arenas.clone()
+        }
+        fn re_encode<'a>(
+            &'a self,
+            _shard_id: usize,
+            _key: Bytes,
+        ) -> BoxFuture<'a, Result<Option<frogdb_core::store::ReEncodeResult>, Response>> {
+            let result = self.re_encode;
+            Box::pin(async move { Ok(result) })
         }
     }
 
@@ -1583,6 +1631,61 @@ mod tests {
             )
             .await;
         assert!(matches!(resp, Response::Error(_)), "got {resp:?}");
+    }
+
+    #[tokio::test]
+    async fn re_encode_reports_the_encoding_and_the_memory_on_either_side() {
+        let stub = StubDebug::new(true).with_re_encode(frogdb_core::store::ReEncodeResult {
+            encoding: "listpack",
+            before_bytes: 4_096,
+            after_bytes: 96,
+        });
+        let fx = super::tests_fixture::Deps::new();
+        let resp = DebugConnCommand
+            .execute(
+                &mut fx.ctx_with_num_shards(Some(&stub), 1),
+                &[arg("RE-ENCODE"), arg("h")],
+            )
+            .await;
+        match resp {
+            Response::Simple(s) => assert_eq!(
+                String::from_utf8_lossy(s.as_bytes()),
+                "encoding:listpack memory_before:4096 memory_after:96"
+            ),
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn re_encode_reports_no_such_key_when_the_shard_has_none() {
+        // The stub's default is a miss: the provider found no such key.
+        let stub = StubDebug::new(true);
+        let fx = super::tests_fixture::Deps::new();
+        let resp = DebugConnCommand
+            .execute(
+                &mut fx.ctx_with_num_shards(Some(&stub), 1),
+                &[arg("RE-ENCODE"), arg("absent")],
+            )
+            .await;
+        match resp {
+            Response::Error(e) => assert_eq!(String::from_utf8_lossy(&e), "ERR no such key"),
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn re_encode_rejects_a_wrong_argument_count() {
+        let stub = StubDebug::new(true);
+        let fx = super::tests_fixture::Deps::new();
+        for args in [
+            vec![arg("RE-ENCODE")],
+            vec![arg("RE-ENCODE"), arg("a"), arg("b")],
+        ] {
+            let resp = DebugConnCommand
+                .execute(&mut fx.ctx_with_num_shards(Some(&stub), 1), &args)
+                .await;
+            assert!(matches!(resp, Response::Error(_)), "got {resp:?}");
+        }
     }
 
     #[tokio::test]

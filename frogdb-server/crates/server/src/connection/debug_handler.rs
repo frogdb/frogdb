@@ -330,6 +330,23 @@ impl DebugProvider for ConnectionHandler {
         })
     }
 
+    /// DEBUG RE-ENCODE <key> — rebuild the key's value through its own encoding
+    /// on the owning shard. The same single keyed round-trip
+    /// [`Self::expire_backdate`] uses; the executor formats the reply.
+    fn re_encode<'a>(
+        &'a self,
+        shard_id: usize,
+        key: Bytes,
+    ) -> BoxFuture<'a, Result<Option<frogdb_core::store::ReEncodeResult>, Response>> {
+        Box::pin(async move {
+            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+            let msg = frogdb_core::shard::DebugIntrospectionMsg::ReEncode { key, response_tx };
+            self.scatter_gather()
+                .query_one(shard_id, msg, response_rx)
+                .await
+        })
+    }
+
     /// DEBUG OBJECT <key> — gather the key's internals from the owning shard.
     /// One keyed round-trip through the same timed send/timeout helper
     /// [`Self::expire_backdate`] uses; the executor formats the reply.

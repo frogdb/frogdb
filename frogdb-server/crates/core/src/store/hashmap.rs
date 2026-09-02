@@ -126,6 +126,19 @@ pub enum BackdateExpiryResult {
     NoExpiry,
 }
 
+/// Outcome of [`HashMapStore::re_encode`] (DEBUG RE-ENCODE).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReEncodeResult {
+    /// The value's encoding after the rewrite — the same vocabulary
+    /// `OBJECT ENCODING` uses.
+    pub encoding: &'static str,
+    /// The entry's accounted memory before the rewrite.
+    pub before_bytes: usize,
+    /// The entry's accounted memory after it. Equal to `before_bytes` for a
+    /// value with nothing to compact, or one already compact.
+    pub after_bytes: usize,
+}
+
 /// Default store implementation using griddle::HashMap.
 pub struct HashMapStore {
     data: HashMap<Bytes, Entry>,
@@ -562,6 +575,33 @@ impl HashMapStore {
         entry.metadata.expires_at = Some(deadline);
         self.expiry_index.set(Bytes::copy_from_slice(key), deadline);
         BackdateExpiryResult::Backdated
+    }
+
+    /// Rebuild one key's value through [`Value::re_encode`] (DEBUG RE-ENCODE),
+    /// reclaiming the slack that in-place churn left in its representation.
+    ///
+    /// `None` for a missing or already-expired key. Goes through `get_mut`, so
+    /// a warm key is rehydrated first and the accounting is settled by the same
+    /// deferred-refresh seam every other in-place mutation uses — flushed here
+    /// rather than left pending, because this is a whole command rather than a
+    /// step inside one, and its reply reports the memory it reclaimed.
+    ///
+    /// One key, on operator demand. Nothing schedules it, and nothing scans for
+    /// candidates: a background defragmenter is a door the memory architecture
+    /// keeps shut (PRD R13), and this is the manual lever that makes keeping it
+    /// shut affordable.
+    pub fn re_encode(&mut self, key: &[u8]) -> Option<ReEncodeResult> {
+        let value = self.get_mut(key)?;
+        let before_bytes = value.memory_size();
+        value.re_encode();
+        let encoding = value.encoding_name();
+        let after_bytes = value.memory_size();
+        self.flush_keysizes_refreshes();
+        Some(ReEncodeResult {
+            encoding,
+            before_bytes,
+            after_bytes,
+        })
     }
 
     // ========================================================================
@@ -2735,6 +2775,55 @@ mod tests {
             "the read-path lazy purge must fire normally after backdate"
         );
         assert!(!s.contains(b"k"), "the key must now be physically gone");
+    }
+
+    /// Re-encoding a churned value must leave the store's own accounting
+    /// consistent: the tracked `memory_used` counter has to follow the value
+    /// down, not keep charging for the representation that was just dropped.
+    #[test]
+    fn re_encode_compacts_a_churned_hash_and_reconciles_memory_accounting() {
+        use frogdb_types::types::{HashValue, ListpackThresholds};
+
+        const T: ListpackThresholds = ListpackThresholds::DEFAULT_HASH;
+        let mut hash = HashValue::new();
+        for i in 0..(T.max_entries + 50) {
+            hash.set(Bytes::from(format!("f{i}")), Bytes::from("v"), T);
+        }
+        for i in 0..(T.max_entries + 47) {
+            hash.remove(format!("f{i}").as_bytes());
+        }
+        assert!(
+            !hash.is_listpack(),
+            "the churned hash must still be promoted"
+        );
+
+        let mut store = HashMapStore::new();
+        store.set(Bytes::from_static(b"h"), Value::Hash(hash));
+        let before_used = store.memory_used();
+
+        let result = store.re_encode(b"h").expect("the key is present");
+        assert_eq!(result.encoding, "listpack");
+        assert!(
+            result.after_bytes < result.before_bytes,
+            "re-encoding must shrink the value: {} -> {}",
+            result.before_bytes,
+            result.after_bytes
+        );
+        assert!(
+            store.memory_used() < before_used,
+            "the tracked counter must follow the compacted value down"
+        );
+        assert_eq!(
+            store.recompute_memory_used(),
+            store.memory_used(),
+            "re-encode must leave the tracked counter reconciled with ground truth"
+        );
+    }
+
+    #[test]
+    fn re_encode_reports_a_miss_for_an_absent_key() {
+        let mut store = HashMapStore::new();
+        assert_eq!(store.re_encode(b"absent"), None);
     }
 
     #[test]

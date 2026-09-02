@@ -241,6 +241,40 @@ impl Value {
         }
     }
 
+    /// Rebuild this value's representation from its own contents, choosing the
+    /// encoding afresh from the same thresholds a write would.
+    ///
+    /// This is a *compaction*, not a conversion: it reclaims the slack that
+    /// in-place churn leaves behind — a listpack buffer that grew and shrank,
+    /// and a hash or set that a burst promoted to a map and that has since
+    /// fallen back under the threshold without ever demoting (mutation only
+    /// ever promotes). The contents, and every observable answer about them,
+    /// are unchanged.
+    ///
+    /// Returns whether the value has an encoding choice to remake at all.
+    /// Everything but hashes and sets has a single representation, so there is
+    /// nothing to compact and the value is left untouched.
+    ///
+    /// O(entries) and never invoked on its own: this is the escape hatch behind
+    /// `DEBUG RE-ENCODE`, deliberately operator-driven so that nothing in the
+    /// server ever scans the keyspace looking for values to rewrite.
+    pub fn re_encode(&mut self) -> bool {
+        match self {
+            Value::Hash(hash) => {
+                *hash = HashValue::from_entries_with_expiries(
+                    hash.to_vec_with_expiries(),
+                    ListpackThresholds::DEFAULT_HASH,
+                );
+                true
+            }
+            Value::Set(set) => {
+                *set = SetValue::from_members(set.to_vec(), ListpackThresholds::DEFAULT_SET);
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// The reference count FrogDB reports for a live key.
     ///
     /// Values are never shared or interned between keys, so every existing key
@@ -1506,6 +1540,119 @@ mod tests {
                 let result = sv.increment_float(1.0);
                 prop_assert_eq!(result, Err(IncrementError::NotFloat));
             }
+        }
+    }
+
+    // ========================================================================
+    // Re-encode (DEBUG RE-ENCODE) tests
+    // ========================================================================
+
+    mod re_encode {
+        use super::*;
+
+        /// Grow a hash past the entry threshold so it promotes, then shrink it
+        /// back: mutation only ever promotes, so the map encoding survives.
+        fn churned_hash(keep: usize) -> HashValue {
+            const T: ListpackThresholds = ListpackThresholds::DEFAULT_HASH;
+            let total = T.max_entries + 50;
+            let mut h = HashValue::new();
+            for i in 0..total {
+                h.set(Bytes::from(format!("f{i}")), Bytes::from("v"), T);
+            }
+            assert!(!h.is_listpack(), "the grown hash must have promoted");
+            for i in 0..(total - keep) {
+                h.remove(format!("f{i}").as_bytes());
+            }
+            assert!(!h.is_listpack(), "shrinking must not demote on its own");
+            h
+        }
+
+        #[test]
+        fn re_encoding_a_churned_hash_packs_it_back_down() {
+            let mut value = Value::Hash(churned_hash(3));
+            let before = value.memory_size();
+
+            assert!(value.re_encode());
+
+            let Value::Hash(h) = &value else {
+                panic!("re-encoding must not change the type")
+            };
+            assert!(
+                h.is_listpack(),
+                "a 3-entry hash must re-encode to a listpack"
+            );
+            assert_eq!(h.len(), 3);
+            assert!(
+                value.memory_size() < before,
+                "re-encoding must reclaim the promoted representation"
+            );
+        }
+
+        #[test]
+        fn re_encoding_a_hash_preserves_its_entries_and_field_expiries() {
+            let mut h = churned_hash(3);
+            let deadline = Instant::now() + Duration::from_secs(60);
+            let kept: Vec<Bytes> = h.keys().collect();
+            h.set_field_expiry(&kept[0], deadline);
+
+            let mut value = Value::Hash(h);
+            value.re_encode();
+
+            let Value::Hash(h) = &value else {
+                panic!("re-encoding must not change the type")
+            };
+            assert_eq!(h.len(), 3);
+            for field in &kept {
+                assert_eq!(h.get(field), Some(Bytes::from("v")));
+            }
+            assert_eq!(h.get_field_expiry(&kept[0]), Some(deadline));
+            for field in &kept[1..] {
+                assert_eq!(h.get_field_expiry(field), None);
+            }
+        }
+
+        #[test]
+        fn re_encoding_a_churned_set_packs_it_back_down() {
+            const T: ListpackThresholds = ListpackThresholds::DEFAULT_SET;
+            let total = T.max_entries + 50;
+            let mut s = SetValue::new();
+            for i in 0..total {
+                s.add(Bytes::from(format!("m{i}")), T);
+            }
+            assert!(!s.is_listpack(), "the grown set must have promoted");
+            for i in 0..(total - 3) {
+                s.remove(format!("m{i}").as_bytes());
+            }
+
+            let mut value = Value::Set(s);
+            let before = value.memory_size();
+            assert!(value.re_encode());
+
+            let Value::Set(s) = &value else {
+                panic!("re-encoding must not change the type")
+            };
+            assert!(
+                s.is_listpack(),
+                "a 3-member set must re-encode to a listpack"
+            );
+            assert_eq!(s.len(), 3);
+            for i in (total - 3)..total {
+                assert!(s.contains(format!("m{i}").as_bytes()));
+            }
+            assert!(value.memory_size() < before);
+        }
+
+        #[test]
+        fn a_value_with_one_representation_has_nothing_to_re_encode() {
+            let mut value = Value::String(StringValue::new("v"));
+            assert!(
+                !value.re_encode(),
+                "a string has no encoding choice to remake"
+            );
+            let Value::String(s) = &value else {
+                panic!("re-encoding must not change the type")
+            };
+            assert_eq!(s.as_bytes(), &Bytes::from("v"));
         }
     }
 

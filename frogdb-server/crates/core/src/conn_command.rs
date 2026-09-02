@@ -603,6 +603,17 @@ pub trait DebugProvider: Send + Sync {
         key: Bytes,
     ) -> BoxFuture<'a, Result<Option<crate::shard::ObjectInfo>, Response>>;
 
+    /// DEBUG RE-ENCODE <key> — rebuild the key's value through its own
+    /// encoding on the shard that owns it (the executor resolved `shard_id`
+    /// from the key), compacting the slack in-place churn left behind. `Ok(None)`
+    /// means the key is absent or already expired; `Err` carries the
+    /// shard-unavailable/timeout reply already formed by the round-trip helper.
+    fn re_encode<'a>(
+        &'a self,
+        shard_id: usize,
+        key: Bytes,
+    ) -> BoxFuture<'a, Result<Option<crate::store::ReEncodeResult>, Response>>;
+
     /// DEBUG KEYSIZES-HIST-ASSERT — the keysize histograms merged across every
     /// shard. The executor resolves the requested type/bin and compares.
     fn keysizes_snapshot<'a>(&'a self) -> BoxFuture<'a, crate::KeysizeHistograms>;
@@ -1159,6 +1170,13 @@ mod tests {
             unimplemented!()
         }
         fn shard_arenas(&self) -> Vec<(usize, u32)> {
+            unimplemented!()
+        }
+        fn re_encode<'a>(
+            &'a self,
+            _shard_id: usize,
+            _key: Bytes,
+        ) -> BoxFuture<'a, Result<Option<crate::store::ReEncodeResult>, Response>> {
             unimplemented!()
         }
     }

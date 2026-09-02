@@ -923,6 +923,18 @@ pub enum DebugIntrospectionMsg {
         response_tx: oneshot::Sender<crate::store::BackdateExpiryResult>,
     },
 
+    /// Rebuild one key's value through its encoding (DEBUG RE-ENCODE),
+    /// compacting the slack in-place churn left behind. The one introspection
+    /// message that rewrites a value's representation; its contents, and every
+    /// observable answer about them, are unchanged.
+    ReEncode {
+        /// The key whose value is rebuilt.
+        key: Bytes,
+        /// Channel to report the encoding and the memory before/after; `None`
+        /// when the key is absent or already past its TTL.
+        response_tx: oneshot::Sender<Option<crate::store::ReEncodeResult>>,
+    },
+
     /// Gather one key's internals (DEBUG OBJECT): encoding, serialized payload
     /// length and LRU stamps, read from the shard that owns the key.
     ObjectInfo {
@@ -1261,6 +1273,7 @@ impl DebugIntrospectionMsg {
             DebugIntrospectionMsg::MemoryCheck { .. } => "MemoryCheck",
             DebugIntrospectionMsg::ExpiryIndexCheck { .. } => "ExpiryIndexCheck",
             DebugIntrospectionMsg::ExpireBackdate { .. } => "ExpireBackdate",
+            DebugIntrospectionMsg::ReEncode { .. } => "ReEncode",
             DebugIntrospectionMsg::ObjectInfo { .. } => "ObjectInfo",
         }
     }
