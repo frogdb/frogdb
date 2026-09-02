@@ -205,8 +205,8 @@ that manifest is what the tooling reads, so it is never restated here. Boundary 
   are the contract: behavior changes are **spec-first** (failure-mode row → failing test →
   fix). `just lint-spec` enforces spec↔test agreement (every `FM-<AREA>-NNN` row
   names its forcing tests; every tagged test matches a row) and runs in `just lint`.
-- Before pushing changes that touch a locked crate: `just mutants-diff <crate>` — the ratchet
-  for changes inside the perimeter (CI enforcement lands with hardening-2 issue 15). Full runs:
+- CI runs `just mutants-diff` for every locked crate a PR or a push to main touches and fails on
+  any missed mutant; run it locally to iterate faster. Full runs:
   `just mutants <crate>` + `just mutants-gate <crate>` (the gate comes from the spec header). A
   surviving mutant no test can kill is documented *at the code* with why it is unobservable —
   never a blanket skip.

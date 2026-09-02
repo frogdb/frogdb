@@ -1,5 +1,7 @@
 """Test workflow definition."""
 
+from textwrap import dedent
+
 from ruamel.yaml.scalarstring import SingleQuotedScalarString as SQ
 
 from workflow_gen.constants import (
@@ -13,13 +15,25 @@ from workflow_gen.helpers import (
     checkout_step,
     ensure_path,
     libclang_step,
+    locked_areas,
+    locked_crate_paths,
     mise_setup_step,
     omap,
     run_step,
     rust_toolchain_step,
     script,
 )
-from workflow_gen.schema import Job, PullRequestTrigger, PushTrigger, Step, Trigger, Workflow
+from workflow_gen.schema import (
+    Concurrency,
+    Job,
+    MatrixExpr,
+    PullRequestTrigger,
+    PushTrigger,
+    Step,
+    Strategy,
+    Trigger,
+    Workflow,
+)
 
 # Runner label — GitHub-hosted standard runners, which are free and unmetered on
 # public repositories. This previously routed trusted actors to a `self-hosted`
@@ -40,9 +54,185 @@ MISE_JUST_QUINT = "just npm:@informalsystems/quint"
 # frogdb-cluster's quint_conformance test binary (see that job's comment) —
 # it needs both cargo-nextest and the quint CLI quint-connect shells out to.
 MISE_JUST_NEXTEST_QUINT = "just cargo:cargo-nextest npm:@informalsystems/quint"
+# cargo-mutants shells out to the test tool named in .cargo/mutants.toml, which
+# is nextest — so the mutation job needs both binaries, not just cargo-mutants.
+# python/uv are for the `uv run --script` shebang on scripts/locked_areas.py,
+# which `just mutants-diff` calls to resolve the crate's perimeter and path.
+MISE_JUST_MUTANTS = "python uv just cargo:cargo-mutants cargo:cargo-nextest"
 MISE_PYTHON_WORKFLOW_GEN = "python uv just"
 MISE_PYTHON_LINT = "python uv ruff"
 MISE_HELM = "helm"
+
+
+def _touched_env(crate: str) -> str:
+    """The env var one crate's `paths-filter` verdict is bound to."""
+    return "LOCKED_" + crate.upper().replace("-", "_")
+
+
+def locked_crate_filters(crate_paths: dict[str, str]) -> str:
+    """One `paths-filter` entry per locked crate, generated from the manifest.
+
+    A `locked-<crate>` filter over the crate's own directory is what keeps the
+    mutation job's matrix honest: an unrelated hunk elsewhere in the workspace
+    spawns no leg, and a crate entering or leaving the perimeter rewrites this
+    block on the next `just workflow-gen`.
+    """
+    return "".join(f"locked-{crate}:\n  - '{path}/**'\n" for crate, path in crate_paths.items())
+
+
+def locked_crates_touched_step(crate_paths: dict[str, str]) -> Step:
+    """Reduce the `locked-<crate>` filter verdicts to the `mutants-diff` matrix.
+
+    Emits a JSON array of the locked crates this change touched (`[]` when it
+    touched none), generated from the same manifest list as the filters it
+    reads so the two cannot drift apart.
+    """
+    checks = [
+        f'if [ "${_touched_env(crate)}" = "true" ]; then crates+=({crate}); fi'
+        for crate in crate_paths
+    ]
+    return Step(
+        id="mutants-matrix",
+        name="Reduce locked-crate filters to a matrix",
+        env=omap(
+            **{
+                _touched_env(crate): f"${{{{ steps.filter.outputs['locked-{crate}'] }}}}"
+                for crate in crate_paths
+            }
+        ),
+        run=script(
+            "\n".join(
+                [
+                    "set -euo pipefail",
+                    "crates=()",
+                    *checks,
+                    # `${a[@]+"${a[@]}"}` keeps an empty array from tripping `set -u`;
+                    # jq then renders zero crates as `[]`, which the job's `if:` reads.
+                    "matrix=$(jq -cn '$ARGS.positional' --args ${crates[@]+\"${crates[@]}\"})",
+                    'echo "crates=$matrix" >> "$GITHUB_OUTPUT"',
+                    'echo "locked crates touched: $matrix"',
+                    "",
+                ]
+            )
+        ),
+    )
+
+
+def mutants_diff_job() -> Job:
+    """Mutate one locked crate's share of the diff; fail on a missed mutant.
+
+    The post-lock ratchet (`just mutants-diff`) used to run only when an agent
+    remembered to. One matrix leg per touched locked crate runs it here, so a
+    change inside the perimeter that adds a branch without a forcing test turns
+    the run red — on a PR before it merges, on a push to main after it lands.
+
+    The area's mutation gate is deliberately *not* applied to a diff: on a
+    denominator of a handful of mutants a ratio is arbitrary, and lenient
+    exactly when the diff is large. Zero missed is the criterion; the full-area
+    score is re-measured by its own scheduled run.
+    """
+    return Job(
+        name="Mutation Ratchet (locked crates)",
+        runs_on=RUNS_ON,
+        needs="changes",
+        if_="needs.changes.outputs.mutants_matrix != '[]'",
+        timeout_minutes=90,
+        strategy=Strategy(
+            matrix=MatrixExpr(
+                dimension="crate",
+                expression="${{ fromJSON(needs.changes.outputs.mutants_matrix) }}",
+            ),
+            fail_fast=False,
+        ),
+        # Per crate and per ref, so a rapid re-push cancels only the legs it
+        # supersedes and two crates' legs never queue behind one another.
+        concurrency=Concurrency(
+            group="mutants-diff-${{ github.ref }}-${{ matrix.crate }}",
+            cancel_in_progress=True,
+        ),
+        steps=[
+            # Full history: the PR base is a merge-base, and the push base is a
+            # commit a shallow clone would not contain.
+            checkout_step(fetch_depth="0"),
+            mise_setup_step(install_args=MISE_JUST_MUTANTS),
+            rust_toolchain_step(),
+            libclang_step(),
+            cargo_cache_step(shared_key="stable"),
+            Step(
+                id="base",
+                name="Resolve the diff base",
+                env=omap(
+                    EVENT_NAME="${{ github.event_name }}",
+                    BEFORE="${{ github.event.before }}",
+                ),
+                # `-e` matters here: an unresolvable base must fail the job, not
+                # write an empty `sha=` that the next step reads as its own
+                # first argument (`just mutants-diff <crate> --jobs 2`).
+                run=script("""\
+                    set -euo pipefail
+                    if [ "${EVENT_NAME}" = "pull_request" ]; then
+                      sha=$(git merge-base origin/main HEAD)
+                    else
+                      if [ -z "${BEFORE}" ] || [ "${BEFORE}" = "0000000000000000000000000000000000000000" ]; then
+                        echo "skip=true" >> "$GITHUB_OUTPUT"
+                        echo "This push created the branch (no before-SHA); nothing to diff against."
+                        exit 0
+                      fi
+                      if ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+                        echo "skip=true" >> "$GITHUB_OUTPUT"
+                        echo "before-SHA ${BEFORE} is unreachable (force push); nothing to diff against."
+                        exit 0
+                      fi
+                      sha="${BEFORE}"
+                    fi
+                    [ -n "${sha}" ] || { echo "mutants-diff: could not resolve a base commit"; exit 1; }
+                    echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+                    """),
+            ),
+            Step(
+                name="Mutate the diff",
+                if_="steps.base.outputs.skip != 'true'",
+                run="just mutants-diff ${{ matrix.crate }} ${{ steps.base.outputs.sha }} --jobs 2",
+            ),
+            Step(
+                name="Summarize the run",
+                # `steps.base.outcome`: without it a setup step failing leaves
+                # `skip` empty and this reports "no mutants" for a job that
+                # never mutated anything.
+                if_="always() && steps.base.outcome == 'success' && steps.base.outputs.skip != 'true'",
+                env=omap(CRATE="${{ matrix.crate }}"),
+                run=script("""\
+                    set -uo pipefail
+                    out="target/mutants/${CRATE}-diff/mutants.out"
+                    count() { if [ -f "${out}/$1.txt" ]; then grep -c '' "${out}/$1.txt"; else echo 0; fi; }
+                    caught=$(count caught)
+                    missed=$(count missed)
+                    unviable=$(count unviable)
+                    timeout=$(count timeout)
+                    total=$((caught + missed + unviable + timeout))
+                    {
+                      echo "### mutants-diff: ${CRATE}"
+                      echo
+                      if [ "${total}" -eq 0 ]; then
+                        echo "No mutants in this crate's share of the diff."
+                      else
+                        echo "${total} total, ${caught} caught, ${missed} missed, ${unviable} unviable, ${timeout} timeout"
+                        if [ "${missed}" -gt 0 ]; then
+                          echo
+                          echo "Missed mutants — each needs a forcing test or a documented-equivalent exclusion:"
+                          echo
+                          sed 's/^/- /' "${out}/missed.txt"
+                        fi
+                        if [ $((timeout * 100)) -gt $((total * 5)) ]; then
+                          echo
+                          echo "> Warning: ${timeout} of ${total} mutants timed out (over 5%) — the counts above understate the crate's exposure; raise \\`timeout_multiplier\\` in .cargo/mutants.toml."
+                        fi
+                      fi
+                    } >> "$GITHUB_STEP_SUMMARY"
+                    """),
+            ),
+        ],
+    )
 
 
 def test_workflow() -> Workflow:
@@ -54,6 +244,11 @@ def test_workflow() -> Workflow:
         ),
         env=omap(CARGO_TERM_COLOR="always"),
     )
+
+    # The locked-areas manifest, read once and passed down: `locked_areas()`
+    # re-reads and re-validates `specs/*.md` on every call.
+    specs = locked_areas()
+    crate_paths = locked_crate_paths(specs)
 
     w.job(
         "changes",
@@ -73,6 +268,7 @@ def test_workflow() -> Workflow:
                 specs="${{ steps.filter.outputs.specs }}",
                 quint="${{ steps.filter.outputs.quint }}",
                 testing="${{ steps.filter.outputs.testing }}",
+                mutants_matrix="${{ steps.mutants-matrix.outputs.crates }}",
             ),
             steps=[
                 checkout_step(),
@@ -87,7 +283,8 @@ def test_workflow() -> Workflow:
                         # push/pull_request compared against anyway, since this workflow
                         # only ever ran on that branch.
                         base="main",
-                        filters=script("""\
+                        filters=script(
+                            dedent("""\
                             rust:
                               - 'frogdb-server/**'
                               - 'frogctl/**'
@@ -130,9 +327,12 @@ def test_workflow() -> Workflow:
                               - 'scripts/quint-*.sh'
                             testing:
                               - 'testing/**'
-                        """),
+                            """)
+                            + locked_crate_filters(crate_paths)
+                        ),
                     ),
                 ),
+                locked_crates_touched_step(crate_paths),
             ],
         ),
     )
@@ -319,6 +519,8 @@ def test_workflow() -> Workflow:
             ],
         ),
     )
+
+    mutants_diff = w.job("mutants-diff", mutants_diff_job())
 
     # Coverage tracking lives entirely in the dedicated nightly workflow
     # (coverage_nightly.py -> coverage-nightly.yml, issue 59): a scheduled,
@@ -718,6 +920,7 @@ def test_workflow() -> Workflow:
                 quint,
                 unit_tests,
                 cmd_full_build,
+                mutants_diff,
                 shuttle_tests,
                 turmoil_tests,
                 operator_tests,
