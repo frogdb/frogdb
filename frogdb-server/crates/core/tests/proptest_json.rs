@@ -530,7 +530,16 @@ proptest! {
                 Op::Delete(key) => {
                     let path = format!("$.{key}");
                     let deleted = doc.delete(&path).unwrap();
-                    prop_assert_eq!(deleted, usize::from(entries.remove(&key).is_some()));
+                    let existed = entries.contains_key(&key);
+                    // Not `Map::remove`: with serde_json's `preserve_order`
+                    // feature unified on (it is, workspace-wide), that is a
+                    // swap-remove and moves the last key into the hole.
+                    // JSON.DEL leaves the surviving keys where they were.
+                    *entries = std::mem::take(entries)
+                        .into_iter()
+                        .filter(|(name, _)| name != &key)
+                        .collect();
+                    prop_assert_eq!(deleted, usize::from(existed));
                 }
                 Op::ArrAppend(key, value) => {
                     let path = format!("$.{key}");
