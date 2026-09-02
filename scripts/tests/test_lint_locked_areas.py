@@ -142,6 +142,20 @@ def test_the_real_manifest_loads_and_answers_lookups() -> None:
         raise AssertionError("frogdb-server is not a locked crate but the lookup succeeded")
 
 
+def test_member_paths_locate_every_locked_crate() -> None:
+    """The live tree: `just mutants-diff` needs a directory per locked crate."""
+    paths = locked_areas.member_paths()
+    assert set(paths) == locked_areas.workspace_members(), (
+        "member_paths and workspace_members disagree on the member set"
+    )
+    locked = [crate for spec in locked_areas.load() if spec.is_locked for crate in spec.crates]
+    assert locked, "no locked crates — the check below would be vacuous"
+    for crate in locked:
+        assert crate in paths, (crate, sorted(paths))
+        manifest = locked_areas.ROOT / paths[crate] / "Cargo.toml"
+        assert manifest.is_file(), (crate, paths[crate])
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for test in tests:
