@@ -37,6 +37,7 @@ mod info_handler;
 mod lifecycle;
 pub(crate) mod monitor_conn_command;
 pub(crate) mod observability_conn_command;
+pub mod output_buffer;
 pub(crate) mod pause_gate;
 pub(crate) mod permission_guard;
 pub(crate) mod persistence_conn_command;
