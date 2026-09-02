@@ -952,7 +952,9 @@ mod tests {
             stats.allocated_upper_bound()
         );
         assert!(
-            stats.active % page == 0 && stats.dirty % page == 0 && stats.muzzy % page == 0,
+            stats.active.is_multiple_of(page)
+                && stats.dirty.is_multiple_of(page)
+                && stats.muzzy.is_multiple_of(page),
             "the page-derived figures must be whole pages: {stats:?}"
         );
         assert!(
