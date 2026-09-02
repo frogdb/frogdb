@@ -60,7 +60,7 @@ jobs:
         MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
-        install_args: just npm:@informalsystems/quint
+        install_args: just node npm:@informalsystems/quint
         cache: 'true'
         experimental: 'true'
     - name: Set up JVM
@@ -86,7 +86,7 @@ jobs:
         MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
-        install_args: just npm:@informalsystems/quint
+        install_args: just node npm:@informalsystems/quint
         cache: 'true'
         experimental: 'true'
     - name: Set up JVM
@@ -112,7 +112,7 @@ jobs:
         MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
-        install_args: just npm:@informalsystems/quint
+        install_args: just node npm:@informalsystems/quint
         cache: 'true'
         experimental: 'true'
     - name: Set up JVM
@@ -138,7 +138,7 @@ jobs:
         MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
-        install_args: just npm:@informalsystems/quint
+        install_args: just node npm:@informalsystems/quint
         cache: 'true'
         experimental: 'true'
     - name: 'Steered sampled walk: every model declaring stepSteered'
