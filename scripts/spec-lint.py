@@ -245,6 +245,12 @@ NEXTEST_CRATES = [
     # per-core `NetworkOutput` budget); its test binary is tiny and compiles in
     # about a second.
     "frogdb-memory",
+    # frogdb-protocol, frogdb-types and frogdb-net carry the buffer-aliasing
+    # rows of specs/memory.md (the zero-copy parse path's escape points and
+    # the pool's refusal to park a shared buffer). All three are small.
+    "frogdb-protocol",
+    "frogdb-types",
+    "frogdb-net",
 ]
 
 # Feature-gated suites a row may also name, listed separately because their

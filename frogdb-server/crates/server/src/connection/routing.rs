@@ -21,12 +21,16 @@
 //!   handoff, which is the number any future work on placement (key-affine
 //!   routing, migrating a connection) has to beat.
 //!
-//! The hop protocol itself is unchanged by placement and needs no new
-//! machinery, because everything crossing the boundary is already owned:
-//! `CoreMsg::Execute` carries an `Arc<ParsedCommand>` whose arguments are
-//! `Bytes`, and the reply travels back by value over a `oneshot`. Nothing is
-//! borrowed from the connection's stack, so a command is as safe to execute on
-//! a foreign core as on its own.
+//! The hop protocol is shaped by the zero-copy parse path (issue 19): a
+//! parsed command's arguments are refcounted slices of the connection's
+//! pooled read buffer, not owned copies. That is free for the zero-hop case —
+//! the same thread that owns the buffer executes the command — but a foreign
+//! core must never hold a reference into another core's buffer pool, so
+//! `execute_on_shard_inner` detaches (bulk-copies) the command once per hop
+//! before it crosses. The reply still travels back by value over a `oneshot`.
+//! Retention past execution is handled the same way at each escape point:
+//! the keyspace install seam, blocking-park registration, MULTI queueing, and
+//! scatter partitioning all detach what they keep.
 //!
 //! Scatter-gather (`dispatch_scatter`) is the multi-hop form: an MGET/MSET/DEL
 //! touching *k* distinct shards costs *k* hops, not one, and the merge waits on
@@ -257,6 +261,11 @@ impl ConnectionHandler {
         let source_shard = shard_for_key(source, self.num_shards);
         let dest_shard = shard_for_key(dest, self.num_shards);
 
+        // Both keys cross to (potentially) foreign shards — detach them from
+        // the connection's pooled read buffer once, up front.
+        let source = frogdb_protocol::detach_bytes(source.clone());
+        let dest = frogdb_protocol::detach_bytes(dest.clone());
+
         // Phase 1: Read from source shard using ScatterOp::Copy
         let (tx1, rx1) = oneshot::channel();
         let copy_request = CoreMsg::ScatterRequest {
@@ -353,6 +362,17 @@ impl ConnectionHandler {
 
     /// Inner implementation of shard execution (channel send + response wait).
     async fn execute_on_shard_inner(&self, shard_id: usize, cmd: Arc<ParsedCommand>) -> Response {
+        // Cross-core hop boundary of the zero-copy parse path: args sent to a
+        // foreign shard are copied out of this connection's pooled read buffer
+        // (one bulk copy per hop) so no other core ever holds a reference
+        // into this core's buffer pool. The zero-hop (local) case sends the
+        // zero-copy args as-is.
+        let cmd = if shard_id == self.shard_id {
+            cmd
+        } else {
+            Arc::new(cmd.detached())
+        };
+
         let (response_tx, response_rx) = oneshot::channel();
 
         let msg = CoreMsg::Execute {

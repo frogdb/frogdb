@@ -79,7 +79,19 @@ impl ConnectionHandler {
         timeout: f64,
         proto_op: frogdb_protocol::BlockingOp,
     ) -> Response {
-        let op = convert_blocking_op(proto_op);
+        // Blocking-park boundary of the zero-copy parse path: the shard
+        // retains the keys (and any op-embedded bytes) for the whole park,
+        // which is unbounded — so they are copied out of the connection's
+        // pooled read buffer here, before registration. The buffer itself
+        // keeps serving the parked connection's socket watch and can be
+        // trimmed/recycled while the wait is parked.
+        let keys: Vec<Bytes> = keys
+            .into_iter()
+            .map(frogdb_protocol::detach_bytes)
+            .collect();
+        let mut op = convert_blocking_op(proto_op);
+        op.detach();
+        let op = op;
 
         // All keys are validated onto one shard by the command, so the wait
         // targets a single response channel.

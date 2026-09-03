@@ -13,7 +13,7 @@ mod response;
 mod unknown_command;
 mod version;
 
-pub use command::ParsedCommand;
+pub use command::{ParsedCommand, detach_bytes};
 pub use error::ProtocolError;
 pub use format::format_float;
 pub use limits::{MAX_INTERNAL_FRAME_LEN, PROTO_MAX_BULK_LEN, PROTO_MAX_MULTIBULK_LEN};

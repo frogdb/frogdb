@@ -218,11 +218,12 @@ fn client_setname(ctx: &mut ConnCtx<'_>, args: &[Bytes]) -> Response {
         return Response::error(msg);
     }
 
-    // Empty name clears the name
+    // Empty name clears the name. Retained by connection state and the
+    // (cross-thread) client registry — detach from the pooled read buffer.
     let name_opt = if name.is_empty() {
         None
     } else {
-        Some(name.clone())
+        Some(frogdb_protocol::detach_bytes(name.clone()))
     };
 
     let id = conn_id(ctx);

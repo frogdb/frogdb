@@ -705,7 +705,11 @@ impl ConnectionState {
 
     /// Push a validated command onto the transaction queue (no-op outside a
     /// transaction, matching the historical guard).
-    pub fn push_queued_command(&mut self, cmd: ParsedCommand) {
+    pub fn push_queued_command(&mut self, mut cmd: ParsedCommand) {
+        // Queued commands are retained until EXEC/DISCARD, which is unbounded
+        // — copy them out of the connection's pooled read buffer (zero-copy
+        // parse path escape point).
+        cmd.detach();
         self.transaction.push_queued_command(cmd);
     }
 
@@ -731,6 +735,9 @@ impl ConnectionState {
     /// Record a watched key with its watch-time version, shard, and liveness.
     /// First watch wins — see [`TransactionState::watch_key`].
     pub fn watch_key(&mut self, key: Bytes, shard_id: usize, version: u64, live_at_watch: bool) {
+        // Watches are retained until EXEC/UNWATCH — copy the key out of the
+        // pooled read buffer (zero-copy parse path escape point).
+        let key = frogdb_protocol::detach_bytes(key);
         self.transaction
             .watch_key(key, shard_id, version, live_at_watch);
     }
@@ -1010,7 +1017,13 @@ impl ConnectionState {
             let batch = if prefixes.is_empty() {
                 vec![Bytes::new()]
             } else {
+                // Prefixes are retained for the life of the tracking session
+                // and cross to the shards — copy them out of the pooled read
+                // buffer (zero-copy parse path escape point).
                 prefixes
+                    .into_iter()
+                    .map(frogdb_protocol::detach_bytes)
+                    .collect()
             };
             for p in &batch {
                 if !self.tracking.prefixes.contains(p) {

@@ -9,14 +9,20 @@ use frogdb_protocol::Response;
 use super::{PartitionResult, ScatterGatherStrategy};
 
 /// Helper to partition keys by shard.
+///
+/// The partitioned keys cross to other cores (lock requests) and are held in
+/// shard lock tables, so they are detached from the connection's pooled read
+/// buffer here — one copy per key, made once per command, reused across
+/// wound-retry attempts. `key_order` shares the detached allocations.
 fn partition_keys(keys: &[Bytes], num_shards: usize) -> PartitionResult {
     let mut shard_keys: BTreeMap<usize, Vec<Bytes>> = BTreeMap::new();
     let mut key_order: Vec<(usize, Bytes)> = Vec::new();
 
     for key in keys {
         let shard_id = shard_for_key(key, num_shards);
+        let key = frogdb_protocol::detach_bytes(key.clone());
         shard_keys.entry(shard_id).or_default().push(key.clone());
-        key_order.push((shard_id, key.clone()));
+        key_order.push((shard_id, key));
     }
 
     PartitionResult {
@@ -108,12 +114,16 @@ impl ScatterGatherStrategy for MSetStrategy {
 
         for (key, value) in &self.pairs {
             let shard_id = shard_for_key(key, num_shards);
+            // Keys and values cross to other cores and are held there (lock
+            // tables, pending writes) — detach from the pooled read buffer.
+            let key = frogdb_protocol::detach_bytes(key.clone());
+            let value = frogdb_protocol::detach_bytes(value.clone());
             shard_keys.entry(shard_id).or_default().push(key.clone());
             shard_pairs
                 .entry(shard_id)
                 .or_default()
-                .push((key.clone(), value.clone()));
-            key_order.push((shard_id, key.clone()));
+                .push((key.clone(), value));
+            key_order.push((shard_id, key));
         }
 
         // Build per-shard operations with the pairs for that shard
@@ -322,6 +332,48 @@ mod tests {
         for &shard_id in result.shard_keys.keys() {
             assert!(result.shard_operations.contains_key(&shard_id));
         }
+    }
+
+    /// The partition half of the hop-batching contract (issue 19): many keys
+    /// spanning K distinct shards produce exactly K participants — the
+    /// coordinator then sends one lock message per participant, so keys never
+    /// cost a message each. And because partitioned keys cross cores and sit
+    /// in lock tables, each is detached: dropping the partition must leave the
+    /// caller's buffer unshared again.
+    // FM-MEMORY-003
+    #[test]
+    fn partition_batches_keys_per_shard_and_detaches_them() {
+        let num_shards = 4;
+        // Slices of one shared buffer, as the zero-copy parse path produces.
+        let backing = Bytes::from(
+            (0..32)
+                .flat_map(|i| format!("key{i:02}--").into_bytes())
+                .collect::<Vec<u8>>(),
+        );
+        let keys: Vec<Bytes> = (0..32).map(|i| backing.slice(i * 7..i * 7 + 5)).collect();
+
+        let distinct: std::collections::BTreeSet<usize> =
+            keys.iter().map(|k| shard_for_key(k, num_shards)).collect();
+
+        let result = partition_keys(&keys, num_shards);
+
+        assert_eq!(
+            result.shard_keys.len(),
+            distinct.len(),
+            "one participant per distinct shard, not per key"
+        );
+        assert_eq!(
+            result.shard_keys.values().map(Vec::len).sum::<usize>(),
+            keys.len(),
+            "every key lands in exactly one shard's batch"
+        );
+
+        drop(keys);
+        drop(result);
+        assert!(
+            backing.is_unique(),
+            "partitioned keys must be detached copies, not aliases of the read buffer"
+        );
     }
 
     #[test]

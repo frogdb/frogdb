@@ -402,13 +402,19 @@ impl<'a> PubSubIo<'a> {
                 }
             }
 
+            // The name is retained for the life of the subscription (local
+            // tracking + shard registries) — copy it out of the pooled read
+            // buffer (zero-copy parse path escape point). The tracking entry,
+            // shard batch, and confirmation share the detached allocation.
+            let channel = frogdb_protocol::detach_bytes(channel.clone());
+
             // Add to local tracking; the confirmation count is the
             // per-connection count, so it is known before the shard replies.
             let count = self.state.add_subscription(spec.kind, channel.clone());
 
             debug!(
                 conn_id = self.state.id,
-                channel = %String::from_utf8_lossy(channel),
+                channel = %String::from_utf8_lossy(&channel),
                 kind = ?spec.kind,
                 "Subscribed"
             );
