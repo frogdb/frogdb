@@ -326,7 +326,7 @@ mod tests {
         let mut zset = SortedSetValue::new();
         zset.add(Bytes::from("m1"), 1.0);
         zset.add(Bytes::from("m2"), 2.0);
-        let zset_val = Value::SortedSet(zset);
+        let zset_val = Value::SortedSet(Box::new(zset));
         rocks
             .put(0, b"hot_zset", &serialize(&zset_val, &KeyMetadata::new(2)))
             .unwrap();

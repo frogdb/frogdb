@@ -78,7 +78,7 @@ fn bench_serialize_sorted_set(c: &mut Criterion) {
         for i in 0..zset_size {
             zset.add(Bytes::from(format!("member:{:08}", i)), i as f64);
         }
-        let value = Value::SortedSet(zset);
+        let value = Value::SortedSet(Box::new(zset));
         let metadata = KeyMetadata::new(value.memory_size());
 
         group.throughput(Throughput::Elements(zset_size as u64));
@@ -104,7 +104,7 @@ fn bench_deserialize_sorted_set(c: &mut Criterion) {
         for i in 0..zset_size {
             zset.add(Bytes::from(format!("member:{:08}", i)), i as f64);
         }
-        let value = Value::SortedSet(zset);
+        let value = Value::SortedSet(Box::new(zset));
         let metadata = KeyMetadata::new(value.memory_size());
         let serialized = serialize(&value, &metadata);
 

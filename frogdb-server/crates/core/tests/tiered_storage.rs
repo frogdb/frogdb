@@ -416,7 +416,7 @@ fn test_real_spill_recovers_across_reopen() {
     let mut zset = SortedSetValue::new();
     zset.add(Bytes::from("m1"), 1.5);
     zset.add(Bytes::from("m2"), 2.5);
-    store.set(Bytes::from("warm_zset"), Value::SortedSet(zset));
+    store.set(Bytes::from("warm_zset"), Value::SortedSet(Box::new(zset)));
     store.spill_key(b"warm_zset").unwrap();
 
     // (3) Dual presence: a real spilled warm copy AND a hot copy in the primary CF

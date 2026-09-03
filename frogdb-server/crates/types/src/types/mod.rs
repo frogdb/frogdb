@@ -33,8 +33,10 @@ use crate::vectorset::VectorSetValue;
 pub enum Value {
     /// String value.
     String(StringValue),
-    /// Sorted set value.
-    SortedSet(SortedSetValue),
+    /// Sorted set value. Boxed: the block-backed form is the largest variant
+    /// (280 bytes inline vs. 200 for the next largest) and `Value` is allocated
+    /// per key, so keeping it inline would tax every key in the store.
+    SortedSet(Box<SortedSetValue>),
     /// Hash value.
     Hash(HashValue),
     /// List value.
@@ -136,7 +138,7 @@ impl Value {
 
     /// Create a sorted set value.
     pub fn sorted_set() -> Self {
-        Value::SortedSet(SortedSetValue::new())
+        Value::SortedSet(Box::default())
     }
 
     /// Create a hash value.

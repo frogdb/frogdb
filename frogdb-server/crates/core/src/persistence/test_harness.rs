@@ -403,7 +403,7 @@ impl TestDataGenerator {
         for i in 0..count {
             zset.add(Bytes::from(format!("member_{:05}", i)), i as f64);
         }
-        Value::SortedSet(zset)
+        Value::SortedSet(Box::new(zset))
     }
 
     /// Generate a hash with N fields.

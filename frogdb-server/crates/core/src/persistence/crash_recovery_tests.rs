@@ -771,7 +771,7 @@ mod recovery_correctness {
         zset.add(Bytes::from("charlie"), 75.0);
         zset.add(Bytes::from("diana"), 25.0);
 
-        harness.put_direct(0, b"myzset", &Value::SortedSet(zset));
+        harness.put_direct(0, b"myzset", &Value::SortedSet(Box::new(zset)));
         harness.flush();
         harness.crash();
 
@@ -1587,7 +1587,7 @@ mod edge_cases {
         zset.add(Bytes::from("tiny"), f64::MIN_POSITIVE);
         zset.add(Bytes::from("huge"), f64::MAX);
 
-        harness.put_direct(0, b"special_zset", &Value::SortedSet(zset));
+        harness.put_direct(0, b"special_zset", &Value::SortedSet(Box::new(zset)));
         harness.flush();
         harness.crash();
 

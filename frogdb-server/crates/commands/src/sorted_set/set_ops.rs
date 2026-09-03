@@ -299,7 +299,7 @@ impl Command for ZunionstoreCommand {
         let count = new_zset.len();
 
         if count > 0 {
-            ctx.store.set(dest, Value::SortedSet(new_zset));
+            ctx.store.set(dest, Value::SortedSet(Box::new(new_zset)));
         } else {
             ctx.store.delete(&dest);
         }
@@ -536,7 +536,7 @@ impl Command for ZinterstoreCommand {
         let count = new_zset.len();
 
         if count > 0 {
-            ctx.store.set(dest, Value::SortedSet(new_zset));
+            ctx.store.set(dest, Value::SortedSet(Box::new(new_zset)));
         } else {
             ctx.store.delete(&dest);
         }
@@ -848,7 +848,7 @@ impl Command for ZdiffstoreCommand {
         let count = new_zset.len();
 
         if count > 0 {
-            ctx.store.set(dest, Value::SortedSet(new_zset));
+            ctx.store.set(dest, Value::SortedSet(Box::new(new_zset)));
         } else {
             ctx.store.delete(&dest);
         }

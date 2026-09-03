@@ -191,7 +191,7 @@ fn decode_string_int_value(payload: &[u8]) -> Result<Value, SerializationError> 
 }
 
 fn decode_sorted_set_value(payload: &[u8]) -> Result<Value, SerializationError> {
-    Ok(Value::SortedSet(deserialize_sorted_set(payload)?))
+    Ok(Value::SortedSet(Box::new(deserialize_sorted_set(payload)?)))
 }
 
 fn decode_hash_value(payload: &[u8]) -> Result<Value, SerializationError> {
@@ -424,7 +424,7 @@ mod tests {
                 let mut z = SortedSetValue::new();
                 z.add(Bytes::from_static(b"one"), 1.0);
                 z.add(Bytes::from_static(b"two"), 2.0);
-                vec![Value::SortedSet(z)]
+                vec![Value::SortedSet(Box::new(z))]
             }
             TypeMarker::Hash => {
                 let mut h = HashValue::new();

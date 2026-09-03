@@ -954,18 +954,6 @@
           "description": "Timeout for scatter-gather operations in milliseconds.",
           "config_param": "scatter-gather-timeout-ms",
           "mutable": true
-        },
-        {
-          "name": "sorted-set-index",
-          "type": "string",
-          "default": "skiplist",
-          "description": "Sorted set index backend selection.",
-          "enum_values": [
-            "btreemap",
-            "skiplist"
-          ],
-          "config_param": "sorted-set-index",
-          "mutable": false
         }
       ]
     },

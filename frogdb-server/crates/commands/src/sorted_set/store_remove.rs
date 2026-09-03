@@ -136,7 +136,7 @@ impl Command for ZrangestoreCommand {
         let count = new_zset.len();
 
         if count > 0 {
-            ctx.store.set(dest, Value::SortedSet(new_zset));
+            ctx.store.set(dest, Value::SortedSet(Box::new(new_zset)));
         } else {
             ctx.store.delete(&dest);
         }

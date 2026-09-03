@@ -981,7 +981,8 @@ mod tests {
         zset.add(Bytes::from("3"), 30.0);
         zset.add(Bytes::from("1"), 10.0);
         zset.add(Bytes::from("2"), 20.0);
-        ctx.store.set(Bytes::from("myzset"), Value::SortedSet(zset));
+        ctx.store
+            .set(Bytes::from("myzset"), Value::SortedSet(Box::new(zset)));
 
         // SORT should sort by element value, not by score
         let cmd = SortCommand;

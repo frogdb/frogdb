@@ -179,8 +179,7 @@ impl SortedSetValue {
 
     #[inline]
     fn member_at(&self, slot: u32) -> &[u8] {
-        let entry = self.entries[slot as usize].as_ref().expect("live slot");
-        self.store.get(entry.handle)
+        resolver(&self.store, &self.entries)(slot)
     }
 
     #[inline]
@@ -229,8 +228,8 @@ impl SortedSetValue {
 
     /// Drop a member's table row, index entry, and block bytes. The caller
     /// has already removed the slot from the skip list.
-    fn release_member(&mut self, slot: u32, member: &[u8]) {
-        let hash = self.hasher.hash_one(member);
+    fn release_member(&mut self, slot: u32) {
+        let hash = self.hasher.hash_one(self.member_at(slot));
         match self.index.find_entry(hash, |&s| s == slot) {
             Ok(occupied) => {
                 occupied.remove();
@@ -260,13 +259,34 @@ impl SortedSetValue {
                 ..
             } = &mut *self;
             let resolve = resolver(store, entries);
-            list.remove(OrderedFloat(old_score), member, &resolve);
-            list.insert(OrderedFloat(new_score), slot, member, &resolve);
+            let removed = list.remove(OrderedFloat(old_score), member, &resolve);
+            debug_assert!(removed, "reinserted member was in the skip list");
+            let inserted = list.insert(OrderedFloat(new_score), slot, &resolve);
+            debug_assert!(inserted, "reinserted member is unique");
         }
         self.entries[slot as usize]
             .as_mut()
             .expect("live slot")
             .score = new_score;
+    }
+
+    /// Remove a member by slot without materializing its bytes: skip list
+    /// first (slots and handles stay valid), then the table row, index
+    /// entry, and block bytes.
+    fn remove_slot(&mut self, slot: u32) {
+        let score = self.score_at(slot);
+        {
+            let Self {
+                store,
+                entries,
+                list,
+                ..
+            } = &mut *self;
+            let resolve = resolver(store, entries);
+            let removed = list.remove(OrderedFloat(score), resolve(slot), &resolve);
+            debug_assert!(removed, "live slot was in the skip list");
+        }
+        self.release_member(slot);
     }
 
     /// Add or update a member with a score.
@@ -300,7 +320,8 @@ impl SortedSetValue {
                 list,
                 ..
             } = self;
-            list.insert(OrderedFloat(score), slot, &member, resolver(store, entries));
+            let inserted = list.insert(OrderedFloat(score), slot, resolver(store, entries));
+            debug_assert!(inserted, "freshly allocated member is unique");
             ZAddResult {
                 added: true,
                 changed: false,
@@ -315,14 +336,7 @@ impl SortedSetValue {
     pub fn remove(&mut self, member: &[u8]) -> Option<f64> {
         let slot = self.find_slot(member)?;
         let score = self.score_at(slot);
-        let Self {
-            store,
-            entries,
-            list,
-            ..
-        } = self;
-        list.remove(OrderedFloat(score), member, resolver(store, entries));
-        self.release_member(slot, member);
+        self.remove_slot(slot);
         Some(score)
     }
 
@@ -380,12 +394,8 @@ impl SortedSetValue {
                     list,
                     ..
                 } = self;
-                list.insert(
-                    OrderedFloat(new_score),
-                    slot,
-                    &member,
-                    resolver(store, entries),
-                );
+                let inserted = list.insert(OrderedFloat(new_score), slot, resolver(store, entries));
+                debug_assert!(inserted, "freshly allocated member is unique");
             }
         }
 
@@ -579,7 +589,7 @@ impl SortedSetValue {
                 break;
             };
             let member = self.bytes_at(slot);
-            self.release_member(slot, &member);
+            self.release_member(slot);
             result.push((member, score.0));
         }
         result
@@ -602,7 +612,7 @@ impl SortedSetValue {
                 break;
             };
             let member = self.bytes_at(slot);
-            self.release_member(slot, &member);
+            self.release_member(slot);
             result.push((member, score.0));
         }
         result
@@ -612,19 +622,20 @@ impl SortedSetValue {
     ///
     /// Returns the number of members removed.
     pub fn remove_range_by_rank(&mut self, start: i64, end: i64) -> usize {
-        let to_remove: Vec<Bytes> = {
-            let Some((start, count)) = self.clamp_rank_range(start, end) else {
-                return 0;
-            };
-            self.list
-                .range_by_rank_iter(start)
-                .take(count)
-                .map(|(_, slot)| self.bytes_at(slot))
-                .collect()
+        let Some((start, count)) = self.clamp_rank_range(start, end) else {
+            return 0;
         };
+        // Slots stay valid across removals (compaction patches handles, not
+        // slots), so collect slots instead of copying member bytes out.
+        let to_remove: Vec<u32> = self
+            .list
+            .range_by_rank_iter(start)
+            .take(count)
+            .map(|(_, slot)| slot)
+            .collect();
         let count = to_remove.len();
-        for member in to_remove {
-            self.remove(&member);
+        for slot in to_remove {
+            self.remove_slot(slot);
         }
         count
     }
@@ -633,13 +644,13 @@ impl SortedSetValue {
     ///
     /// Returns the number of members removed.
     pub fn remove_range_by_score(&mut self, min: &ScoreBound, max: &ScoreBound) -> usize {
-        let to_remove: Vec<Bytes> = self
+        let to_remove: Vec<u32> = self
             .score_range_iter(min, max)
-            .map(|(_, slot)| self.bytes_at(slot))
+            .map(|(_, slot)| slot)
             .collect();
         let count = to_remove.len();
-        for member in to_remove {
-            self.remove(&member);
+        for slot in to_remove {
+            self.remove_slot(slot);
         }
         count
     }
@@ -648,18 +659,18 @@ impl SortedSetValue {
     ///
     /// Returns the number of members removed.
     pub fn remove_range_by_lex(&mut self, min: &LexBound, max: &LexBound) -> usize {
-        let to_remove: Vec<Bytes> = self
+        let to_remove: Vec<u32> = self
             .list
             .iter()
             .filter(|&(_, slot)| {
                 let member = self.member_at(slot);
                 min.satisfies_min(member) && max.satisfies_max(member)
             })
-            .map(|(_, slot)| self.bytes_at(slot))
+            .map(|(_, slot)| slot)
             .collect();
         let count = to_remove.len();
-        for member in to_remove {
-            self.remove(&member);
+        for slot in to_remove {
+            self.remove_slot(slot);
         }
         count
     }
@@ -810,9 +821,18 @@ mod block_form_tests {
     #[test]
     fn churn_bounds_memory_and_preserves_contents() {
         let mut z = SortedSetValue::new();
-        // Working set of 64 members with growing byte lengths per round so
-        // every update churns block bytes (member re-added under a moved
-        // score keeps its bytes; removal + reinsert churns them).
+        // Interleave 64 persistent members with churned ones so live bytes
+        // sit between dead bytes and compaction has to move them (patching
+        // the handles in the entry table).
+        for i in 0..64u32 {
+            z.add(
+                Bytes::from(format!("keep-{i:02}-{}", "k".repeat(80))),
+                1000.0 + i as f64,
+            );
+            let member = Bytes::from(format!("member-{i}-{}", "x".repeat(150)));
+            z.add(member.clone(), i as f64);
+            z.remove(&member);
+        }
         for round in 0..50usize {
             for i in 0..64u32 {
                 let member = Bytes::from(format!("member-{i}-{}", "x".repeat(round * 7 % 200)));
@@ -820,24 +840,29 @@ mod block_form_tests {
                 z.remove(&member);
             }
         }
-        assert!(z.is_empty());
-        // All bytes were released and blocks recycled: an empty set reports
-        // a small footprint, not the churn peak.
+        assert_eq!(z.len(), 64);
+        // ~450KB of churned member bytes were appended and released around a
+        // ~6KB live set. A sticky footprint this small is only possible if
+        // compaction reclaimed the dead bytes (copying live members forward),
+        // not just tail-block recycling.
         assert!(
             z.memory_size() < 64 * 1024,
-            "memory_size {} after full churn",
+            "memory_size {} after churn",
             z.memory_size()
         );
-
-        // Refill and verify contents are exact.
-        for i in 0..64u32 {
-            z.add(Bytes::from(format!("m{i:02}")), i as f64);
-        }
+        assert!(
+            z.store.allocated_bytes() < 32 * 1024,
+            "allocated {} bytes for a ~6KB live set",
+            z.store.allocated_bytes()
+        );
+        // The persistent members survived every compaction with their exact
+        // bytes and scores.
         let got = z.to_vec();
         assert_eq!(got.len(), 64);
         for (i, (member, score)) in got.iter().enumerate() {
-            assert_eq!(member.as_ref(), format!("m{i:02}").as_bytes());
-            assert_eq!(*score, i as f64);
+            let want = format!("keep-{i:02}-{}", "k".repeat(80));
+            assert_eq!(member.as_ref(), want.as_bytes());
+            assert_eq!(*score, 1000.0 + i as f64);
         }
     }
 
@@ -998,11 +1023,12 @@ mod block_form_tests {
                                 prop_assert_eq!(z.rank(&name), Some(expect_rank));
                             }
                             None => {
+                                // Names embed the id, so an absent id cannot
+                                // collide with any live member's name.
                                 let name = member_name(m, 0);
-                                if !by_member.values().any(|&(_, p)| p == 0) {
-                                    prop_assert_eq!(z.get_score(&name), None);
-                                    prop_assert_eq!(z.rank(&name), None);
-                                }
+                                prop_assert_eq!(z.get_score(&name), None);
+                                prop_assert_eq!(z.rank(&name), None);
+                                prop_assert!(!z.contains(&name));
                             }
                         }
                     }

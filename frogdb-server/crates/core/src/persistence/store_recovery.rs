@@ -254,7 +254,7 @@ mod unit_tests {
         zset.add(Bytes::from("member1"), 1.0);
         zset.add(Bytes::from("member2"), 2.0);
 
-        let value = Value::SortedSet(zset);
+        let value = Value::SortedSet(Box::new(zset));
         let metadata = KeyMetadata::new(100);
         rocks
             .put(0, b"myzset", &serialize(&value, &metadata))

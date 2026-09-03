@@ -161,16 +161,17 @@ impl SkipList {
         self.nodes[idx as usize].as_mut().unwrap()
     }
 
-    /// Insert a (score, member) pair identified by `slot`, whose bytes are
-    /// `member`. Returns false if the exact pair already exists.
+    /// Insert a (score, member) pair identified by `slot`; the member bytes
+    /// come from `resolve(slot)`, so the slot must already be live in the
+    /// caller's table. Returns false if the exact pair already exists.
     #[allow(clippy::needless_range_loop)]
     pub fn insert<'m>(
         &mut self,
         score: OrderedFloat<f64>,
         slot: u32,
-        member: &[u8],
         resolve: impl Fn(u32) -> &'m [u8],
     ) -> bool {
+        let member = resolve(slot);
         // update[i] = last node at level i before the insertion point
         // rank[i]   = cumulative rank at that node
         let mut update = [0u32; MAX_LEVEL];
@@ -610,7 +611,7 @@ mod tests {
 
     fn insert(sl: &mut SkipList, m: &mut Members, score: f64, s: &str) -> bool {
         let slot = m.slot(s);
-        sl.insert(OrderedFloat(score), slot, s.as_bytes(), m.resolve())
+        sl.insert(OrderedFloat(score), slot, m.resolve())
     }
 
     fn remove(sl: &mut SkipList, m: &Members, score: f64, s: &str) -> bool {

@@ -85,7 +85,7 @@ proptest! {
             zset.add(Bytes::from(member), score);
         }
 
-        let val = Value::SortedSet(zset);
+        let val = Value::SortedSet(Box::new(zset));
         let metadata = KeyMetadata::new(val.memory_size());
         let serialized = serialize(&val, &metadata);
         let result: Result<(Value, KeyMetadata), SerializationError> = deserialize(&serialized);
@@ -253,7 +253,7 @@ proptest! {
             }
         }
 
-        let val = Value::SortedSet(zset);
+        let val = Value::SortedSet(Box::new(zset));
         let metadata = KeyMetadata::new(val.memory_size());
         let serialized = serialize(&val, &metadata);
 
@@ -311,7 +311,7 @@ mod edge_case_tests {
 
     #[test]
     fn test_empty_sorted_set() {
-        let val = Value::SortedSet(SortedSetValue::new());
+        let val = Value::SortedSet(Box::new(SortedSetValue::new()));
         let metadata = KeyMetadata::new(0);
         let serialized = serialize(&val, &metadata);
         let (deserialized, _): (Value, KeyMetadata) = deserialize(&serialized).unwrap();
@@ -362,7 +362,7 @@ mod edge_case_tests {
         zset.add(Bytes::from("zero"), 0.0);
         zset.add(Bytes::from("neg_zero"), -0.0);
 
-        let val = Value::SortedSet(zset);
+        let val = Value::SortedSet(Box::new(zset));
         let metadata = KeyMetadata::new(val.memory_size());
         let serialized = serialize(&val, &metadata);
         let (deserialized, _): (Value, KeyMetadata) = deserialize(&serialized).unwrap();

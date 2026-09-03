@@ -495,7 +495,8 @@ impl Command for GeosearchstoreCommand {
         }
 
         let count = results.len();
-        ctx.store.set(destkey.clone(), Value::SortedSet(dest_zset));
+        ctx.store
+            .set(destkey.clone(), Value::SortedSet(Box::new(dest_zset)));
         // Members were stored: `geosearchstore` on the destination only — the
         // read-only source zset stays silent.
         ctx.notify_event(destkey.clone(), "geosearchstore", KeyspaceEventFlags::ZSET);
@@ -607,7 +608,8 @@ impl Command for GeoradiusCommand {
                 dest_zset.add(result.member.clone(), score);
             }
             let count = dest_zset.len();
-            ctx.store.set(dest.clone(), Value::SortedSet(dest_zset));
+            ctx.store
+                .set(dest.clone(), Value::SortedSet(Box::new(dest_zset)));
             // Members stored: `georadiusstore` on the destination only (geo.c
             // emits "georadiusstore" for the GEORADIUS variants, NOTIFY_ZSET).
             ctx.notify_event(dest, "georadiusstore", KeyspaceEventFlags::ZSET);
@@ -782,7 +784,8 @@ impl Command for GeoradiusbymemberCommand {
                 dest_zset.add(result.member.clone(), score);
             }
             let count = dest_zset.len();
-            ctx.store.set(dest.clone(), Value::SortedSet(dest_zset));
+            ctx.store
+                .set(dest.clone(), Value::SortedSet(Box::new(dest_zset)));
             // Members stored: `georadiusstore` on the destination only (geo.c
             // emits "georadiusstore" for the GEORADIUS variants, NOTIFY_ZSET).
             ctx.notify_event(dest, "georadiusstore", KeyspaceEventFlags::ZSET);

@@ -294,7 +294,7 @@ mod unit_tests {
             {
                 let mut z = SortedSetValue::new();
                 z.add(Bytes::from_static(b"m"), 1.5);
-                Value::SortedSet(z)
+                Value::SortedSet(Box::new(z))
             },
             {
                 let mut h = HashValue::new();
@@ -400,7 +400,7 @@ mod unit_tests {
         let mut z = SortedSetValue::new();
         z.add(Bytes::from_static(b"one"), 1.0);
         z.add(Bytes::from_static(b"two"), 2.0);
-        let value = Value::SortedSet(z);
+        let value = Value::SortedSet(Box::new(z));
         let (back, _) = deserialize(&serialize(&value, &KeyMetadata::new(0))).unwrap();
         let z2 = back.as_sorted_set().unwrap();
         assert_eq!(z2.len(), 2);
@@ -502,7 +502,7 @@ mod unit_tests {
         zset.add(Bytes::from("two"), 2.0);
         zset.add(Bytes::from("three"), 3.0);
 
-        let value = Value::SortedSet(zset);
+        let value = Value::SortedSet(Box::new(zset));
         let metadata = KeyMetadata::new(100);
 
         let data = serialize(&value, &metadata);
@@ -534,7 +534,7 @@ mod unit_tests {
     #[test]
     fn test_serialize_deserialize_empty_sorted_set() {
         let zset = SortedSetValue::new();
-        let value = Value::SortedSet(zset);
+        let value = Value::SortedSet(Box::new(zset));
         let metadata = KeyMetadata::new(0);
 
         let data = serialize(&value, &metadata);
@@ -741,7 +741,7 @@ mod unit_tests {
                 for i in 0..64 {
                     z.add(Bytes::from(format!("member-{i}")), i as f64);
                 }
-                Value::SortedSet(z)
+                Value::SortedSet(Box::new(z))
             },
         ];
         for value in values {

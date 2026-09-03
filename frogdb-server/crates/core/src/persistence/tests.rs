@@ -40,7 +40,7 @@ mod integration {
         zset.add(Bytes::from("bob"), 50.5);
         zset.add(Bytes::from("charlie"), 75.25);
 
-        let zset_value = Value::SortedSet(zset);
+        let zset_value = Value::SortedSet(Box::new(zset));
 
         // Write to different shards
         for (i, (key, value)) in test_data.iter().enumerate() {
@@ -219,7 +219,7 @@ mod integration {
             zset.add(Bytes::from(member), i as f64);
         }
 
-        let value = Value::SortedSet(zset);
+        let value = Value::SortedSet(Box::new(zset));
         let metadata = KeyMetadata::new(value.memory_size());
 
         rocks
@@ -277,7 +277,7 @@ mod integration {
         zset.add(Bytes::from("small"), 1e-300);
         zset.add(Bytes::from("large"), 1e300);
 
-        let value = Value::SortedSet(zset);
+        let value = Value::SortedSet(Box::new(zset));
         let metadata = KeyMetadata::new(value.memory_size());
 
         rocks
@@ -613,7 +613,7 @@ mod integration {
             // Sorted set
             let mut zset = SortedSetValue::new();
             zset.add(Bytes::from("alice"), 100.0);
-            let zset_value = Value::SortedSet(zset);
+            let zset_value = Value::SortedSet(Box::new(zset));
             rocks
                 .put(
                     0,
