@@ -377,9 +377,6 @@ pub struct StaticConfig {
     pub tls_protocol_list: Vec<TlsProtocol>,
 
     // --- 13-01 Pass 2a: immutable (CONFIG GET-only) startup-fixed params ---
-    /// Sorted-set index backend, rendered in the file's own encoding
-    /// ("skiplist"/"btreemap") for both CONFIG GET and REWRITE.
-    pub sorted_set_index: String,
     /// RocksDB write buffer size in MB (applied at DB open).
     pub write_buffer_size_mb: usize,
     /// RocksDB column-family compression ("none"/"snappy"/"lz4"/"zstd").
@@ -520,10 +517,6 @@ impl StaticConfig {
                 .join(" "),
             tls_protocol_list: config.tls.protocols.clone(),
             // --- 13-01 Pass 2a: immutable startup-fixed params ---
-            sorted_set_index: match config.server.sorted_set_index {
-                crate::config::server::SortedSetIndexConfig::Skiplist => "skiplist".to_string(),
-                crate::config::server::SortedSetIndexConfig::Btreemap => "btreemap".to_string(),
-            },
             write_buffer_size_mb: config.persistence.write_buffer_size_mb,
             compression: config.persistence.compression.clone(),
             block_cache_size_mb: config.persistence.block_cache_size_mb,
@@ -1507,11 +1500,6 @@ impl ConfigManager {
             },
 
             // === 13-01 Pass 2a: promote-immutable params (CONFIG GET-only) ===
-            SortedSetIndex => ParamMeta {
-                name: id.name(),
-                getter: |mgr| mgr.static_config.sorted_set_index.clone(),
-                toml_getter: |mgr| mgr.static_config.sorted_set_index.to_toml_value(),
-            },
             EnableDebugCommand => ParamMeta {
                 name: id.name(),
                 getter: |mgr| yes_no(mgr.static_config.enable_debug_command),
@@ -3900,7 +3888,6 @@ mod tests {
             ("cluster-enabled", "no"),                // cluster
             ("cluster-data-dir", "./frogdb-cluster"), // cluster
             ("tracing-enabled", "no"),                // tracing
-            ("sorted-set-index", "skiplist"),         // server
             ("enable-debug-command", "no"),           // server
             ("tls-enabled", "no"),                    // tls
             ("latency-bands", "1 5 10 50 100 500"),   // latency-bands

@@ -377,8 +377,8 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
         // stable. (26 rows were classified promote-immutable in Pass 1; 4 metrics
         // OTLP/bind rows were downgraded to justify as dead config — the OTLP
         // recorder is never wired and the metrics listener is superseded by the
-        // `http` section — leaving 22 exposed here.)
-        rows.push(pick(ServerConfig::PARAMS, "sorted-set-index"));
+        // `http` section — leaving 22 exposed here, later reduced to 21 when
+        // sorted-set-index was retired with the BTree zset backend.)
         rows.push(pick(ServerConfig::PARAMS, "enable-debug-command"));
         rows.push(pick(PersistenceConfig::PARAMS, "write-buffer-size-mb"));
         rows.push(pick(PersistenceConfig::PARAMS, "compression"));
@@ -1010,16 +1010,10 @@ mod tests {
             mutable: false,
             noop: false,
         },
-        // --- 13-01 Pass 2a: 22 promote-immutable rows (all CONFIG GET-only,
+        // --- 13-01 Pass 2a: promote-immutable rows (all CONFIG GET-only,
         // mutable: false), appended after the original 61 so their relative order
-        // is stable and the first 61 rows above are byte-for-byte unchanged. ---
-        ConfigParamInfo {
-            name: "sorted-set-index",
-            section: Some("server"),
-            field: Some("sorted-set-index"),
-            mutable: false,
-            noop: false,
-        },
+        // is stable and the first 61 rows above are byte-for-byte unchanged.
+        // (sorted-set-index was retired with the BTree zset backend.) ---
         ConfigParamInfo {
             name: "enable-debug-command",
             section: Some("server"),

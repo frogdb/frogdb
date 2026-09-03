@@ -16,7 +16,7 @@ use crate::utils::{parse_f64, parse_usize, scored_array, scored_array_resp3};
 /// Regular set members are treated as having score 0.
 fn iter_zset_or_set(value: &frogdb_core::Value) -> Result<Vec<(Bytes, f64)>, CommandError> {
     if let Some(zset) = value.as_sorted_set() {
-        Ok(zset.iter().map(|(m, s)| (m.clone(), s)).collect())
+        Ok(zset.iter().collect())
     } else if let Some(set) = value.as_set() {
         Ok(set.members().map(|m| (m.clone(), 1.0)).collect())
     } else {

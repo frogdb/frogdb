@@ -131,7 +131,7 @@ fn extract_elements(
     match &*value {
         Value::List(list) => Ok(Some(list.to_vec())),
         Value::Set(set) => Ok(Some(set.members().collect())),
-        Value::SortedSet(zset) => Ok(Some(zset.iter().map(|(m, _)| m.clone()).collect())),
+        Value::SortedSet(zset) => Ok(Some(zset.iter().map(|(m, _)| m).collect())),
         _ => Err(CommandError::WrongType),
     }
 }

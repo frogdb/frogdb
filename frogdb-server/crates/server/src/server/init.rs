@@ -110,17 +110,6 @@ pub(super) async fn init_infrastructure(
     listeners: ServerListeners,
     log_reload_handle: Option<crate::runtime_config::LogReloadHandle>,
 ) -> Result<InitResult> {
-    // Configure sorted set index backend before any data structures are created
-    let score_index_backend = match config.server.sorted_set_index {
-        crate::config::server::SortedSetIndexConfig::Btreemap => {
-            frogdb_core::ScoreIndexBackend::BTree
-        }
-        crate::config::server::SortedSetIndexConfig::Skiplist => {
-            frogdb_core::ScoreIndexBackend::SkipList
-        }
-    };
-    frogdb_core::set_default_score_index(score_index_backend);
-
     // Initialize metrics
     let health_checker = HealthChecker::new();
 

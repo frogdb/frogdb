@@ -4,14 +4,6 @@ use frogdb_config_derive::ConfigParams;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Sorted set index backend selection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum SortedSetIndexConfig {
-    Btreemap,
-    Skiplist,
-}
-
 /// Server-specific configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ConfigParams)]
 #[params(section = "server")]
@@ -62,13 +54,6 @@ pub struct ServerConfig {
     #[serde(default = "default_scatter_gather_timeout_ms")]
     #[param(mutable)]
     pub scatter_gather_timeout_ms: u64,
-
-    /// Sorted set index backend: "skiplist" (default) or "btreemap".
-    /// SkipList provides O(log n) rank queries; BTreeMap provides lower memory usage.
-    /// Requires server restart to change.
-    #[serde(default = "default_sorted_set_index")]
-    #[param]
-    pub sorted_set_index: SortedSetIndexConfig,
 
     /// Maximum number of simultaneous client connections (0 = unlimited).
     /// Admin port connections are exempt from this limit.
@@ -149,10 +134,6 @@ fn default_scatter_gather_timeout_ms() -> u64 {
     DEFAULT_SCATTER_GATHER_TIMEOUT_MS
 }
 
-fn default_sorted_set_index() -> SortedSetIndexConfig {
-    SortedSetIndexConfig::Skiplist
-}
-
 fn default_max_clients() -> u32 {
     DEFAULT_MAX_CLIENTS
 }
@@ -174,7 +155,6 @@ impl Default for ServerConfig {
             colocate_connections: default_colocate_connections(),
             allow_cross_slot_standalone: default_allow_cross_slot_standalone(),
             scatter_gather_timeout_ms: default_scatter_gather_timeout_ms(),
-            sorted_set_index: default_sorted_set_index(),
             max_clients: default_max_clients(),
             enable_debug_command: default_enable_debug_command(),
             client_output_buffer_limit: default_client_output_buffer_limit(),

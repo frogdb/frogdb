@@ -1,9 +1,18 @@
-//! Arena-indexed skip list with span-based O(log n) rank queries.
+//! Index-based skip list with span-based O(log n) rank queries.
 //!
 //! Modeled after Redis's zskiplist. Safe Rust, no raw pointers — uses `Vec<Option<Node>>`
-//! with a free list for arena allocation.
+//! with a free list for node storage.
+//!
+//! Nodes do not own member bytes: each node carries the caller's `u32` slot id,
+//! and every operation that must compare members takes a `resolve` closure
+//! mapping a slot to its bytes. The owning [`SortedSetValue`] keeps the bytes
+//! in a [`BlockStore`] and resolves slots through its member table, so the
+//! skip list stays a plain owned value that moves between shards while the
+//! bytes live exactly once.
+//!
+//! [`SortedSetValue`]: crate::types::SortedSetValue
+//! [`BlockStore`]: crate::blockstore::BlockStore
 
-use bytes::Bytes;
 use ordered_float::OrderedFloat;
 use rand::rngs::SmallRng;
 use rand::{Rng, RngExt, SeedableRng};
@@ -30,7 +39,7 @@ const LEVEL_SEED: u64 = 0x5C1D_71C5_7EED_0001;
 /// Size of a single skip list `Node` in bytes (exposed for DEBUG STRUCTSIZE).
 pub const NODE_SIZE: usize = std::mem::size_of::<Node>();
 
-/// Arena-indexed skip list with span-based O(log n) rank.
+/// Index-based skip list with span-based O(log n) rank.
 #[derive(Debug, Clone)]
 pub struct SkipList {
     nodes: Vec<Option<Node>>,
@@ -46,7 +55,8 @@ pub struct SkipList {
 #[derive(Debug, Clone)]
 struct Node {
     score: OrderedFloat<f64>,
-    member: Bytes,
+    /// Caller-owned member slot; resolved to bytes via the `resolve` closures.
+    slot: u32,
     levels: SmallVec<[Link; 4]>,
     backward: u32,
 }
@@ -67,7 +77,7 @@ fn random_level(rng: &mut impl Rng) -> usize {
 
 /// Compare (score, member) pairs in the skip list ordering.
 #[inline]
-fn cmp_key(s1: OrderedFloat<f64>, m1: &Bytes, s2: OrderedFloat<f64>, m2: &Bytes) -> Ordering {
+fn cmp_key(s1: OrderedFloat<f64>, m1: &[u8], s2: OrderedFloat<f64>, m2: &[u8]) -> Ordering {
     s1.cmp(&s2).then_with(|| m1.cmp(m2))
 }
 
@@ -82,7 +92,7 @@ impl SkipList {
         // Allocate sentinel head node at index 0
         let head_node = Node {
             score: OrderedFloat(0.0),
-            member: Bytes::new(),
+            slot: NIL,
             levels: SmallVec::from_elem(
                 Link {
                     forward: NIL,
@@ -113,10 +123,10 @@ impl SkipList {
         self.length == 0
     }
 
-    fn alloc_node(&mut self, score: OrderedFloat<f64>, member: Bytes, level: usize) -> u32 {
+    fn alloc_node(&mut self, score: OrderedFloat<f64>, slot: u32, level: usize) -> u32 {
         let node = Node {
             score,
-            member,
+            slot,
             levels: SmallVec::from_elem(
                 Link {
                     forward: NIL,
@@ -151,9 +161,16 @@ impl SkipList {
         self.nodes[idx as usize].as_mut().unwrap()
     }
 
-    /// Insert a (score, member) pair. Returns false if the exact pair already exists.
+    /// Insert a (score, member) pair identified by `slot`, whose bytes are
+    /// `member`. Returns false if the exact pair already exists.
     #[allow(clippy::needless_range_loop)]
-    pub fn insert(&mut self, score: OrderedFloat<f64>, member: Bytes) -> bool {
+    pub fn insert<'m>(
+        &mut self,
+        score: OrderedFloat<f64>,
+        slot: u32,
+        member: &[u8],
+        resolve: impl Fn(u32) -> &'m [u8],
+    ) -> bool {
         // update[i] = last node at level i before the insertion point
         // rank[i]   = cumulative rank at that node
         let mut update = [0u32; MAX_LEVEL];
@@ -168,7 +185,7 @@ impl SkipList {
                     break;
                 }
                 let fwd_node = self.node(fwd);
-                match cmp_key(fwd_node.score, &fwd_node.member, score, &member) {
+                match cmp_key(fwd_node.score, resolve(fwd_node.slot), score, member) {
                     Ordering::Less => {
                         rank[i] += self.node(x).levels[i].span;
                         x = fwd;
@@ -192,7 +209,7 @@ impl SkipList {
             self.level = lvl;
         }
 
-        let new_idx = self.alloc_node(score, member, lvl);
+        let new_idx = self.alloc_node(score, slot, lvl);
 
         // Splice into each level
         for i in 0..lvl {
@@ -233,9 +250,14 @@ impl SkipList {
         true
     }
 
-    /// Remove a (score, member) pair. Returns true if found and removed.
+    /// Remove the (score, member) pair. Returns true if found and removed.
     #[allow(clippy::needless_range_loop)]
-    pub fn remove(&mut self, score: OrderedFloat<f64>, member: &Bytes) -> bool {
+    pub fn remove<'m>(
+        &mut self,
+        score: OrderedFloat<f64>,
+        member: &[u8],
+        resolve: impl Fn(u32) -> &'m [u8],
+    ) -> bool {
         let mut update = [0u32; MAX_LEVEL];
 
         let mut x = self.head;
@@ -246,7 +268,8 @@ impl SkipList {
                     break;
                 }
                 let fwd_node = self.node(fwd);
-                if cmp_key(fwd_node.score, &fwd_node.member, score, member) == Ordering::Less {
+                if cmp_key(fwd_node.score, resolve(fwd_node.slot), score, member) == Ordering::Less
+                {
                     x = fwd;
                 } else {
                     break;
@@ -261,7 +284,7 @@ impl SkipList {
             return false;
         }
         let target_node = self.node(target);
-        if target_node.score != score || target_node.member != *member {
+        if target_node.score != score || resolve(target_node.slot) != member {
             return false;
         }
 
@@ -304,8 +327,13 @@ impl SkipList {
         self.length -= 1;
     }
 
-    /// Get the 0-based rank of a (score, member) pair. Returns None if not found.
-    pub fn rank(&self, score: OrderedFloat<f64>, member: &Bytes) -> Option<usize> {
+    /// Get the 0-based rank of the (score, member) pair. Returns None if not found.
+    pub fn rank<'m>(
+        &self,
+        score: OrderedFloat<f64>,
+        member: &[u8],
+        resolve: impl Fn(u32) -> &'m [u8],
+    ) -> Option<usize> {
         let mut rank = 0u32;
         let mut x = self.head;
 
@@ -316,7 +344,7 @@ impl SkipList {
                     break;
                 }
                 let fwd_node = self.node(fwd);
-                match cmp_key(fwd_node.score, &fwd_node.member, score, member) {
+                match cmp_key(fwd_node.score, resolve(fwd_node.slot), score, member) {
                     Ordering::Less => {
                         rank += self.node(x).levels[i].span;
                         x = fwd;
@@ -333,7 +361,7 @@ impl SkipList {
     }
 
     /// Get the element at the given 0-based rank. Returns None if out of bounds.
-    pub fn get_by_rank(&self, rank: usize) -> Option<(OrderedFloat<f64>, &Bytes)> {
+    pub fn get_by_rank(&self, rank: usize) -> Option<(OrderedFloat<f64>, u32)> {
         if rank >= self.length {
             return None;
         }
@@ -355,7 +383,7 @@ impl SkipList {
                 x = fwd;
                 if traversed == target {
                     let node = self.node(x);
-                    return Some((node.score, &node.member));
+                    return Some((node.score, node.slot));
                 }
             }
         }
@@ -363,31 +391,34 @@ impl SkipList {
     }
 
     /// Pop the first (minimum) element.
-    pub fn pop_first(&mut self) -> Option<(OrderedFloat<f64>, Bytes)> {
+    pub fn pop_first(&mut self) -> Option<(OrderedFloat<f64>, u32)> {
         let first = self.node(self.head).levels[0].forward;
         if first == NIL {
             return None;
         }
         let score = self.node(first).score;
-        let member = self.node(first).member.clone();
+        let slot = self.node(first).slot;
 
         // For the first element, head is the predecessor at all levels
         let update = [self.head; MAX_LEVEL];
 
         self.delete_node(first, &update);
         self.free_node(first);
-        Some((score, member))
+        Some((score, slot))
     }
 
     /// Pop the last (maximum) element.
-    pub fn pop_last(&mut self) -> Option<(OrderedFloat<f64>, Bytes)> {
+    pub fn pop_last<'m>(
+        &mut self,
+        resolve: impl Fn(u32) -> &'m [u8],
+    ) -> Option<(OrderedFloat<f64>, u32)> {
         if self.tail == NIL {
             return None;
         }
         let score = self.node(self.tail).score;
-        let member = self.node(self.tail).member.clone();
-        self.remove(score, &member);
-        Some((score, member))
+        let slot = self.node(self.tail).slot;
+        self.remove(score, resolve(slot), &resolve);
+        Some((score, slot))
     }
 
     /// Iterate forward from the first element.
@@ -406,7 +437,7 @@ impl SkipList {
         }
     }
 
-    /// Iterate forward over elements in the given score range.
+    /// Iterate forward over elements starting at the given score bound.
     pub fn range_by_score(
         &self,
         min_score: OrderedFloat<f64>,
@@ -440,8 +471,7 @@ impl SkipList {
         }
     }
 
-    /// Find the first node at or after the given score and seek to it,
-    /// returning the rank and an iterator starting from that position.
+    /// Seek to the given 0-based rank and return an iterator starting there.
     pub fn range_by_rank_iter(&self, start_rank: usize) -> SkipListIter<'_> {
         if start_rank >= self.length {
             return SkipListIter {
@@ -449,76 +479,73 @@ impl SkipList {
                 current: NIL,
             };
         }
-        match self.get_by_rank(start_rank) {
-            Some((score, member)) => {
-                // Walk to find the node index
-                let target = (start_rank + 1) as u32;
-                let mut traversed = 0u32;
-                let mut x = self.head;
-                for i in (0..self.level).rev() {
-                    loop {
-                        let fwd = self.node(x).levels[i].forward;
-                        if fwd == NIL {
-                            break;
-                        }
-                        let next = traversed + self.node(x).levels[i].span;
-                        if next > target {
-                            break;
-                        }
-                        traversed = next;
-                        x = fwd;
-                        if traversed == target {
-                            return SkipListIter {
-                                list: self,
-                                current: x,
-                            };
-                        }
-                    }
+        let target = (start_rank + 1) as u32;
+        let mut traversed = 0u32;
+        let mut x = self.head;
+        for i in (0..self.level).rev() {
+            loop {
+                let fwd = self.node(x).levels[i].forward;
+                if fwd == NIL {
+                    break;
                 }
-                // Fallback (shouldn't reach here if get_by_rank succeeded)
-                let _ = (score, member);
-                SkipListIter {
-                    list: self,
-                    current: NIL,
+                let next = traversed + self.node(x).levels[i].span;
+                if next > target {
+                    break;
+                }
+                traversed = next;
+                x = fwd;
+                if traversed == target {
+                    return SkipListIter {
+                        list: self,
+                        current: x,
+                    };
                 }
             }
-            None => SkipListIter {
-                list: self,
-                current: NIL,
-            },
+        }
+        // Unreachable when start_rank < length: every rank has a node.
+        SkipListIter {
+            list: self,
+            current: NIL,
         }
     }
 
-    /// Approximate memory usage in bytes.
+    /// Approximate memory usage in bytes. Member bytes are owned by the
+    /// caller's block store and counted there, not here.
     pub fn memory_size(&self) -> usize {
         let base = std::mem::size_of::<Self>();
         let nodes_vec = self.nodes.capacity() * std::mem::size_of::<Option<Node>>();
         let free_vec = self.free.capacity() * std::mem::size_of::<u32>();
-        let node_internals: usize = self
+        let spilled_links: usize = self
             .nodes
             .iter()
             .flatten()
-            .map(|node| node.levels.len() * std::mem::size_of::<Link>() + node.member.len())
+            .map(|node| {
+                if node.levels.spilled() {
+                    node.levels.len() * std::mem::size_of::<Link>()
+                } else {
+                    0
+                }
+            })
             .sum();
-        base + nodes_vec + free_vec + node_internals
+        base + nodes_vec + free_vec + spilled_links
     }
 }
 
-/// Forward iterator over skip list elements.
+/// Forward iterator over skip list elements, yielding (score, slot).
 pub struct SkipListIter<'a> {
     list: &'a SkipList,
     current: u32,
 }
 
 impl<'a> Iterator for SkipListIter<'a> {
-    type Item = (OrderedFloat<f64>, &'a Bytes);
+    type Item = (OrderedFloat<f64>, u32);
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.current == NIL {
             return None;
         }
         let node = self.list.node(self.current);
-        let result = (node.score, &node.member);
+        let result = (node.score, node.slot);
         self.current = node.levels[0].forward;
         Some(result)
     }
@@ -528,21 +555,21 @@ impl<'a> Iterator for SkipListIter<'a> {
     }
 }
 
-/// Reverse iterator over skip list elements.
+/// Reverse iterator over skip list elements, yielding (score, slot).
 pub struct SkipListRevIter<'a> {
     list: &'a SkipList,
     current: u32,
 }
 
 impl<'a> Iterator for SkipListRevIter<'a> {
-    type Item = (OrderedFloat<f64>, &'a Bytes);
+    type Item = (OrderedFloat<f64>, u32);
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.current == NIL {
             return None;
         }
         let node = self.list.node(self.current);
-        let result = (node.score, &node.member);
+        let result = (node.score, node.slot);
         self.current = node.backward;
         Some(result)
     }
@@ -556,73 +583,124 @@ impl<'a> Iterator for SkipListRevIter<'a> {
 mod tests {
     use super::*;
 
-    fn b(s: &str) -> Bytes {
-        Bytes::from(s.to_string())
+    /// Test-side member table: slot = index into a Vec of member bytes, the
+    /// way `SortedSetValue` resolves slots through its block store.
+    #[derive(Default)]
+    struct Members {
+        v: Vec<Vec<u8>>,
+    }
+
+    impl Members {
+        fn slot(&mut self, s: &str) -> u32 {
+            if let Some(i) = self.v.iter().position(|m| m == s.as_bytes()) {
+                return i as u32;
+            }
+            self.v.push(s.as_bytes().to_vec());
+            (self.v.len() - 1) as u32
+        }
+
+        fn resolve<'s>(&'s self) -> impl Fn(u32) -> &'s [u8] {
+            move |slot| self.v[slot as usize].as_slice()
+        }
+
+        fn name(&self, slot: u32) -> &[u8] {
+            &self.v[slot as usize]
+        }
+    }
+
+    fn insert(sl: &mut SkipList, m: &mut Members, score: f64, s: &str) -> bool {
+        let slot = m.slot(s);
+        sl.insert(OrderedFloat(score), slot, s.as_bytes(), m.resolve())
+    }
+
+    fn remove(sl: &mut SkipList, m: &Members, score: f64, s: &str) -> bool {
+        sl.remove(OrderedFloat(score), s.as_bytes(), m.resolve())
+    }
+
+    fn rank(sl: &SkipList, m: &Members, score: f64, s: &str) -> Option<usize> {
+        sl.rank(OrderedFloat(score), s.as_bytes(), m.resolve())
+    }
+
+    fn collect(sl: &SkipList, m: &Members) -> Vec<(f64, Vec<u8>)> {
+        sl.iter()
+            .map(|(s, slot)| (s.0, m.name(slot).to_vec()))
+            .collect()
     }
 
     #[test]
     fn test_insert_and_len() {
         let mut sl = SkipList::new();
+        let mut m = Members::default();
         assert!(sl.is_empty());
-        assert!(sl.insert(OrderedFloat(1.0), b("a")));
-        assert!(sl.insert(OrderedFloat(2.0), b("b")));
-        assert!(sl.insert(OrderedFloat(3.0), b("c")));
+        assert!(insert(&mut sl, &mut m, 1.0, "a"));
+        assert!(insert(&mut sl, &mut m, 2.0, "b"));
+        assert!(insert(&mut sl, &mut m, 3.0, "c"));
         assert_eq!(sl.len(), 3);
 
         // Duplicate insert should return false
-        assert!(!sl.insert(OrderedFloat(1.0), b("a")));
+        assert!(!insert(&mut sl, &mut m, 1.0, "a"));
         assert_eq!(sl.len(), 3);
     }
 
     #[test]
     fn test_ordering() {
         let mut sl = SkipList::new();
-        sl.insert(OrderedFloat(3.0), b("c"));
-        sl.insert(OrderedFloat(1.0), b("a"));
-        sl.insert(OrderedFloat(2.0), b("b"));
+        let mut m = Members::default();
+        insert(&mut sl, &mut m, 3.0, "c");
+        insert(&mut sl, &mut m, 1.0, "a");
+        insert(&mut sl, &mut m, 2.0, "b");
 
-        let items: Vec<_> = sl.iter().map(|(s, m)| (s.0, m.as_ref())).collect();
-        assert_eq!(items, vec![(1.0, b"a" as &[u8]), (2.0, b"b"), (3.0, b"c")]);
+        assert_eq!(
+            collect(&sl, &m),
+            vec![
+                (1.0, b"a".to_vec()),
+                (2.0, b"b".to_vec()),
+                (3.0, b"c".to_vec())
+            ]
+        );
     }
 
     #[test]
     fn test_same_score_lex_order() {
         let mut sl = SkipList::new();
-        sl.insert(OrderedFloat(1.0), b("c"));
-        sl.insert(OrderedFloat(1.0), b("a"));
-        sl.insert(OrderedFloat(1.0), b("b"));
+        let mut m = Members::default();
+        insert(&mut sl, &mut m, 1.0, "c");
+        insert(&mut sl, &mut m, 1.0, "a");
+        insert(&mut sl, &mut m, 1.0, "b");
 
-        let items: Vec<_> = sl.iter().map(|(_, m)| m.as_ref()).collect();
-        assert_eq!(items, vec![b"a" as &[u8], b"b", b"c"]);
+        let items: Vec<Vec<u8>> = sl.iter().map(|(_, slot)| m.name(slot).to_vec()).collect();
+        assert_eq!(items, vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);
     }
 
     #[test]
     fn test_rank() {
         let mut sl = SkipList::new();
+        let mut m = Members::default();
         for i in 0..10 {
-            sl.insert(OrderedFloat(i as f64), Bytes::from(format!("m{}", i)));
+            insert(&mut sl, &mut m, i as f64, &format!("m{i}"));
         }
 
-        assert_eq!(sl.rank(OrderedFloat(0.0), &b("m0")), Some(0));
-        assert_eq!(sl.rank(OrderedFloat(5.0), &b("m5")), Some(5));
-        assert_eq!(sl.rank(OrderedFloat(9.0), &b("m9")), Some(9));
-        assert_eq!(sl.rank(OrderedFloat(10.0), &b("m10")), None);
+        assert_eq!(rank(&sl, &m, 0.0, "m0"), Some(0));
+        assert_eq!(rank(&sl, &m, 5.0, "m5"), Some(5));
+        assert_eq!(rank(&sl, &m, 9.0, "m9"), Some(9));
+        assert_eq!(rank(&sl, &m, 10.0, "m10"), None);
     }
 
     #[test]
     fn test_get_by_rank() {
         let mut sl = SkipList::new();
+        let mut m = Members::default();
         for i in 0..10 {
-            sl.insert(OrderedFloat(i as f64), Bytes::from(format!("m{}", i)));
+            insert(&mut sl, &mut m, i as f64, &format!("m{i}"));
         }
 
-        let (score, member) = sl.get_by_rank(0).unwrap();
+        let (score, slot) = sl.get_by_rank(0).unwrap();
         assert_eq!(score, OrderedFloat(0.0));
-        assert_eq!(member, &b("m0"));
+        assert_eq!(m.name(slot), b"m0");
 
-        let (score, member) = sl.get_by_rank(9).unwrap();
+        let (score, slot) = sl.get_by_rank(9).unwrap();
         assert_eq!(score, OrderedFloat(9.0));
-        assert_eq!(member, &b("m9"));
+        assert_eq!(m.name(slot), b"m9");
 
         assert!(sl.get_by_rank(10).is_none());
     }
@@ -630,90 +708,104 @@ mod tests {
     #[test]
     fn test_remove() {
         let mut sl = SkipList::new();
-        sl.insert(OrderedFloat(1.0), b("a"));
-        sl.insert(OrderedFloat(2.0), b("b"));
-        sl.insert(OrderedFloat(3.0), b("c"));
+        let mut m = Members::default();
+        insert(&mut sl, &mut m, 1.0, "a");
+        insert(&mut sl, &mut m, 2.0, "b");
+        insert(&mut sl, &mut m, 3.0, "c");
 
-        assert!(sl.remove(OrderedFloat(2.0), &b("b")));
+        assert!(remove(&mut sl, &m, 2.0, "b"));
         assert_eq!(sl.len(), 2);
-        assert!(!sl.remove(OrderedFloat(2.0), &b("b"))); // already removed
+        assert!(!remove(&mut sl, &m, 2.0, "b")); // already removed
 
-        let items: Vec<_> = sl.iter().map(|(s, m)| (s.0, m.as_ref())).collect();
-        assert_eq!(items, vec![(1.0, b"a" as &[u8]), (3.0, b"c")]);
+        assert_eq!(
+            collect(&sl, &m),
+            vec![(1.0, b"a".to_vec()), (3.0, b"c".to_vec())]
+        );
 
         // Check ranks updated
-        assert_eq!(sl.rank(OrderedFloat(1.0), &b("a")), Some(0));
-        assert_eq!(sl.rank(OrderedFloat(3.0), &b("c")), Some(1));
+        assert_eq!(rank(&sl, &m, 1.0, "a"), Some(0));
+        assert_eq!(rank(&sl, &m, 3.0, "c"), Some(1));
     }
 
     #[test]
     fn test_pop_first() {
         let mut sl = SkipList::new();
-        sl.insert(OrderedFloat(3.0), b("c"));
-        sl.insert(OrderedFloat(1.0), b("a"));
-        sl.insert(OrderedFloat(2.0), b("b"));
+        let mut m = Members::default();
+        insert(&mut sl, &mut m, 3.0, "c");
+        insert(&mut sl, &mut m, 1.0, "a");
+        insert(&mut sl, &mut m, 2.0, "b");
 
-        let (score, member) = sl.pop_first().unwrap();
+        let (score, slot) = sl.pop_first().unwrap();
         assert_eq!(score, OrderedFloat(1.0));
-        assert_eq!(member, b("a"));
+        assert_eq!(m.name(slot), b"a");
         assert_eq!(sl.len(), 2);
 
-        let (score, member) = sl.pop_first().unwrap();
+        let (score, slot) = sl.pop_first().unwrap();
         assert_eq!(score, OrderedFloat(2.0));
-        assert_eq!(member, b("b"));
+        assert_eq!(m.name(slot), b"b");
     }
 
     #[test]
     fn test_pop_last() {
         let mut sl = SkipList::new();
-        sl.insert(OrderedFloat(1.0), b("a"));
-        sl.insert(OrderedFloat(2.0), b("b"));
-        sl.insert(OrderedFloat(3.0), b("c"));
+        let mut m = Members::default();
+        insert(&mut sl, &mut m, 1.0, "a");
+        insert(&mut sl, &mut m, 2.0, "b");
+        insert(&mut sl, &mut m, 3.0, "c");
 
-        let (score, member) = sl.pop_last().unwrap();
+        let (score, slot) = sl.pop_last(m.resolve()).unwrap();
         assert_eq!(score, OrderedFloat(3.0));
-        assert_eq!(member, b("c"));
+        assert_eq!(m.name(slot), b"c");
         assert_eq!(sl.len(), 2);
     }
 
     #[test]
     fn test_rev_iter() {
         let mut sl = SkipList::new();
-        sl.insert(OrderedFloat(1.0), b("a"));
-        sl.insert(OrderedFloat(2.0), b("b"));
-        sl.insert(OrderedFloat(3.0), b("c"));
+        let mut m = Members::default();
+        insert(&mut sl, &mut m, 1.0, "a");
+        insert(&mut sl, &mut m, 2.0, "b");
+        insert(&mut sl, &mut m, 3.0, "c");
 
-        let items: Vec<_> = sl.rev_iter().map(|(s, m)| (s.0, m.as_ref())).collect();
-        assert_eq!(items, vec![(3.0, b"c" as &[u8]), (2.0, b"b"), (1.0, b"a")]);
+        let items: Vec<(f64, Vec<u8>)> = sl
+            .rev_iter()
+            .map(|(s, slot)| (s.0, m.name(slot).to_vec()))
+            .collect();
+        assert_eq!(
+            items,
+            vec![
+                (3.0, b"c".to_vec()),
+                (2.0, b"b".to_vec()),
+                (1.0, b"a".to_vec())
+            ]
+        );
     }
 
     #[test]
     fn test_large_insert_remove() {
         let mut sl = SkipList::new();
+        let mut m = Members::default();
         for i in 0..1000 {
-            sl.insert(OrderedFloat(i as f64), Bytes::from(format!("m{:04}", i)));
+            insert(&mut sl, &mut m, i as f64, &format!("m{i:04}"));
         }
         assert_eq!(sl.len(), 1000);
 
         // Check rank consistency
         for i in 0..1000 {
-            assert_eq!(
-                sl.rank(OrderedFloat(i as f64), &Bytes::from(format!("m{:04}", i))),
-                Some(i)
-            );
+            assert_eq!(rank(&sl, &m, i as f64, &format!("m{i:04}")), Some(i));
         }
 
         // Remove every other element
         for i in (0..1000).step_by(2) {
-            assert!(sl.remove(OrderedFloat(i as f64), &Bytes::from(format!("m{:04}", i))));
+            assert!(remove(&mut sl, &m, i as f64, &format!("m{i:04}")));
         }
         assert_eq!(sl.len(), 500);
 
         // Verify remaining elements have correct ranks
-        for (rank, i) in (1..1000).step_by(2).enumerate() {
+        for (want_rank, i) in (1..1000).step_by(2).enumerate() {
             assert_eq!(
-                sl.rank(OrderedFloat(i as f64), &Bytes::from(format!("m{:04}", i))),
-                Some(rank)
+                rank(&sl, &m, i as f64, &format!("m{i:04}")),
+                Some(want_rank)
             );
         }
     }
@@ -721,47 +813,53 @@ mod tests {
     #[test]
     fn test_range_by_score_iter() {
         let mut sl = SkipList::new();
+        let mut m = Members::default();
         for i in 0..10 {
-            sl.insert(OrderedFloat(i as f64), Bytes::from(format!("m{}", i)));
+            insert(&mut sl, &mut m, i as f64, &format!("m{i}"));
         }
 
         // Inclusive range [3, 7]
-        let items: Vec<_> = sl
+        let items: Vec<(f64, Vec<u8>)> = sl
             .range_by_score(OrderedFloat(3.0), true)
             .take_while(|(s, _)| *s <= OrderedFloat(7.0))
-            .map(|(s, m)| (s.0, m.as_ref()))
+            .map(|(s, slot)| (s.0, m.name(slot).to_vec()))
             .collect();
         assert_eq!(
             items,
             vec![
-                (3.0, b"m3" as &[u8]),
-                (4.0, b"m4"),
-                (5.0, b"m5"),
-                (6.0, b"m6"),
-                (7.0, b"m7"),
+                (3.0, b"m3".to_vec()),
+                (4.0, b"m4".to_vec()),
+                (5.0, b"m5".to_vec()),
+                (6.0, b"m6".to_vec()),
+                (7.0, b"m7".to_vec()),
             ]
         );
 
         // Exclusive range (3, 7)
-        let items: Vec<_> = sl
+        let items: Vec<(f64, Vec<u8>)> = sl
             .range_by_score(OrderedFloat(3.0), false)
             .take_while(|(s, _)| *s < OrderedFloat(7.0))
-            .map(|(s, m)| (s.0, m.as_ref()))
+            .map(|(s, slot)| (s.0, m.name(slot).to_vec()))
             .collect();
         assert_eq!(
             items,
-            vec![(4.0, b"m4" as &[u8]), (5.0, b"m5"), (6.0, b"m6"),]
+            vec![
+                (4.0, b"m4".to_vec()),
+                (5.0, b"m5".to_vec()),
+                (6.0, b"m6".to_vec()),
+            ]
         );
     }
 
     #[test]
     fn test_empty_operations() {
         let mut sl = SkipList::new();
+        let m = Members::default();
         assert!(sl.pop_first().is_none());
-        assert!(sl.pop_last().is_none());
+        assert!(sl.pop_last(m.resolve()).is_none());
         assert!(sl.get_by_rank(0).is_none());
-        assert!(sl.rank(OrderedFloat(1.0), &b("a")).is_none());
-        assert!(!sl.remove(OrderedFloat(1.0), &b("a")));
+        assert!(sl.rank(OrderedFloat(1.0), b"a", m.resolve()).is_none());
+        assert!(!sl.remove(OrderedFloat(1.0), b"a", m.resolve()));
         assert_eq!(sl.iter().count(), 0);
         assert_eq!(sl.rev_iter().count(), 0);
     }
@@ -769,11 +867,12 @@ mod tests {
     #[test]
     fn test_insert_remove_reinsert() {
         let mut sl = SkipList::new();
-        sl.insert(OrderedFloat(1.0), b("a"));
-        sl.remove(OrderedFloat(1.0), &b("a"));
+        let mut m = Members::default();
+        insert(&mut sl, &mut m, 1.0, "a");
+        remove(&mut sl, &m, 1.0, "a");
         assert!(sl.is_empty());
-        sl.insert(OrderedFloat(1.0), b("a"));
+        insert(&mut sl, &mut m, 1.0, "a");
         assert_eq!(sl.len(), 1);
-        assert_eq!(sl.rank(OrderedFloat(1.0), &b("a")), Some(0));
+        assert_eq!(rank(&sl, &m, 1.0, "a"), Some(0));
     }
 }

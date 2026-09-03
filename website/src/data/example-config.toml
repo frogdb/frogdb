@@ -19,7 +19,6 @@ num-shards = 1
 colocate-connections = true
 allow-cross-slot-standalone = false
 scatter-gather-timeout-ms = 5000
-sorted-set-index = "skiplist"
 max-clients = 10000
 enable-debug-command = false
 client-output-buffer-limit = "normal 0 0 0 replica 268435456 67108864 60 pubsub 33554432 8388608 60"

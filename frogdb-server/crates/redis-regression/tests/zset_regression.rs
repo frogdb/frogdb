@@ -1,24 +1,15 @@
 use bytes::Bytes;
-use frogdb_server::config::server::SortedSetIndexConfig;
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::{TestServer, TestServerConfig};
 use redis_protocol::resp3::types::BytesFrame as Resp3Frame;
-use rstest::rstest;
 
-async fn zset_server(backend: SortedSetIndexConfig) -> TestServer {
-    TestServer::start_standalone_with_config(TestServerConfig {
-        sorted_set_index: Some(backend),
-        ..Default::default()
-    })
-    .await
+async fn zset_server() -> TestServer {
+    TestServer::start_standalone_with_config(TestServerConfig::default()).await
 }
 
-#[rstest]
-#[case::skiplist(SortedSetIndexConfig::Skiplist)]
-#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn zpopmin_resp3_without_count_returns_flat_pair(#[case] backend: SortedSetIndexConfig) {
-    let server = zset_server(backend).await;
+async fn zpopmin_resp3_without_count_returns_flat_pair() {
+    let server = zset_server().await;
     let mut client = server.connect_resp3().await;
 
     let _hello = client.command(&["HELLO", "3"]).await;
@@ -44,12 +35,9 @@ async fn zpopmin_resp3_without_count_returns_flat_pair(#[case] backend: SortedSe
     }
 }
 
-#[rstest]
-#[case::skiplist(SortedSetIndexConfig::Skiplist)]
-#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn zpopmin_resp3_with_count_returns_nested_pairs(#[case] backend: SortedSetIndexConfig) {
-    let server = zset_server(backend).await;
+async fn zpopmin_resp3_with_count_returns_nested_pairs() {
+    let server = zset_server().await;
     let mut client = server.connect_resp3().await;
 
     let _hello = client.command(&["HELLO", "3"]).await;
@@ -75,12 +63,9 @@ async fn zpopmin_resp3_with_count_returns_nested_pairs(#[case] backend: SortedSe
     }
 }
 
-#[rstest]
-#[case::skiplist(SortedSetIndexConfig::Skiplist)]
-#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn zpopmax_resp3_without_count_returns_flat_pair(#[case] backend: SortedSetIndexConfig) {
-    let server = zset_server(backend).await;
+async fn zpopmax_resp3_without_count_returns_flat_pair() {
+    let server = zset_server().await;
     let mut client = server.connect_resp3().await;
 
     let _hello = client.command(&["HELLO", "3"]).await;
@@ -104,12 +89,9 @@ async fn zpopmax_resp3_without_count_returns_flat_pair(#[case] backend: SortedSe
     }
 }
 
-#[rstest]
-#[case::skiplist(SortedSetIndexConfig::Skiplist)]
-#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn zpopmax_resp3_with_count_returns_nested_pairs(#[case] backend: SortedSetIndexConfig) {
-    let server = zset_server(backend).await;
+async fn zpopmax_resp3_with_count_returns_nested_pairs() {
+    let server = zset_server().await;
     let mut client = server.connect_resp3().await;
 
     let _hello = client.command(&["HELLO", "3"]).await;
@@ -133,12 +115,9 @@ async fn zpopmax_resp3_with_count_returns_nested_pairs(#[case] backend: SortedSe
     }
 }
 
-#[rstest]
-#[case::skiplist(SortedSetIndexConfig::Skiplist)]
-#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn zrandmember_negative_count_allows_duplicates(#[case] backend: SortedSetIndexConfig) {
-    let server = zset_server(backend).await;
+async fn zrandmember_negative_count_allows_duplicates() {
+    let server = zset_server().await;
     let mut client = server.connect().await;
 
     // Only 3 members, but request -10 (allows duplicates)
@@ -152,12 +131,9 @@ async fn zrandmember_negative_count_allows_duplicates(#[case] backend: SortedSet
     assert_eq!(items.len(), 10);
 }
 
-#[rstest]
-#[case::skiplist(SortedSetIndexConfig::Skiplist)]
-#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn zrandmember_count_exceeding_cardinality(#[case] backend: SortedSetIndexConfig) {
-    let server = zset_server(backend).await;
+async fn zrandmember_count_exceeding_cardinality() {
+    let server = zset_server().await;
     let mut client = server.connect().await;
 
     client.command(&["ZADD", "myzset", "1", "a"]).await;
@@ -172,12 +148,9 @@ async fn zrandmember_count_exceeding_cardinality(#[case] backend: SortedSetIndex
     assert_eq!(items.len(), 3);
 }
 
-#[rstest]
-#[case::skiplist(SortedSetIndexConfig::Skiplist)]
-#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn zrange_byscore_rev_with_limit(#[case] backend: SortedSetIndexConfig) {
-    let server = zset_server(backend).await;
+async fn zrange_byscore_rev_with_limit() {
+    let server = zset_server().await;
     let mut client = server.connect().await;
 
     for i in 1..=10 {
@@ -197,12 +170,9 @@ async fn zrange_byscore_rev_with_limit(#[case] backend: SortedSetIndexConfig) {
     assert_eq!(items, vec!["m8", "m7", "m6"]);
 }
 
-#[rstest]
-#[case::skiplist(SortedSetIndexConfig::Skiplist)]
-#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn zrangestore_byscore_rev_with_limit(#[case] backend: SortedSetIndexConfig) {
-    let server = zset_server(backend).await;
+async fn zrangestore_byscore_rev_with_limit() {
+    let server = zset_server().await;
     let mut client = server.connect().await;
 
     for i in 1..=10 {
@@ -234,12 +204,9 @@ async fn zrangestore_byscore_rev_with_limit(#[case] backend: SortedSetIndexConfi
     assert_eq!(items.len(), 3);
 }
 
-#[rstest]
-#[case::skiplist(SortedSetIndexConfig::Skiplist)]
-#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn score_formatting_extreme_floats(#[case] backend: SortedSetIndexConfig) {
-    let server = zset_server(backend).await;
+async fn score_formatting_extreme_floats() {
+    let server = zset_server().await;
     let mut client = server.connect().await;
 
     // Test extreme positive float
@@ -265,12 +232,9 @@ async fn score_formatting_extreme_floats(#[case] backend: SortedSetIndexConfig) 
     );
 }
 
-#[rstest]
-#[case::skiplist(SortedSetIndexConfig::Skiplist)]
-#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn zintercard_error_messages(#[case] backend: SortedSetIndexConfig) {
-    let server = zset_server(backend).await;
+async fn zintercard_error_messages() {
+    let server = zset_server().await;
     let mut client = server.connect().await;
 
     // ZINTERCARD with 0 keys

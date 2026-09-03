@@ -11,9 +11,7 @@ mod string_value;
 pub use hash::*;
 pub use list::*;
 pub use set::*;
-pub use sorted_set::{
-    LexBound, ScoreBound, ScoreIndexBackend, SortedSetValue, ZAddResult, set_default_score_index,
-};
+pub use sorted_set::{LexBound, ScoreBound, SortedSetValue, ZAddResult};
 pub use stream::*;
 pub use string_value::{IncrementError, StringValue};
 

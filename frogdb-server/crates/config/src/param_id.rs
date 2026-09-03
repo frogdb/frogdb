@@ -223,9 +223,10 @@ param_id_enum! {
         TlsReplication => "tls-replication",
         TlsCluster => "tls-cluster",
         TlsProtocols => "tls-protocols",
-        // === 13-01 Pass 2a: 22 promote-immutable params (CONFIG GET-only) ===
+        // === 13-01 Pass 2a: promote-immutable params (CONFIG GET-only) ===
         // Order mirrors the registry's appended block for review locality.
-        SortedSetIndex => "sorted-set-index",
+        // (Originally 22; sorted-set-index was retired with the BTree zset
+        // backend.)
         EnableDebugCommand => "enable-debug-command",
         WriteBufferSizeMb => "write-buffer-size-mb",
         Compression => "compression",

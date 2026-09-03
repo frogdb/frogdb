@@ -1,12 +1,20 @@
-//! Sorted set types: ScoreBound, LexBound, ScoreIndex, SortedSetValue.
+//! Sorted set types: ScoreBound, LexBound, SortedSetValue.
+//!
+//! Member bytes live once in a per-value [`BlockStore`]; the skip list nodes
+//! and the member lookup table both refer to members through a `u32` slot into
+//! a slot-stable entry table that owns the block-store handle. Compaction
+//! therefore patches handles in exactly one place, and skip list nodes never
+//! move or change when blocks compact.
 
-use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::{AtomicU8, Ordering as AtomicOrdering};
+use std::collections::hash_map::RandomState;
+use std::hash::BuildHasher;
 
 use bytes::Bytes;
+use hashbrown::HashTable;
 use ordered_float::OrderedFloat;
 
-use crate::skiplist::SkipList;
+use crate::blockstore::{BlockStore, Handle};
+use crate::skiplist::{SkipList, SkipListIter};
 use crate::types::string_value::IncrementError;
 
 // ============================================================================
@@ -44,54 +52,6 @@ impl ScoreBound {
             ScoreBound::PosInf => true,
             ScoreBound::Inclusive(bound) => score <= *bound,
             ScoreBound::Exclusive(bound) => score < *bound,
-        }
-    }
-
-    /// Get the value for BTreeMap range queries (minimum bound).
-    pub fn start_bound_value(&self) -> Option<OrderedFloat<f64>> {
-        match self {
-            ScoreBound::NegInf => None,
-            ScoreBound::PosInf => Some(OrderedFloat(f64::INFINITY)),
-            ScoreBound::Inclusive(v) | ScoreBound::Exclusive(v) => Some(OrderedFloat(*v)),
-        }
-    }
-
-    /// Convert to a BTreeMap lower bound for `(OrderedFloat<f64>, Bytes)` keys.
-    fn to_btree_lower(self) -> std::ops::Bound<(OrderedFloat<f64>, Bytes)> {
-        match self {
-            ScoreBound::NegInf => std::ops::Bound::Unbounded,
-            ScoreBound::PosInf => {
-                std::ops::Bound::Excluded((OrderedFloat(f64::INFINITY), Bytes::new()))
-            }
-            ScoreBound::Inclusive(v) => std::ops::Bound::Included((OrderedFloat(v), Bytes::new())),
-            ScoreBound::Exclusive(v) => {
-                // No floats between v and next_up, so Included(next_up) excludes v
-                std::ops::Bound::Included((OrderedFloat(v.next_up()), Bytes::new()))
-            }
-        }
-    }
-
-    /// Convert to a BTreeMap upper bound for `(OrderedFloat<f64>, Bytes)` keys.
-    fn to_btree_upper(self) -> std::ops::Bound<(OrderedFloat<f64>, Bytes)> {
-        match self {
-            ScoreBound::PosInf => std::ops::Bound::Unbounded,
-            ScoreBound::NegInf => {
-                std::ops::Bound::Excluded((OrderedFloat(f64::NEG_INFINITY), Bytes::new()))
-            }
-            ScoreBound::Inclusive(v) => {
-                let next = v.next_up();
-                if next.is_infinite() && !v.is_infinite() {
-                    // v is f64::MAX, next_up would be INFINITY — use Unbounded
-                    std::ops::Bound::Unbounded
-                } else {
-                    // Excluded(next_up, empty) — empty Bytes sorts first, so all entries at score v are included
-                    std::ops::Bound::Excluded((OrderedFloat(next), Bytes::new()))
-                }
-            }
-            ScoreBound::Exclusive(v) => {
-                // Excluded(v, empty) — empty Bytes sorts first, so all entries at score v are excluded
-                std::ops::Bound::Excluded((OrderedFloat(v), Bytes::new()))
-            }
         }
     }
 }
@@ -143,293 +103,36 @@ pub struct ZAddResult {
 }
 
 // ============================================================================
-// ScoreIndex: pluggable backend for sorted set score ordering
+// SortedSetValue
 // ============================================================================
 
-static SCORE_INDEX_BACKEND: AtomicU8 = AtomicU8::new(1); // 0=BTree, 1=SkipList (default)
-
-/// Which index backend new sorted sets should use.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScoreIndexBackend {
-    BTree = 0,
-    SkipList = 1,
+/// One member's storage: its block-store handle and its score. The score here
+/// is the member→score map; the copy in the skip list node is the ordering
+/// key.
+#[derive(Debug, Clone, Copy)]
+struct MemberEntry {
+    handle: Handle,
+    score: f64,
 }
 
-/// Set the default score index backend (called once at startup).
-pub fn set_default_score_index(backend: ScoreIndexBackend) {
-    SCORE_INDEX_BACKEND.store(backend as u8, AtomicOrdering::Relaxed);
-}
-
-fn default_score_index_backend() -> ScoreIndexBackend {
-    match SCORE_INDEX_BACKEND.load(AtomicOrdering::Relaxed) {
-        0 => ScoreIndexBackend::BTree,
-        _ => ScoreIndexBackend::SkipList,
-    }
-}
-
-/// Score index that dispatches to either BTreeMap or SkipList.
-#[derive(Debug, Clone)]
-enum ScoreIndex {
-    BTree(BTreeMap<(OrderedFloat<f64>, Bytes), ()>),
-    SkipList(SkipList),
-}
-
-impl ScoreIndex {
-    fn new(backend: ScoreIndexBackend) -> Self {
-        match backend {
-            ScoreIndexBackend::BTree => ScoreIndex::BTree(BTreeMap::new()),
-            ScoreIndexBackend::SkipList => ScoreIndex::SkipList(SkipList::new()),
-        }
-    }
-
-    fn insert(&mut self, score: OrderedFloat<f64>, member: Bytes) {
-        match self {
-            ScoreIndex::BTree(bt) => {
-                bt.insert((score, member), ());
-            }
-            ScoreIndex::SkipList(sl) => {
-                sl.insert(score, member);
-            }
-        }
-    }
-
-    fn remove(&mut self, score: OrderedFloat<f64>, member: &Bytes) {
-        match self {
-            ScoreIndex::BTree(bt) => {
-                bt.remove(&(score, member.clone()));
-            }
-            ScoreIndex::SkipList(sl) => {
-                sl.remove(score, member);
-            }
-        }
-    }
-
-    #[allow(dead_code)]
-    fn len(&self) -> usize {
-        match self {
-            ScoreIndex::BTree(bt) => bt.len(),
-            ScoreIndex::SkipList(sl) => sl.len(),
-        }
-    }
-
-    fn rank(&self, score: OrderedFloat<f64>, member: &Bytes) -> Option<usize> {
-        match self {
-            ScoreIndex::BTree(bt) => {
-                let key = (score, member.clone());
-                Some(bt.range(..&key).count())
-            }
-            ScoreIndex::SkipList(sl) => sl.rank(score, member),
-        }
-    }
-
-    fn pop_first(&mut self) -> Option<(OrderedFloat<f64>, Bytes)> {
-        match self {
-            ScoreIndex::BTree(bt) => bt.pop_first().map(|((s, m), _)| (s, m)),
-            ScoreIndex::SkipList(sl) => sl.pop_first(),
-        }
-    }
-
-    fn pop_last(&mut self) -> Option<(OrderedFloat<f64>, Bytes)> {
-        match self {
-            ScoreIndex::BTree(bt) => bt.pop_last().map(|((s, m), _)| (s, m)),
-            ScoreIndex::SkipList(sl) => sl.pop_last(),
-        }
-    }
-
-    fn iter(&self) -> ScoreIndexIter<'_> {
-        match self {
-            ScoreIndex::BTree(bt) => ScoreIndexIter::BTree(bt.iter()),
-            ScoreIndex::SkipList(sl) => ScoreIndexIter::SkipList(sl.iter()),
-        }
-    }
-
-    fn rev_iter(&self) -> ScoreIndexRevIter<'_> {
-        match self {
-            ScoreIndex::BTree(bt) => ScoreIndexRevIter::BTree(bt.iter().rev()),
-            ScoreIndex::SkipList(sl) => ScoreIndexRevIter::SkipList(sl.rev_iter()),
-        }
-    }
-
-    fn range_by_score_iter<'a>(&'a self, min: &ScoreBound, max: &ScoreBound) -> ScoreIndexIter<'a> {
-        match self {
-            ScoreIndex::BTree(bt) => {
-                ScoreIndexIter::BTreeRange(bt.range((min.to_btree_lower(), max.to_btree_upper())))
-            }
-            ScoreIndex::SkipList(sl) => {
-                let (min_score, min_inclusive) = match min {
-                    ScoreBound::NegInf => (OrderedFloat(f64::NEG_INFINITY), true),
-                    ScoreBound::PosInf => {
-                        return ScoreIndexIter::Empty;
-                    }
-                    ScoreBound::Inclusive(v) => (OrderedFloat(*v), true),
-                    ScoreBound::Exclusive(v) => (OrderedFloat(*v), false),
-                };
-                let max_score = match max {
-                    ScoreBound::PosInf => None,
-                    ScoreBound::NegInf => return ScoreIndexIter::Empty,
-                    ScoreBound::Inclusive(v) => Some((OrderedFloat(*v), true)),
-                    ScoreBound::Exclusive(v) => Some((OrderedFloat(*v), false)),
-                };
-                ScoreIndexIter::SkipListBounded {
-                    inner: sl.range_by_score(min_score, min_inclusive),
-                    max_score,
-                }
-            }
-        }
-    }
-
-    fn rev_range_by_score_iter<'a>(
-        &'a self,
-        min: &ScoreBound,
-        max: &ScoreBound,
-    ) -> ScoreIndexRevIter<'a> {
-        match self {
-            ScoreIndex::BTree(bt) => ScoreIndexRevIter::BTreeRange(
-                bt.range((min.to_btree_lower(), max.to_btree_upper())).rev(),
-            ),
-            ScoreIndex::SkipList(_) => {
-                // For reverse score range on skip list, we use the forward range
-                // then collect and reverse. This matches the BTreeMap approach.
-                // A more optimal approach would be a reverse score-bounded iterator,
-                // but for now this is correct and matches BTreeMap's complexity.
-                ScoreIndexRevIter::Collected(
-                    self.range_by_score_iter(min, max)
-                        .collect::<Vec<_>>()
-                        .into_iter()
-                        .rev()
-                        .collect::<Vec<_>>()
-                        .into_iter(),
-                )
-            }
-        }
-    }
-
-    fn range_by_rank_iter(&self, start: usize, count: usize) -> ScoreIndexIter<'_> {
-        match self {
-            ScoreIndex::BTree(bt) => ScoreIndexIter::BTreeSkip {
-                inner: bt.iter(),
-                skip: start,
-                remaining: count,
-            },
-            ScoreIndex::SkipList(sl) => ScoreIndexIter::SkipListTake {
-                inner: sl.range_by_rank_iter(start),
-                remaining: count,
-            },
-        }
-    }
-
-    fn memory_size(&self) -> usize {
-        match self {
-            ScoreIndex::BTree(bt) => bt
-                .iter()
-                .map(|((_, member), _)| {
-                    member.len() + std::mem::size_of::<OrderedFloat<f64>>() + 32
-                })
-                .sum(),
-            ScoreIndex::SkipList(sl) => sl.memory_size(),
-        }
-    }
-}
-
-/// Forward iterator over ScoreIndex entries.
-enum ScoreIndexIter<'a> {
-    BTree(std::collections::btree_map::Iter<'a, (OrderedFloat<f64>, Bytes), ()>),
-    BTreeRange(std::collections::btree_map::Range<'a, (OrderedFloat<f64>, Bytes), ()>),
-    BTreeSkip {
-        inner: std::collections::btree_map::Iter<'a, (OrderedFloat<f64>, Bytes), ()>,
-        skip: usize,
-        remaining: usize,
-    },
-    SkipList(crate::skiplist::SkipListIter<'a>),
-    SkipListBounded {
-        inner: crate::skiplist::SkipListIter<'a>,
-        max_score: Option<(OrderedFloat<f64>, bool)>, // (score, inclusive)
-    },
-    SkipListTake {
-        inner: crate::skiplist::SkipListIter<'a>,
-        remaining: usize,
-    },
-    Empty,
-}
-
-impl<'a> Iterator for ScoreIndexIter<'a> {
-    type Item = (OrderedFloat<f64>, &'a Bytes);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            ScoreIndexIter::BTree(it) => it.next().map(|((s, m), _)| (*s, m)),
-            ScoreIndexIter::BTreeRange(it) => it.next().map(|((s, m), _)| (*s, m)),
-            ScoreIndexIter::BTreeSkip {
-                inner,
-                skip,
-                remaining,
-            } => {
-                while *skip > 0 {
-                    inner.next()?;
-                    *skip -= 1;
-                }
-                if *remaining == 0 {
-                    return None;
-                }
-                *remaining -= 1;
-                inner.next().map(|((s, m), _)| (*s, m))
-            }
-            ScoreIndexIter::SkipList(it) => it.next(),
-            ScoreIndexIter::SkipListBounded { inner, max_score } => {
-                let (score, member) = inner.next()?;
-                if let Some((max_s, inclusive)) = max_score {
-                    if *inclusive {
-                        if score > *max_s {
-                            return None;
-                        }
-                    } else if score >= *max_s {
-                        return None;
-                    }
-                }
-                Some((score, member))
-            }
-            ScoreIndexIter::SkipListTake { inner, remaining } => {
-                if *remaining == 0 {
-                    return None;
-                }
-                *remaining -= 1;
-                inner.next()
-            }
-            ScoreIndexIter::Empty => None,
-        }
-    }
-}
-
-/// Reverse iterator over ScoreIndex entries.
-enum ScoreIndexRevIter<'a> {
-    BTree(std::iter::Rev<std::collections::btree_map::Iter<'a, (OrderedFloat<f64>, Bytes), ()>>),
-    BTreeRange(
-        std::iter::Rev<std::collections::btree_map::Range<'a, (OrderedFloat<f64>, Bytes), ()>>,
-    ),
-    SkipList(crate::skiplist::SkipListRevIter<'a>),
-    Collected(std::vec::IntoIter<(OrderedFloat<f64>, &'a Bytes)>),
-}
-
-impl<'a> Iterator for ScoreIndexRevIter<'a> {
-    type Item = (OrderedFloat<f64>, &'a Bytes);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            ScoreIndexRevIter::BTree(it) => it.next().map(|((s, m), _)| (*s, m)),
-            ScoreIndexRevIter::BTreeRange(it) => it.next().map(|((s, m), _)| (*s, m)),
-            ScoreIndexRevIter::SkipList(it) => it.next(),
-            ScoreIndexRevIter::Collected(it) => it.next(),
-        }
-    }
-}
-
-/// Sorted set value with dual indexing for O(1) score lookup and O(log n) range queries.
+/// Sorted set value with O(1) score lookup and O(log n) rank/range queries.
+///
+/// Member bytes are stored once in `store`; `entries` is a slot-stable table
+/// (freed slots are recycled, live slots never move) owning each member's
+/// handle, `index` maps member bytes to a slot for O(1) lookup, and `list`
+/// orders slots by (score, member-lex). Skip list comparisons resolve slots
+/// to bytes through `entries` + `store` at operation time, so the whole value
+/// stays a plain owned struct that moves between shards.
 #[derive(Debug, Clone)]
 pub struct SortedSetValue {
-    /// O(1) lookup: member -> score
-    members: HashMap<Bytes, f64>,
-    /// Ordered index for range queries (BTreeMap or SkipList).
-    index: ScoreIndex,
+    store: BlockStore,
+    entries: Vec<Option<MemberEntry>>,
+    /// Recycled entry slots.
+    free: Vec<u32>,
+    /// member bytes -> slot.
+    index: HashTable<u32>,
+    hasher: RandomState,
+    list: SkipList,
 }
 
 impl Default for SortedSetValue {
@@ -438,38 +141,140 @@ impl Default for SortedSetValue {
     }
 }
 
+/// Build a slot→bytes resolver over split borrows of the store and entry
+/// table, for handing to skip list operations while `list` is borrowed
+/// mutably.
+fn resolver<'a>(
+    store: &'a BlockStore,
+    entries: &'a [Option<MemberEntry>],
+) -> impl Fn(u32) -> &'a [u8] {
+    move |slot| {
+        let entry = entries[slot as usize].as_ref().expect("live slot");
+        store.get(entry.handle)
+    }
+}
+
 impl SortedSetValue {
-    /// Create a new empty sorted set using the configured default backend.
+    /// Create a new empty sorted set.
     pub fn new() -> Self {
         Self {
-            members: HashMap::new(),
-            index: ScoreIndex::new(default_score_index_backend()),
-        }
-    }
-
-    /// Create a new empty sorted set with a specific backend.
-    pub fn with_backend(backend: ScoreIndexBackend) -> Self {
-        Self {
-            members: HashMap::new(),
-            index: ScoreIndex::new(backend),
+            store: BlockStore::new(),
+            entries: Vec::new(),
+            free: Vec::new(),
+            index: HashTable::new(),
+            hasher: RandomState::new(),
+            list: SkipList::new(),
         }
     }
 
     /// Get the number of members.
     pub fn len(&self) -> usize {
-        self.members.len()
+        self.list.len()
     }
 
     /// Check if the set is empty.
     pub fn is_empty(&self) -> bool {
-        self.members.is_empty()
+        self.list.is_empty()
+    }
+
+    #[inline]
+    fn member_at(&self, slot: u32) -> &[u8] {
+        let entry = self.entries[slot as usize].as_ref().expect("live slot");
+        self.store.get(entry.handle)
+    }
+
+    #[inline]
+    fn bytes_at(&self, slot: u32) -> Bytes {
+        Bytes::copy_from_slice(self.member_at(slot))
+    }
+
+    #[inline]
+    fn score_at(&self, slot: u32) -> f64 {
+        self.entries[slot as usize]
+            .as_ref()
+            .expect("live slot")
+            .score
+    }
+
+    fn find_slot(&self, member: &[u8]) -> Option<u32> {
+        let hash = self.hasher.hash_one(member);
+        self.index
+            .find(hash, |&slot| self.member_at(slot) == member)
+            .copied()
+    }
+
+    /// Append the member's bytes, claim a slot, and index it. The caller
+    /// inserts the slot into the skip list.
+    fn alloc_member(&mut self, member: &[u8], score: f64) -> u32 {
+        let handle = self.store.append(&[member]);
+        let entry = Some(MemberEntry { handle, score });
+        let slot = match self.free.pop() {
+            Some(slot) => {
+                self.entries[slot as usize] = entry;
+                slot
+            }
+            None => {
+                self.entries.push(entry);
+                (self.entries.len() - 1) as u32
+            }
+        };
+        let hash = self.hasher.hash_one(member);
+        let (entries, store, hasher) = (&self.entries, &self.store, &self.hasher);
+        self.index.insert_unique(hash, slot, |&s| {
+            let entry = entries[s as usize].as_ref().expect("live slot");
+            hasher.hash_one(store.get(entry.handle))
+        });
+        slot
+    }
+
+    /// Drop a member's table row, index entry, and block bytes. The caller
+    /// has already removed the slot from the skip list.
+    fn release_member(&mut self, slot: u32, member: &[u8]) {
+        let hash = self.hasher.hash_one(member);
+        match self.index.find_entry(hash, |&s| s == slot) {
+            Ok(occupied) => {
+                occupied.remove();
+            }
+            Err(_) => unreachable!("live slot is indexed"),
+        }
+        let entry = self.entries[slot as usize].take().expect("live slot");
+        self.store.remove(entry.handle);
+        self.free.push(slot);
+        self.maybe_compact();
+    }
+
+    fn maybe_compact(&mut self) {
+        if self.store.should_compact() {
+            self.store
+                .compact(self.entries.iter_mut().flatten().map(|e| &mut e.handle));
+        }
+    }
+
+    /// Move an existing member to a new score in the skip list.
+    fn reinsert(&mut self, slot: u32, member: &[u8], old_score: f64, new_score: f64) {
+        {
+            let Self {
+                store,
+                entries,
+                list,
+                ..
+            } = &mut *self;
+            let resolve = resolver(store, entries);
+            list.remove(OrderedFloat(old_score), member, &resolve);
+            list.insert(OrderedFloat(new_score), slot, member, &resolve);
+        }
+        self.entries[slot as usize]
+            .as_mut()
+            .expect("live slot")
+            .score = new_score;
     }
 
     /// Add or update a member with a score.
     ///
     /// Returns information about what changed.
     pub fn add(&mut self, member: Bytes, score: f64) -> ZAddResult {
-        if let Some(&old_score) = self.members.get(&member) {
+        if let Some(slot) = self.find_slot(&member) {
+            let old_score = self.score_at(slot);
             if (old_score - score).abs() < f64::EPSILON
                 || (old_score.is_nan() && score.is_nan())
                 || (old_score == score)
@@ -481,19 +286,21 @@ impl SortedSetValue {
                     old_score: Some(old_score),
                 };
             }
-            // Remove old entry from index, insert new entry
-            self.index.remove(OrderedFloat(old_score), &member);
-            self.index.insert(OrderedFloat(score), member.clone());
-            self.members.insert(member, score);
+            self.reinsert(slot, &member, old_score, score);
             ZAddResult {
                 added: false,
                 changed: true,
                 old_score: Some(old_score),
             }
         } else {
-            // New member: insert into index first (needs clone), then move into members
-            self.index.insert(OrderedFloat(score), member.clone());
-            self.members.insert(member, score);
+            let slot = self.alloc_member(&member, score);
+            let Self {
+                store,
+                entries,
+                list,
+                ..
+            } = self;
+            list.insert(OrderedFloat(score), slot, &member, resolver(store, entries));
             ZAddResult {
                 added: true,
                 changed: false,
@@ -506,28 +313,38 @@ impl SortedSetValue {
     ///
     /// Returns the score if the member existed.
     pub fn remove(&mut self, member: &[u8]) -> Option<f64> {
-        if let Some((member_key, score)) = self.members.remove_entry(member) {
-            self.index.remove(OrderedFloat(score), &member_key);
-            Some(score)
-        } else {
-            None
-        }
+        let slot = self.find_slot(member)?;
+        let score = self.score_at(slot);
+        let Self {
+            store,
+            entries,
+            list,
+            ..
+        } = self;
+        list.remove(OrderedFloat(score), member, resolver(store, entries));
+        self.release_member(slot, member);
+        Some(score)
     }
 
     /// Get the score of a member.
     pub fn get_score(&self, member: &[u8]) -> Option<f64> {
-        self.members.get(member).copied()
+        self.find_slot(member).map(|slot| self.score_at(slot))
     }
 
     /// Check if a member exists.
     pub fn contains(&self, member: &[u8]) -> bool {
-        self.members.contains_key(member)
+        self.find_slot(member).is_some()
     }
 
     /// Get the 0-based rank of a member (ascending by score).
     pub fn rank(&self, member: &[u8]) -> Option<usize> {
-        let (member_key, &score) = self.members.get_key_value(member)?;
-        self.index.rank(OrderedFloat(score), member_key)
+        let slot = self.find_slot(member)?;
+        let score = self.score_at(slot);
+        self.list.rank(
+            OrderedFloat(score),
+            member,
+            resolver(&self.store, &self.entries),
+        )
     }
 
     /// Get the 0-based rank of a member (descending by score).
@@ -545,21 +362,31 @@ impl SortedSetValue {
     /// Redis and is not an error — only NaN is rejected, and rejection leaves
     /// the set untouched (checked before any mutation).
     pub fn incr(&mut self, member: Bytes, increment: f64) -> Result<f64, IncrementError> {
-        let existing = self.members.get(&member).copied();
-        let old_score = existing.unwrap_or(0.0);
+        let existing = self.find_slot(&member);
+        let old_score = existing.map(|slot| self.score_at(slot)).unwrap_or(0.0);
         let new_score = old_score + increment;
 
         if new_score.is_nan() {
             return Err(IncrementError::ScoreNotANumber);
         }
 
-        if existing.is_some() {
-            self.index.remove(OrderedFloat(old_score), &member);
-            self.index.insert(OrderedFloat(new_score), member.clone());
-            self.members.insert(member, new_score);
-        } else {
-            self.members.insert(member.clone(), new_score);
-            self.index.insert(OrderedFloat(new_score), member);
+        match existing {
+            Some(slot) => self.reinsert(slot, &member, old_score, new_score),
+            None => {
+                let slot = self.alloc_member(&member, new_score);
+                let Self {
+                    store,
+                    entries,
+                    list,
+                    ..
+                } = self;
+                list.insert(
+                    OrderedFloat(new_score),
+                    slot,
+                    &member,
+                    resolver(store, entries),
+                );
+            }
         }
 
         Ok(new_score)
@@ -569,44 +396,37 @@ impl SortedSetValue {
     ///
     /// `start` and `end` are 0-based indices. Negative indices count from the end.
     pub fn range_by_rank(&self, start: i64, end: i64) -> Vec<(Bytes, f64)> {
-        let len = self.len() as i64;
-        if len == 0 {
+        let Some((start, count)) = self.clamp_rank_range(start, end) else {
             return vec![];
-        }
-
-        // Convert negative indices
-        let start = if start < 0 {
-            (len + start).max(0) as usize
-        } else {
-            start.min(len) as usize
         };
-
-        let end = if end < 0 {
-            (len + end).max(-1)
-        } else {
-            end.min(len - 1)
-        };
-
-        if end < 0 || start > end as usize {
-            return vec![];
-        }
-
-        let end = end as usize;
-
-        self.index
-            .range_by_rank_iter(start, end - start + 1)
-            .map(|(score, member)| (member.clone(), score.0))
+        self.list
+            .range_by_rank_iter(start)
+            .take(count)
+            .map(|(score, slot)| (self.bytes_at(slot), score.0))
             .collect()
     }
 
     /// Get members by rank range in reverse order (descending by score).
     pub fn rev_range_by_rank(&self, start: i64, end: i64) -> Vec<(Bytes, f64)> {
+        let Some((start, count)) = self.clamp_rank_range(start, end) else {
+            return vec![];
+        };
+        self.list
+            .rev_iter()
+            .skip(start)
+            .take(count)
+            .map(|(score, slot)| (self.bytes_at(slot), score.0))
+            .collect()
+    }
+
+    /// Clamp a Redis-style (start, end) rank pair (negative = from the end)
+    /// to a (start, count) window, or None when the window is empty.
+    fn clamp_rank_range(&self, start: i64, end: i64) -> Option<(usize, usize)> {
         let len = self.len() as i64;
         if len == 0 {
-            return vec![];
+            return None;
         }
 
-        // Convert negative indices
         let start = if start < 0 {
             (len + start).max(0) as usize
         } else {
@@ -620,17 +440,31 @@ impl SortedSetValue {
         };
 
         if end < 0 || start > end as usize {
-            return vec![];
+            return None;
         }
 
-        let end = end as usize;
+        Some((start, end as usize - start + 1))
+    }
 
-        self.index
-            .rev_iter()
-            .skip(start)
-            .take(end - start + 1)
-            .map(|(score, member)| (member.clone(), score.0))
-            .collect()
+    /// Iterate (score, slot) pairs inside a score range, or None when the
+    /// bounds are degenerate (min = +inf or max = -inf).
+    fn score_range_iter(&self, min: &ScoreBound, max: &ScoreBound) -> BoundedScoreIter<'_> {
+        let (min_score, min_inclusive) = match min {
+            ScoreBound::NegInf => (OrderedFloat(f64::NEG_INFINITY), true),
+            ScoreBound::PosInf => return BoundedScoreIter::empty(),
+            ScoreBound::Inclusive(v) => (OrderedFloat(*v), true),
+            ScoreBound::Exclusive(v) => (OrderedFloat(*v), false),
+        };
+        let max_score = match max {
+            ScoreBound::PosInf => None,
+            ScoreBound::NegInf => return BoundedScoreIter::empty(),
+            ScoreBound::Inclusive(v) => Some((OrderedFloat(*v), true)),
+            ScoreBound::Exclusive(v) => Some((OrderedFloat(*v), false)),
+        };
+        BoundedScoreIter {
+            inner: Some(self.list.range_by_score(min_score, min_inclusive)),
+            max_score,
+        }
     }
 
     /// Get members by score range.
@@ -641,15 +475,11 @@ impl SortedSetValue {
         offset: usize,
         count: Option<usize>,
     ) -> Vec<(Bytes, f64)> {
-        let iter = self.index.range_by_score_iter(min, max).skip(offset);
-
-        if let Some(count) = count {
-            iter.take(count)
-                .map(|(score, member)| (member.clone(), score.0))
-                .collect()
-        } else {
-            iter.map(|(score, member)| (member.clone(), score.0))
-                .collect()
+        let iter = self.score_range_iter(min, max).skip(offset);
+        let iter = iter.map(|(score, slot)| (self.bytes_at(slot), score.0));
+        match count {
+            Some(count) => iter.take(count).collect(),
+            None => iter.collect(),
         }
     }
 
@@ -661,15 +491,18 @@ impl SortedSetValue {
         offset: usize,
         count: Option<usize>,
     ) -> Vec<(Bytes, f64)> {
-        let iter = self.index.rev_range_by_score_iter(min, max).skip(offset);
-
-        if let Some(count) = count {
-            iter.take(count)
-                .map(|(score, member)| (member.clone(), score.0))
-                .collect()
-        } else {
-            iter.map(|(score, member)| (member.clone(), score.0))
-                .collect()
+        // Collect the forward range and walk it backwards; a reverse
+        // score-bounded skip list iterator would avoid the collect but this
+        // matches the previous implementation's complexity.
+        let in_range: Vec<(OrderedFloat<f64>, u32)> = self.score_range_iter(min, max).collect();
+        let iter = in_range
+            .into_iter()
+            .rev()
+            .skip(offset)
+            .map(|(score, slot)| (self.bytes_at(slot), score.0));
+        match count {
+            Some(count) => iter.take(count).collect(),
+            None => iter.collect(),
         }
     }
 
@@ -681,21 +514,21 @@ impl SortedSetValue {
         offset: usize,
         count: Option<usize>,
     ) -> Vec<(Bytes, f64)> {
-        // For lex range, we iterate in (score, member) order
-        // This naturally gives us lexicographic order for same scores
+        // Iteration is in (score, member) order, which is lexicographic for
+        // same scores. Bounds are checked on borrowed bytes; only kept
+        // members materialize.
         let iter = self
-            .index
+            .list
             .iter()
-            .filter(|(_, member)| min.satisfies_min(member) && max.satisfies_max(member))
-            .skip(offset);
-
-        if let Some(count) = count {
-            iter.take(count)
-                .map(|(score, member)| (member.clone(), score.0))
-                .collect()
-        } else {
-            iter.map(|(score, member)| (member.clone(), score.0))
-                .collect()
+            .filter(|&(_, slot)| {
+                let member = self.member_at(slot);
+                min.satisfies_min(member) && max.satisfies_max(member)
+            })
+            .skip(offset)
+            .map(|(score, slot)| (self.bytes_at(slot), score.0));
+        match count {
+            Some(count) => iter.take(count).collect(),
+            None => iter.collect(),
         }
     }
 
@@ -708,31 +541,33 @@ impl SortedSetValue {
         count: Option<usize>,
     ) -> Vec<(Bytes, f64)> {
         let iter = self
-            .index
+            .list
             .rev_iter()
-            .filter(|(_, member)| min.satisfies_min(member) && max.satisfies_max(member))
-            .skip(offset);
-
-        if let Some(count) = count {
-            iter.take(count)
-                .map(|(score, member)| (member.clone(), score.0))
-                .collect()
-        } else {
-            iter.map(|(score, member)| (member.clone(), score.0))
-                .collect()
+            .filter(|&(_, slot)| {
+                let member = self.member_at(slot);
+                min.satisfies_min(member) && max.satisfies_max(member)
+            })
+            .skip(offset)
+            .map(|(score, slot)| (self.bytes_at(slot), score.0));
+        match count {
+            Some(count) => iter.take(count).collect(),
+            None => iter.collect(),
         }
     }
 
     /// Count members in score range.
     pub fn count_by_score(&self, min: &ScoreBound, max: &ScoreBound) -> usize {
-        self.index.range_by_score_iter(min, max).count()
+        self.score_range_iter(min, max).count()
     }
 
     /// Count members in lex range.
     pub fn count_by_lex(&self, min: &LexBound, max: &LexBound) -> usize {
-        self.index
+        self.list
             .iter()
-            .filter(|(_, member)| min.satisfies_min(member) && max.satisfies_max(member))
+            .filter(|&(_, slot)| {
+                let member = self.member_at(slot);
+                min.satisfies_min(member) && max.satisfies_max(member)
+            })
             .count()
     }
 
@@ -740,12 +575,12 @@ impl SortedSetValue {
     pub fn pop_min(&mut self, count: usize) -> Vec<(Bytes, f64)> {
         let mut result = Vec::with_capacity(count.min(self.len()));
         for _ in 0..count {
-            if let Some((score, member)) = self.index.pop_first() {
-                self.members.remove(&member);
-                result.push((member, score.0));
-            } else {
+            let Some((score, slot)) = self.list.pop_first() else {
                 break;
-            }
+            };
+            let member = self.bytes_at(slot);
+            self.release_member(slot, &member);
+            result.push((member, score.0));
         }
         result
     }
@@ -754,12 +589,21 @@ impl SortedSetValue {
     pub fn pop_max(&mut self, count: usize) -> Vec<(Bytes, f64)> {
         let mut result = Vec::with_capacity(count.min(self.len()));
         for _ in 0..count {
-            if let Some((score, member)) = self.index.pop_last() {
-                self.members.remove(&member);
-                result.push((member, score.0));
-            } else {
+            let popped = {
+                let Self {
+                    store,
+                    entries,
+                    list,
+                    ..
+                } = &mut *self;
+                list.pop_last(resolver(store, entries))
+            };
+            let Some((score, slot)) = popped else {
                 break;
-            }
+            };
+            let member = self.bytes_at(slot);
+            self.release_member(slot, &member);
+            result.push((member, score.0));
         }
         result
     }
@@ -768,39 +612,19 @@ impl SortedSetValue {
     ///
     /// Returns the number of members removed.
     pub fn remove_range_by_rank(&mut self, start: i64, end: i64) -> usize {
-        let len = self.len() as i64;
-        if len == 0 {
-            return 0;
-        }
-
-        let start = if start < 0 {
-            (len + start).max(0) as usize
-        } else {
-            start.min(len) as usize
+        let to_remove: Vec<Bytes> = {
+            let Some((start, count)) = self.clamp_rank_range(start, end) else {
+                return 0;
+            };
+            self.list
+                .range_by_rank_iter(start)
+                .take(count)
+                .map(|(_, slot)| self.bytes_at(slot))
+                .collect()
         };
-
-        let end = if end < 0 {
-            (len + end).max(-1)
-        } else {
-            end.min(len - 1)
-        };
-
-        if end < 0 || start > end as usize {
-            return 0;
-        }
-
-        let end = end as usize;
-
-        let to_remove: Vec<_> = self
-            .index
-            .range_by_rank_iter(start, end - start + 1)
-            .map(|(score, member)| (score, member.clone()))
-            .collect();
-
         let count = to_remove.len();
-        for (score, member) in to_remove {
-            self.index.remove(score, &member);
-            self.members.remove(&member);
+        for member in to_remove {
+            self.remove(&member);
         }
         count
     }
@@ -809,16 +633,13 @@ impl SortedSetValue {
     ///
     /// Returns the number of members removed.
     pub fn remove_range_by_score(&mut self, min: &ScoreBound, max: &ScoreBound) -> usize {
-        let to_remove: Vec<_> = self
-            .index
-            .range_by_score_iter(min, max)
-            .map(|(score, member)| (score, member.clone()))
+        let to_remove: Vec<Bytes> = self
+            .score_range_iter(min, max)
+            .map(|(_, slot)| self.bytes_at(slot))
             .collect();
-
         let count = to_remove.len();
-        for (score, member) in to_remove {
-            self.index.remove(score, &member);
-            self.members.remove(&member);
+        for member in to_remove {
+            self.remove(&member);
         }
         count
     }
@@ -827,17 +648,18 @@ impl SortedSetValue {
     ///
     /// Returns the number of members removed.
     pub fn remove_range_by_lex(&mut self, min: &LexBound, max: &LexBound) -> usize {
-        let to_remove: Vec<_> = self
-            .index
+        let to_remove: Vec<Bytes> = self
+            .list
             .iter()
-            .filter(|(_, member)| min.satisfies_min(member) && max.satisfies_max(member))
-            .map(|(score, member)| (score, member.clone()))
+            .filter(|&(_, slot)| {
+                let member = self.member_at(slot);
+                min.satisfies_min(member) && max.satisfies_max(member)
+            })
+            .map(|(_, slot)| self.bytes_at(slot))
             .collect();
-
         let count = to_remove.len();
-        for (score, member) in to_remove {
-            self.index.remove(score, &member);
-            self.members.remove(&member);
+        for member in to_remove {
+            self.remove(&member);
         }
         count
     }
@@ -858,56 +680,382 @@ impl SortedSetValue {
         if count > 0 {
             // Return unique members (no duplicates), up to self.len()
             let count = (count as usize).min(self.len());
-            self.index
+            self.list
                 .iter()
                 .sample(&mut rng, count)
                 .into_iter()
-                .map(|(score, member)| (member.clone(), score.0))
+                .map(|(score, slot)| (self.bytes_at(slot), score.0))
                 .collect()
         } else {
             // Allow duplicates: pick randomly with replacement
-            let members: Vec<_> = self
-                .index
-                .iter()
-                .map(|(score, member)| (member, score.0))
-                .collect();
+            let slots: Vec<(OrderedFloat<f64>, u32)> = self.list.iter().collect();
             let n = (-count) as usize;
             let mut result = Vec::with_capacity(n);
             for _ in 0..n {
-                let idx = rng.random_range(0..members.len());
-                let (member, score) = members[idx];
-                result.push((member.clone(), score));
+                let (score, slot) = slots[rng.random_range(0..slots.len())];
+                result.push((self.bytes_at(slot), score.0));
             }
             result
         }
     }
 
     /// Calculate approximate memory size.
+    ///
+    /// Derived only from block allocation sizes, table capacities, and the
+    /// deterministic skip list structure — the same op history always reports
+    /// the same size (the memory-conservation checker depends on this).
     pub fn memory_size(&self) -> usize {
-        let base_size = std::mem::size_of::<Self>();
-
-        // HashMap overhead + entries
-        let members_size: usize = self
-            .members
-            .keys()
-            .map(|k| k.len() + std::mem::size_of::<f64>() + 32) // 32 for HashMap node overhead
-            .sum();
-
-        let index_size = self.index.memory_size();
-
-        base_size + members_size + index_size
+        std::mem::size_of::<Self>()
+            + self.store.allocated_bytes()
+            + self.entries.capacity() * std::mem::size_of::<Option<MemberEntry>>()
+            + self.free.capacity() * std::mem::size_of::<u32>()
+            // Index: one u32 slot plus ~1 control byte per capacity slot.
+            + self.index.capacity() * (std::mem::size_of::<u32>() + 1)
+            + self.list.memory_size()
     }
 
     /// Iterate over all members in score order.
-    pub fn iter(&self) -> impl Iterator<Item = (&Bytes, f64)> + '_ {
-        self.index.iter().map(|(score, member)| (member, score.0))
+    pub fn iter(&self) -> impl Iterator<Item = (Bytes, f64)> + '_ {
+        self.list
+            .iter()
+            .map(|(score, slot)| (self.bytes_at(slot), score.0))
     }
 
     /// Get all members and scores as a vec for serialization.
     pub fn to_vec(&self) -> Vec<(Bytes, f64)> {
-        self.index
-            .iter()
-            .map(|(score, member)| (member.clone(), score.0))
+        self.iter().collect()
+    }
+}
+
+/// Forward iterator over (score, slot) pairs inside a score range.
+struct BoundedScoreIter<'a> {
+    /// None = statically empty range (degenerate bounds).
+    inner: Option<SkipListIter<'a>>,
+    /// Upper bound as (score, inclusive); None = unbounded.
+    max_score: Option<(OrderedFloat<f64>, bool)>,
+}
+
+impl BoundedScoreIter<'_> {
+    fn empty() -> Self {
+        Self {
+            inner: None,
+            max_score: None,
+        }
+    }
+}
+
+impl Iterator for BoundedScoreIter<'_> {
+    type Item = (OrderedFloat<f64>, u32);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (score, slot) = self.inner.as_mut()?.next()?;
+        if let Some((max, inclusive)) = self.max_score {
+            let past = if inclusive { score > max } else { score >= max };
+            if past {
+                self.inner = None;
+                return None;
+            }
+        }
+        Some((score, slot))
+    }
+}
+
+#[cfg(test)]
+mod block_form_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn b(s: &str) -> Bytes {
+        Bytes::copy_from_slice(s.as_bytes())
+    }
+
+    /// Model key ordered the way the zset orders: (score, member).
+    type ModelKey = (OrderedFloat<f64>, Vec<u8>);
+
+    fn model_contents(model: &BTreeMap<ModelKey, ()>) -> Vec<(Bytes, f64)> {
+        model
+            .keys()
+            .map(|(s, m)| (Bytes::copy_from_slice(m), s.0))
             .collect()
+    }
+
+    #[test]
+    fn add_update_remove_roundtrip() {
+        let mut z = SortedSetValue::new();
+        assert!(z.add(b("alice"), 3.0).added);
+        assert!(z.add(b("bob"), 1.0).added);
+        assert!(z.add(b("carol"), 2.0).added);
+        assert_eq!(z.len(), 3);
+
+        // Update moves the member, does not add.
+        let res = z.add(b("alice"), 0.5);
+        assert!(!res.added);
+        assert!(res.changed);
+        assert_eq!(res.old_score, Some(3.0));
+
+        assert_eq!(
+            z.to_vec(),
+            vec![(b("alice"), 0.5), (b("bob"), 1.0), (b("carol"), 2.0)]
+        );
+        assert_eq!(z.rank(b"alice"), Some(0));
+        assert_eq!(z.rev_rank(b"alice"), Some(2));
+        assert_eq!(z.get_score(b"carol"), Some(2.0));
+
+        assert_eq!(z.remove(b"bob"), Some(1.0));
+        assert_eq!(z.remove(b"bob"), None);
+        assert_eq!(z.len(), 2);
+        assert!(!z.contains(b"bob"));
+    }
+
+    #[test]
+    fn churn_bounds_memory_and_preserves_contents() {
+        let mut z = SortedSetValue::new();
+        // Working set of 64 members with growing byte lengths per round so
+        // every update churns block bytes (member re-added under a moved
+        // score keeps its bytes; removal + reinsert churns them).
+        for round in 0..50usize {
+            for i in 0..64u32 {
+                let member = Bytes::from(format!("member-{i}-{}", "x".repeat(round * 7 % 200)));
+                z.add(member.clone(), i as f64);
+                z.remove(&member);
+            }
+        }
+        assert!(z.is_empty());
+        // All bytes were released and blocks recycled: an empty set reports
+        // a small footprint, not the churn peak.
+        assert!(
+            z.memory_size() < 64 * 1024,
+            "memory_size {} after full churn",
+            z.memory_size()
+        );
+
+        // Refill and verify contents are exact.
+        for i in 0..64u32 {
+            z.add(Bytes::from(format!("m{i:02}")), i as f64);
+        }
+        let got = z.to_vec();
+        assert_eq!(got.len(), 64);
+        for (i, (member, score)) in got.iter().enumerate() {
+            assert_eq!(member.as_ref(), format!("m{i:02}").as_bytes());
+            assert_eq!(*score, i as f64);
+        }
+    }
+
+    /// Same op history → same reported size, across separate values (each
+    /// with its own RandomState). Insert-and-update histories are fully
+    /// deterministic: block sizes, entry/free capacities, and skip list
+    /// levels (seeded RNG) don't depend on hash values, and the index grows
+    /// purely by len. Removal churn is excluded on purpose: hashbrown's
+    /// tombstone reuse is hash-dependent, so the index *capacity* after
+    /// interleaved remove/insert can differ by a few slots between hasher
+    /// instances — the same tradeoff BlockHash and BlockSet accepted for
+    /// keeping a HashDoS-resistant per-value random seed.
+    #[test]
+    fn memory_size_is_run_stable() {
+        let run = || {
+            let mut z = SortedSetValue::new();
+            for i in 0..500u32 {
+                z.add(Bytes::from(format!("member-{i:04}")), (i % 37) as f64);
+            }
+            // Score updates reorder the skip list without touching the index.
+            for i in (0..500u32).step_by(3) {
+                z.add(Bytes::from(format!("member-{i:04}")), -(i as f64));
+            }
+            for i in 500..600u32 {
+                z.incr(Bytes::from(format!("member-{i:04}")), i as f64)
+                    .unwrap();
+            }
+            z.memory_size()
+        };
+        assert_eq!(run(), run());
+    }
+
+    /// Model-based fuzz: the block-backed zset must agree with a
+    /// BTreeMap-ordered model under random ops, across compaction.
+    #[derive(Debug, Clone)]
+    enum Op {
+        Add(u8, i16, u8),
+        Remove(u8),
+        IncrBy(u8, i16),
+        PopMin(u8),
+        PopMax(u8),
+        Probe(u8),
+        RangeByScore(i16, i16),
+        RangeByRank(i8, i8),
+    }
+
+    use proptest::prelude::*;
+
+    fn op_strategy() -> impl Strategy<Value = Op> {
+        prop_oneof![
+            (any::<u8>(), any::<i16>(), any::<u8>()).prop_map(|(m, s, pad)| Op::Add(m, s, pad)),
+            any::<u8>().prop_map(Op::Remove),
+            (any::<u8>(), any::<i16>()).prop_map(|(m, d)| Op::IncrBy(m, d)),
+            (0u8..4).prop_map(Op::PopMin),
+            (0u8..4).prop_map(Op::PopMax),
+            any::<u8>().prop_map(Op::Probe),
+            (any::<i16>(), any::<i16>()).prop_map(|(a, b)| Op::RangeByScore(a, b)),
+            (any::<i8>(), any::<i8>()).prop_map(|(a, b)| Op::RangeByRank(a, b)),
+        ]
+    }
+
+    /// Member name for id `m`, padded so block churn crosses block
+    /// boundaries and forces compaction under removal-heavy sequences.
+    fn member_name(m: u8, pad: u8) -> Vec<u8> {
+        let mut name = format!("member-{m:03}").into_bytes();
+        name.extend(std::iter::repeat_n(b'p', pad as usize));
+        name
+    }
+
+    proptest! {
+        #[test]
+        fn matches_btreemap_model(ops in proptest::collection::vec(op_strategy(), 1..300)) {
+            let mut z = SortedSetValue::new();
+            // model: (score, member) -> (), plus member -> (score, pad) lookup
+            let mut model: BTreeMap<ModelKey, ()> = BTreeMap::new();
+            let mut by_member: BTreeMap<u8, (f64, u8)> = BTreeMap::new();
+
+            for op in ops {
+                match op {
+                    Op::Add(m, s, pad) => {
+                        // A member id keeps its first pad so names stay stable.
+                        let pad = by_member.get(&m).map(|&(_, p)| p).unwrap_or(pad);
+                        let name = member_name(m, pad);
+                        let score = s as f64;
+                        let res = z.add(Bytes::from(name.clone()), score);
+                        let old = by_member.insert(m, (score, pad));
+                        match old {
+                            None => prop_assert!(res.added),
+                            Some((old_score, _)) => {
+                                prop_assert!(!res.added);
+                                prop_assert_eq!(res.old_score, Some(old_score));
+                                model.remove(&(OrderedFloat(old_score), name.clone()));
+                            }
+                        }
+                        model.insert((OrderedFloat(score), name), ());
+                    }
+                    Op::Remove(m) => {
+                        let Some(&(score, pad)) = by_member.get(&m) else {
+                            prop_assert_eq!(z.remove(&member_name(m, 0)), None);
+                            continue;
+                        };
+                        let name = member_name(m, pad);
+                        prop_assert_eq!(z.remove(&name), Some(score));
+                        by_member.remove(&m);
+                        model.remove(&(OrderedFloat(score), name));
+                    }
+                    Op::IncrBy(m, d) => {
+                        let pad = by_member.get(&m).map(|&(_, p)| p).unwrap_or(0);
+                        let name = member_name(m, pad);
+                        let old = by_member.get(&m).map(|&(s, _)| s).unwrap_or(0.0);
+                        let new_score = old + d as f64;
+                        prop_assert_eq!(z.incr(Bytes::from(name.clone()), d as f64), Ok(new_score));
+                        if by_member.contains_key(&m) {
+                            model.remove(&(OrderedFloat(old), name.clone()));
+                        }
+                        by_member.insert(m, (new_score, pad));
+                        model.insert((OrderedFloat(new_score), name), ());
+                    }
+                    Op::PopMin(n) => {
+                        let expected: Vec<(Bytes, f64)> = model
+                            .keys()
+                            .take(n as usize)
+                            .map(|(s, m)| (Bytes::copy_from_slice(m), s.0))
+                            .collect();
+                        let got = z.pop_min(n as usize);
+                        prop_assert_eq!(&got, &expected);
+                        for (member, score) in &got {
+                            model.remove(&(OrderedFloat(*score), member.to_vec()));
+                            by_member.retain(|&id, &mut (_, p)| {
+                                member_name(id, p) != member.as_ref()
+                            });
+                        }
+                    }
+                    Op::PopMax(n) => {
+                        let expected: Vec<(Bytes, f64)> = model
+                            .keys()
+                            .rev()
+                            .take(n as usize)
+                            .map(|(s, m)| (Bytes::copy_from_slice(m), s.0))
+                            .collect();
+                        let got = z.pop_max(n as usize);
+                        prop_assert_eq!(&got, &expected);
+                        for (member, score) in &got {
+                            model.remove(&(OrderedFloat(*score), member.to_vec()));
+                            by_member.retain(|&id, &mut (_, p)| {
+                                member_name(id, p) != member.as_ref()
+                            });
+                        }
+                    }
+                    Op::Probe(m) => {
+                        match by_member.get(&m) {
+                            Some(&(score, pad)) => {
+                                let name = member_name(m, pad);
+                                prop_assert_eq!(z.get_score(&name), Some(score));
+                                prop_assert!(z.contains(&name));
+                                let expect_rank =
+                                    model.range(..(OrderedFloat(score), name.clone())).count();
+                                prop_assert_eq!(z.rank(&name), Some(expect_rank));
+                            }
+                            None => {
+                                let name = member_name(m, 0);
+                                if !by_member.values().any(|&(_, p)| p == 0) {
+                                    prop_assert_eq!(z.get_score(&name), None);
+                                    prop_assert_eq!(z.rank(&name), None);
+                                }
+                            }
+                        }
+                    }
+                    Op::RangeByScore(a, bnd) => {
+                        let (lo, hi) = (a.min(bnd) as f64, a.max(bnd) as f64);
+                        let got = z.range_by_score(
+                            &ScoreBound::Inclusive(lo),
+                            &ScoreBound::Inclusive(hi),
+                            0,
+                            None,
+                        );
+                        let want: Vec<(Bytes, f64)> = model
+                            .keys()
+                            .filter(|(s, _)| s.0 >= lo && s.0 <= hi)
+                            .map(|(s, m)| (Bytes::copy_from_slice(m), s.0))
+                            .collect();
+                        prop_assert_eq!(got, want);
+                        prop_assert_eq!(
+                            z.count_by_score(
+                                &ScoreBound::Inclusive(lo),
+                                &ScoreBound::Inclusive(hi)
+                            ),
+                            model.keys().filter(|(s, _)| s.0 >= lo && s.0 <= hi).count()
+                        );
+                    }
+                    Op::RangeByRank(a, bnd) => {
+                        let got = z.range_by_rank(a as i64, bnd as i64);
+                        let all = model_contents(&model);
+                        let len = all.len() as i64;
+                        let start = if (a as i64) < 0 {
+                            (len + a as i64).max(0)
+                        } else {
+                            (a as i64).min(len)
+                        } as usize;
+                        let end = if (bnd as i64) < 0 {
+                            (len + bnd as i64).max(-1)
+                        } else {
+                            (bnd as i64).min(len - 1)
+                        };
+                        let want: Vec<(Bytes, f64)> = if len == 0 || end < 0 || start > end as usize
+                        {
+                            vec![]
+                        } else {
+                            all[start..=end as usize].to_vec()
+                        };
+                        prop_assert_eq!(got, want);
+                    }
+                }
+                prop_assert_eq!(z.len(), model.len());
+            }
+
+            // Full-state agreement at the end of every sequence.
+            prop_assert_eq!(z.to_vec(), model_contents(&model));
+        }
     }
 }

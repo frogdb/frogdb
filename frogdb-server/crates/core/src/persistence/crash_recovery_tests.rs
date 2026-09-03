@@ -755,10 +755,10 @@ mod recovery_correctness {
         assert_eq!(expiry_index.len(), 2);
     }
 
-    /// Test 3.4: Sorted set BTree index is rebuilt.
+    /// Test 3.4: Sorted set score index is rebuilt.
     ///
     /// After recovery, sorted set operations like ZRANK and ZRANGE
-    /// should work correctly (BTree rebuilt from stored data).
+    /// should work correctly (score index rebuilt from stored data).
     #[test]
     fn test_sorted_set_index_rebuilt() {
         let mut harness = CrashTestHarness::new();

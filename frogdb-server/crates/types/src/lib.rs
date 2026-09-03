@@ -72,10 +72,9 @@ pub use types::{
     BlockingOp, ClaimClock, ClaimOpts, Consumer, ConsumerGroup, DeleteRefStrategy, Direction,
     EsAppendError, Expiry, HashValue, IdempotencyState, IncrementError, KeyMetadata, KeyType,
     LexBound, ListValue, ListpackThresholds, PendingEntry, PendingInfo, PendingSummary, ScoreBound,
-    ScoreIndexBackend, SetCondition, SetOptions, SetResult, SetValue, SortedSetValue,
-    StreamAddError, StreamEntry, StreamGroupError, StreamId, StreamIdParseError, StreamIdSpec,
-    StreamRangeBound, StreamTrimMode, StreamTrimOptions, StreamTrimStrategy, StreamValue,
-    StringValue, Value, ZAddResult, set_default_score_index,
+    SetCondition, SetOptions, SetResult, SetValue, SortedSetValue, StreamAddError, StreamEntry,
+    StreamGroupError, StreamId, StreamIdParseError, StreamIdSpec, StreamRangeBound, StreamTrimMode,
+    StreamTrimOptions, StreamTrimStrategy, StreamValue, StringValue, Value, ZAddResult,
 };
 pub use vectorset::{
     FilterExpr, VectorDistanceMetric, VectorQuantization, VectorSearchResult, VectorSetInfo,
