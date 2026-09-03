@@ -1,6 +1,6 @@
 # 16: stream entries in packed segments
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Origin: memory-architecture PRD phase filing, 2026-09-01 — [PRD.md](../../PRD.md) R7
 Area: frogdb-types (stream.rs) + commands (stream family, `stream` feature)
@@ -95,3 +95,44 @@ of segments is enough at FrogDB's scale until proven otherwise).
 ## Depends on
 
 [Issue 13](../) — shared listpack/segment encoding module.
+
+## Resolution
+
+Landed 2026-09-02 on `mem-arch-integration` (commits `04e908e5` + `f7f12169`, reviewed by
+opus round 1 → fix round 1 → clean re-review).
+
+`StreamValue.entries` rewired from `BTreeMap<StreamId, Vec<(Bytes, Bytes)>>` to
+`SegmentedEntries` (`types/src/types/stream_segments.rs`): `BTreeMap<StreamId, Segment>`
+keyed by each segment's first ID; `Segment { ids: Vec<StreamId>, entries: Listpack,
+master: Listpack }`; caps `SEGMENT_MAX_ENTRIES = 128` **and** `SEGMENT_MAX_BYTES = 8 KiB`
+(listpack caller contract; an oversized single entry gets a one-entry segment). Master
+field-name dedup per segment (Redis's listpack-master trick). Seeking iterators
+(`iter_from`/`iter_rev_from`, O(log segments) + ≤128 skip) plus a non-decoding
+`RawIter`/`EntryRef` for skip-heavy walks. Degenerate `XRANGE + …`/`XREVRANGE - …`
+starts return empty without touching segments.
+
+**Design substitution vs brief §2 (flagged for human):** XDEL does *physical removal*
+(bounded memmove inside one ≤128-entry/≤8 KiB segment, segment re-keyed when its head is
+removed) instead of the brief's tombstones — dead space is bounded by construction, no
+compaction machinery. Reviewer assessed it as satisfying the criterion's goal more
+strongly than tombstones.
+
+**Measured (100k entries, fields `temperature=21.5, humidity=40`, 25 B payload/entry,
+782 segments):** payload 2,500,000 B; packed 2,899,314 B (28.99 B/entry incl. 16 B ID);
+without master dedup 4,981,328 B (**dedup saves 42%**); old accounting 10,500,000 B
+(packed = 28% of old).
+
+Criterion (c): CI already covers the stream suite under full — `cargo nextest run --all`
+plus workspace feature unification through `redis-regression/Cargo.toml`'s
+`frogdb-server = { features = ["cmd-full"] }` dependency (now documented at that line).
+Coupling is documentation-only; a CI job restructure would drop it silently (noted by
+reviewer, accepted).
+
+Evidence: frogdb-types 454/454; `frogdb-server --features cmd-full` 2371/2371;
+redis-regression `stream|event_sourcing` 156/156; frogdb-persistence stream round-trip
+9/9 (encoding unchanged — deserialize replays `add()` in ID order); lint-spec green;
+workspace clippy green. Fuzz: 256-case proptest vs BTreeMap model incl. TrimMinId,
+get/contains probes, inverted ranges.
+
+PEL untouched (payload-free, verified). ES.* lazy-dedup state untouched.
+`range_by_version` remains O(N) walk (pre-existing) but now skips without decoding.
