@@ -1,10 +1,42 @@
 # 15: zset member bytes into block storage
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Origin: memory-architecture PRD phase filing, 2026-09-01 — [PRD.md](../../PRD.md) R7
 Area: frogdb-types (sorted_set.rs, skiplist.rs)
 Phase: 4 — value representation
+
+## Resolution
+
+Landed on `mem-arch-integration` (four commits: block conversion, SET..GET old-value
+boxing, review fix round, `Value` size const-assert).
+
+- Large-form zset members now live in per-value `BlockStore` blocks. The member table
+  holds `(handle, score)` rows addressed by stable `u32` slots; the member→score index
+  is a `HashTable<u32>` keyed by member bytes resolved through the store; the skiplist
+  stores slots and resolves member bytes via a borrow-based resolver passed into
+  insert/remove — the structure stays a plain owned value. Compaction patches handles
+  in the table (slots never move), so slot lists collected before a batch removal stay
+  valid throughout it.
+- **BTree score-index backend retired.** Nothing selected it in production config; a
+  second backend doubled the conversion surface. `SCORE_INDEX_BACKEND` and the
+  `sorted-set-index` config key are gone. **Breaking change:** the config struct is
+  `deny_unknown_fields`, so a config file still carrying `sorted-set-index` is now
+  rejected at startup. Acceptable pre-production; docs regenerated (`just docs-gen`).
+- **No zset small form existed** (verified: hash/set have listpack forms, zset never
+  did), so "small form unchanged" is vacuous — nothing converted or preserved.
+- `Value::SortedSet` is boxed: the block-backed value is 280 bytes inline vs. 200 for
+  the next-largest variant; boxing keeps `Value` at 208 bytes, enforced by a
+  `const_assert` at the enum. `SetResult::OkWithOldValue` stays boxed (208 > clippy's
+  200-byte threshold; payload exists only on SET ... GET).
+- Range removals (`remove_range_by_rank/score/lex`) are slot-based — member bytes are
+  resolved by borrow for the skiplist search, never materialized as `Bytes`.
+- Verified: full zset+geo regression suite 185/185 (geo under `cmd-full`, no geo code
+  changes needed); frogdb-types 458/458 incl. model-based proptest vs `BTreeMap` model
+  with compaction and a deterministic churn test proving compaction + handle patching;
+  `memory_size()` determinism preserved (run-stable seed untouched); full
+  `frogdb-server` suite 2350/2350; workspace clippy `-D warnings` clean;
+  `just docs-gen-check` green.
 
 ## Why
 
