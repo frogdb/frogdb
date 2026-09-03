@@ -65,6 +65,12 @@ pub enum Value {
     VectorSet(Box<VectorSetValue>),
 }
 
+// `Value` is allocated per key, so every byte here is paid store-wide. The
+// large variants are boxed to keep it at 208 bytes (HashValue, the largest
+// inline variant, plus the discriminant); box any variant that would push
+// past this instead of raising the bound.
+const _: () = assert!(std::mem::size_of::<Value>() <= 208);
+
 /// Macro to generate accessor methods for Value enum variants.
 ///
 /// This generates `as_<name>(&self) -> Option<&Type>` and
