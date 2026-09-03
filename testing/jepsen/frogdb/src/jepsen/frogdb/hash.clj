@@ -211,14 +211,14 @@
   "Create a generator that tests each field independently for per-field
    linearizability.
 
-   `:threads-per-field` (default 2) worker threads hammer each field
+   `:threads-per-field` (default 4) worker threads hammer each field
    concurrently — genuine concurrency per key is required for the linearizable
    checker to find anomalies. The enclosing test's :concurrency must be a
    multiple of this value (see run.py hash-independent TestDefinition, which
-   sets --concurrency 10 for the 5-field pool)."
+   sets --concurrency 20 for the 5-field pool)."
   [opts]
   (let [rate (get opts :rate 10)
-        threads-per-field (get opts :threads-per-field 2)]
+        threads-per-field (get opts :threads-per-field 4)]
     (independent/concurrent-generator
       threads-per-field
       field-pool
@@ -300,7 +300,7 @@
     (checker/compose
       {:linear (checker/linearizable
                  {:model (model/register)
-                  :algorithm :linear})})))
+                  :algorithm :competition})})))
 
 ;; ===========================================================================
 ;; Workload
