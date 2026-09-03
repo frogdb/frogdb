@@ -27,6 +27,10 @@
 //!   entry re-keys the segment.
 //! * `XDEL` removes entries physically (a bounded memmove inside one segment),
 //!   so dead space is bounded by construction — no tombstones, no compaction.
+//!
+//! Blob decoding trusts the encoder: `take_varint` and `decode_entry` index
+//! without bounds checks and panic on corrupt input. Blobs never leave this
+//! module and are only ever produced by `encode_entry`.
 
 use super::stream::StreamId;
 use crate::listpack::{Listpack, ListpackIter, ListpackRevIter};
@@ -38,6 +42,12 @@ use std::ops::Bound;
 /// Entries per segment. Matches Redis's `stream-node-max-entries` default
 /// order of magnitude; bounds the memmove cost of a mid-segment removal.
 const SEGMENT_MAX_ENTRIES: usize = 128;
+
+/// Byte cap on a segment's encoded entries, honoring the listpack module's
+/// caller contract (~128 entries / 8 KiB) so mid-segment memmoves and
+/// `push_back` reallocations stay bounded when entries are large. A single
+/// entry bigger than the cap still gets a (one-entry) segment of its own.
+const SEGMENT_MAX_BYTES: usize = 8 * 1024;
 
 /// Append a LEB128 varint to `buf`.
 #[inline]
@@ -125,7 +135,7 @@ fn decode_entry(blob: &[u8], master: &Listpack) -> Vec<(Bytes, Bytes)> {
 }
 
 /// One packed run of consecutive entries.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct Segment {
     /// Entry IDs, ascending. `ids[i]` pairs with `entries` element `i`.
     ids: Vec<StreamId>,
@@ -185,9 +195,11 @@ impl SegmentedEntries {
         ))
     }
 
-    /// Append an entry. `id` must be greater than every stored ID (the stream
-    /// validates IDs against its top item before calling; an empty store
-    /// accepts any ID).
+    /// Append an entry. `id` must be greater than every stored ID. Every
+    /// producer guards this: XADD/ES.APPEND validate the ID against the
+    /// stream's top item (an empty stream accepts any ID — trivially an
+    /// append), XSETID rejects IDs at or below the top item, and persistence
+    /// replay feeds IDs back in stored (ascending) order.
     pub(crate) fn append(&mut self, id: StreamId, fields: &[(Bytes, Bytes)]) {
         debug_assert!(
             self.last_id().is_none_or(|last| id > last),
@@ -198,10 +210,12 @@ impl SegmentedEntries {
         {
             let seg = entry.get_mut();
             let blob = encode_entry(fields, &seg.master);
-            seg.ids.push(id);
-            seg.entries.push_back(&blob);
-            self.len += 1;
-            return;
+            if seg.entries.byte_len() + Listpack::entry_size(blob.len()) <= SEGMENT_MAX_BYTES {
+                seg.ids.push(id);
+                seg.entries.push_back(&blob);
+                self.len += 1;
+                return;
+            }
         }
         let mut master = Listpack::new();
         for (f, _) in fields {
@@ -247,7 +261,8 @@ impl SegmentedEntries {
             return false;
         };
         seg.ids.remove(idx);
-        seg.entries.remove(idx);
+        let blob_removed = seg.entries.remove(idx);
+        debug_assert!(blob_removed, "ids and entry blobs must stay in lockstep");
         self.len -= 1;
         if seg.ids.is_empty() {
             self.segments.remove(&key);
@@ -298,7 +313,13 @@ impl SegmentedEntries {
 
     /// Iterate all entries in ID order.
     pub(crate) fn iter(&self) -> Iter<'_> {
-        Iter {
+        Iter(self.iter_raw())
+    }
+
+    /// Iterate all entries in ID order without decoding them — callers that
+    /// skip entries (e.g. version walks) avoid the per-entry allocations.
+    pub(crate) fn iter_raw(&self) -> RawIter<'_> {
+        RawIter {
             segs: self.segments.range(..),
             cur: None,
         }
@@ -314,7 +335,7 @@ impl SegmentedEntries {
         let Some(key) = self.segment_key_for(&id) else {
             return self.iter();
         };
-        let mut it = Iter {
+        let mut it = RawIter {
             segs: self.segments.range(key..),
             cur: None,
         };
@@ -334,7 +355,7 @@ impl SegmentedEntries {
             blobs,
             master: &seg.master,
         });
-        it
+        Iter(it)
     }
 
     /// Iterate all entries in reverse ID order.
@@ -354,6 +375,8 @@ impl SegmentedEntries {
         };
         let Some(key) = self.segment_key_for(&id) else {
             // Every stored ID is above the bound: empty iteration.
+            // `..StreamId::min()` is empty by construction — no key sorts
+            // below the minimum ID.
             return RevIter {
                 segs: self.segments.range(..StreamId::min()).rev(),
                 cur: None,
@@ -407,21 +430,43 @@ struct CurSeg<'a> {
     master: &'a Listpack,
 }
 
-/// Forward iterator over `(id, decoded fields)`.
-pub(crate) struct Iter<'a> {
+/// A still-encoded entry borrowed from its segment. Callers that skip entries
+/// call nothing; callers that keep one pay the decode (two `Bytes` per field)
+/// only then.
+pub(crate) struct EntryRef<'a> {
+    blob: &'a [u8],
+    master: &'a Listpack,
+}
+
+impl EntryRef<'_> {
+    pub(crate) fn decode(&self) -> Vec<(Bytes, Bytes)> {
+        decode_entry(self.blob, self.master)
+    }
+}
+
+/// Forward iterator over `(id, encoded entry)` — no per-entry allocation.
+pub(crate) struct RawIter<'a> {
     segs: Range<'a, StreamId, Segment>,
     cur: Option<CurSeg<'a>>,
 }
 
-impl Iterator for Iter<'_> {
-    type Item = (StreamId, Vec<(Bytes, Bytes)>);
+impl<'a> Iterator for RawIter<'a> {
+    type Item = (StreamId, EntryRef<'a>);
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            if let Some(cur) = &mut self.cur
-                && let (Some(id), Some(blob)) = (cur.ids.next(), cur.blobs.next())
-            {
-                return Some((*id, decode_entry(blob, cur.master)));
+            if let Some(cur) = &mut self.cur {
+                let (id, blob) = (cur.ids.next(), cur.blobs.next());
+                debug_assert_eq!(id.is_some(), blob.is_some(), "ids and entry blobs desynced");
+                if let (Some(id), Some(blob)) = (id, blob) {
+                    return Some((
+                        *id,
+                        EntryRef {
+                            blob,
+                            master: cur.master,
+                        },
+                    ));
+                }
             }
             let (_, seg) = self.segs.next()?;
             self.cur = Some(CurSeg {
@@ -430,6 +475,17 @@ impl Iterator for Iter<'_> {
                 master: &seg.master,
             });
         }
+    }
+}
+
+/// Forward iterator over `(id, decoded fields)`.
+pub(crate) struct Iter<'a>(RawIter<'a>);
+
+impl Iterator for Iter<'_> {
+    type Item = (StreamId, Vec<(Bytes, Bytes)>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next().map(|(id, entry)| (id, entry.decode()))
     }
 }
 
@@ -450,10 +506,12 @@ impl Iterator for RevIter<'_> {
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            if let Some(cur) = &mut self.cur
-                && let (Some(id), Some(blob)) = (cur.ids.next(), cur.blobs.next())
-            {
-                return Some((*id, decode_entry(blob, cur.master)));
+            if let Some(cur) = &mut self.cur {
+                let (id, blob) = (cur.ids.next(), cur.blobs.next());
+                debug_assert_eq!(id.is_some(), blob.is_some(), "ids and entry blobs desynced");
+                if let (Some(id), Some(blob)) = (id, blob) {
+                    return Some((*id, decode_entry(blob, cur.master)));
+                }
             }
             let (_, seg) = self.segs.next()?;
             self.cur = Some(CurSegRev {
@@ -659,6 +717,38 @@ mod tests {
         );
     }
 
+    /// Large entries roll segments by bytes, not just entry count: encoded
+    /// segment size stays within `SEGMENT_MAX_BYTES` unless a single entry is
+    /// itself bigger than the cap (which gets a one-entry segment).
+    #[test]
+    fn byte_cap_rolls_segments_with_large_entries() {
+        let big = "v".repeat(3 * 1024);
+        let mut se = SegmentedEntries::new();
+        for i in 0..10u64 {
+            se.append(id(i, 0), &fields(&[("payload", &big)]));
+        }
+        assert_eq!(se.len(), 10);
+        // ~3 KiB blobs: two fit under the 8 KiB cap, three do not.
+        assert!(se.segments.len() >= 5, "segments: {}", se.segments.len());
+        for seg in se.segments.values() {
+            assert!(seg.entries.byte_len() <= SEGMENT_MAX_BYTES || seg.ids.len() == 1);
+        }
+        // A single entry above the cap still lands, in a segment of its own.
+        let huge = "v".repeat(16 * 1024);
+        se.append(id(100, 0), &fields(&[("payload", &huge)]));
+        let (last_key, last_seg) = se.segments.last_key_value().unwrap();
+        assert_eq!(*last_key, id(100, 0));
+        assert_eq!(last_seg.ids.len(), 1);
+        // The next append opens a fresh segment instead of growing it.
+        se.append(id(101, 0), &fields(&[("payload", &big)]));
+        assert_eq!(*se.segments.last_key_value().unwrap().0, id(101, 0));
+        assert_eq!(se.get(&id(101, 0)).unwrap()[0].1, Bytes::from(big.clone()));
+        // Iteration order and count survive the byte-cap rollovers.
+        let ids: Vec<_> = se.iter().map(|(i, _)| i).collect();
+        assert_eq!(ids.len(), 12);
+        assert!(ids.windows(2).all(|w| w[0] < w[1]));
+    }
+
     /// Memory shape at 100k entries: overhead beyond payload is per-segment
     /// plus small per-entry constants, and master dedup beats the no-dedup
     /// encoding. The measured sizes get recorded in the issue resolution.
@@ -724,6 +814,9 @@ mod tests {
             Del { index: usize },
             /// Trim to at most `max_len` entries.
             TrimMaxLen { max_len: usize },
+            /// Trim entries below a minimum ID (the XTRIM MINID path:
+            /// `count_below` + `drain_front`).
+            TrimMinId { min: u64 },
             /// Range query, compared against the model.
             Range { lo: u64, hi: u64, rev: bool },
         }
@@ -733,6 +826,7 @@ mod tests {
                 4 => (0u8..3, any::<u8>()).prop_map(|(shape, value)| Op::Add { shape, value }),
                 2 => any::<usize>().prop_map(|index| Op::Del { index }),
                 1 => (0usize..600).prop_map(|max_len| Op::TrimMaxLen { max_len }),
+                1 => (0u64..700).prop_map(|min| Op::TrimMinId { min }),
                 2 => (any::<u64>(), any::<u64>(), any::<bool>())
                     .prop_map(|(lo, hi, rev)| Op::Range { lo: lo % 700, hi: hi % 700, rev }),
             ]
@@ -771,12 +865,23 @@ mod tests {
                                 .nth(index % (model.len() + 1))
                                 .copied()
                                 .unwrap_or(id(next_ms + 1, 0));
+                            prop_assert_eq!(se.contains(&target), model.contains_key(&target));
+                            prop_assert_eq!(se.get(&target), model.get(&target).cloned());
                             prop_assert_eq!(se.remove(&target), model.remove(&target).is_some());
                         }
                         Op::TrimMaxLen { max_len } => {
                             let excess = model.len().saturating_sub(max_len);
                             prop_assert_eq!(se.drain_front(excess), excess);
                             for _ in 0..excess {
+                                model.pop_first();
+                            }
+                        }
+                        Op::TrimMinId { min } => {
+                            let min_id = id(min, 0);
+                            let excess = se.count_below(&min_id);
+                            prop_assert_eq!(excess, model.range(..min_id).count());
+                            prop_assert_eq!(se.drain_front(excess), excess);
+                            while model.keys().next().is_some_and(|k| *k < min_id) {
                                 model.pop_first();
                             }
                         }

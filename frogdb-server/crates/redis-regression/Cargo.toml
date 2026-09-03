@@ -15,6 +15,12 @@ frogdb-test-harness.workspace = true
 # The compat suite replays upstream Redis TCL coverage across every command
 # family, so it always builds the server with the full command surface rather
 # than gating each `*_tcl.rs` module on a `cmd-*` feature.
+#
+# This dependency also feature-unifies the whole workspace test build: CI's
+# `cargo nextest run --all` compiles frogdb-server with cmd-full because of
+# this line, which is what keeps the non-default families (stream, geo, ...)
+# in CI. Splitting the CI job per-crate or adding --no-default-features would
+# silently drop that coverage.
 frogdb-server = { path = "../server", features = ["cmd-full"] }
 frogdb-core = { path = "../core" }
 frogdb-protocol = { path = "../protocol" }

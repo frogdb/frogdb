@@ -1360,13 +1360,13 @@ impl StreamValue {
         let mut results = Vec::new();
         let limit = count.unwrap_or(usize::MAX);
 
-        for (id, fields) in self.entries.iter() {
+        for (id, entry) in self.entries.iter_raw() {
             version += 1;
             if version > end || results.len() >= limit {
                 break;
             }
             if version >= start {
-                results.push((version, StreamEntry::new(id, fields)));
+                results.push((version, StreamEntry::new(id, entry.decode())));
             }
         }
 
@@ -1551,18 +1551,20 @@ impl StreamValue {
         end: StreamRangeBound,
         count: Option<usize>,
     ) -> Vec<StreamEntry> {
-        // Seek to the lower bound; IDs ascend, so the upper bound is an
-        // early-exit (`satisfies_max` is monotone over the iteration order).
+        // Seek to the lower bound (which fully enforces the start bound);
+        // IDs ascend, so the upper bound is an early-exit (`satisfies_max`
+        // is monotone over the iteration order).
         let lower = match start {
             StreamRangeBound::Inclusive(id) => Bound::Included(id),
             StreamRangeBound::Exclusive(id) => Bound::Excluded(id),
-            StreamRangeBound::Min | StreamRangeBound::Max => Bound::Unbounded,
+            StreamRangeBound::Min => Bound::Unbounded,
+            // `+` as a start admits nothing — bail before touching a segment.
+            StreamRangeBound::Max => return Vec::new(),
         };
         let iter = self
             .entries
             .iter_from(lower)
-            .take_while(|(id, _)| end.satisfies_max(id))
-            .filter(|(id, _)| start.satisfies_min(id));
+            .take_while(|(id, _)| end.satisfies_max(id));
 
         let entries: Vec<_> = if let Some(count) = count {
             iter.take(count)
@@ -1584,18 +1586,20 @@ impl StreamValue {
         count: Option<usize>,
     ) -> Vec<StreamEntry> {
         // For reverse range, start and end are swapped (end is the "start" bound).
-        // Seek to the upper bound; IDs descend, so the lower bound is an
-        // early-exit (`satisfies_min` is monotone over the iteration order).
+        // Seek to the upper bound (which fully enforces the start bound);
+        // IDs descend, so the lower bound is an early-exit (`satisfies_min`
+        // is monotone over the iteration order).
         let upper = match start {
             StreamRangeBound::Inclusive(id) => Bound::Included(id),
             StreamRangeBound::Exclusive(id) => Bound::Excluded(id),
-            StreamRangeBound::Min | StreamRangeBound::Max => Bound::Unbounded,
+            StreamRangeBound::Max => Bound::Unbounded,
+            // `-` as the reverse start admits nothing — bail immediately.
+            StreamRangeBound::Min => return Vec::new(),
         };
         let iter = self
             .entries
             .iter_rev_from(upper)
-            .take_while(|(id, _)| end.satisfies_min(id))
-            .filter(|(id, _)| start.satisfies_max(id));
+            .take_while(|(id, _)| end.satisfies_min(id));
 
         let entries: Vec<_> = if let Some(count) = count {
             iter.take(count)
@@ -1950,6 +1954,57 @@ impl std::fmt::Display for StreamGroupError {
 }
 
 impl std::error::Error for StreamGroupError {}
+
+#[cfg(test)]
+mod range_bound_tests {
+    use super::*;
+
+    fn stream_with(n: u64) -> StreamValue {
+        let mut s = StreamValue::new();
+        for i in 1..=n {
+            s.add(
+                StreamIdSpec::Explicit(StreamId::new(i, 0)),
+                vec![(Bytes::from_static(b"f"), Bytes::from_static(b"v"))],
+            )
+            .unwrap();
+        }
+        s
+    }
+
+    /// `XRANGE key + +` / `XREVRANGE key - -` are degenerate but
+    /// client-reachable; they must return empty without walking entries.
+    #[test]
+    fn degenerate_range_bounds_return_empty() {
+        let s = stream_with(10);
+        assert!(
+            s.range(StreamRangeBound::Max, StreamRangeBound::Max, None)
+                .is_empty()
+        );
+        assert!(
+            s.range(StreamRangeBound::Max, StreamRangeBound::Min, None)
+                .is_empty()
+        );
+        assert!(
+            s.range_rev(StreamRangeBound::Min, StreamRangeBound::Min, None)
+                .is_empty()
+        );
+        assert!(
+            s.range_rev(StreamRangeBound::Min, StreamRangeBound::Max, None)
+                .is_empty()
+        );
+        // Sanity: the non-degenerate full ranges still return everything.
+        assert_eq!(
+            s.range(StreamRangeBound::Min, StreamRangeBound::Max, None)
+                .len(),
+            10
+        );
+        assert_eq!(
+            s.range_rev(StreamRangeBound::Max, StreamRangeBound::Min, None)
+                .len(),
+            10
+        );
+    }
+}
 
 #[cfg(test)]
 mod claim_tests {
