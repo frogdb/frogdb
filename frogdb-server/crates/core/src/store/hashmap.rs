@@ -1277,7 +1277,7 @@ impl Store for HashMapStore {
         let old_value = self.replace_entry(key, value, metadata);
 
         if opts.return_old {
-            SetResult::OkWithOldValue(old_value.map(Arc::unwrap_or_clone))
+            SetResult::OkWithOldValue(old_value.map(|v| Box::new(Arc::unwrap_or_clone(v))))
         } else {
             SetResult::Ok
         }

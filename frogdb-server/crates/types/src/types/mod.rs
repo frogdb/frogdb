@@ -663,7 +663,10 @@ pub enum SetResult {
     /// Set was successful, returns OK.
     Ok,
     /// Set was successful, returns the old value (for GET flag).
-    OkWithOldValue(Option<Value>),
+    /// Boxed: `Value` inlines the largest collection headers (block-backed
+    /// zset grew past clippy's variant-size threshold), and this variant is
+    /// rare — only SET ... GET carries a payload.
+    OkWithOldValue(Option<Box<Value>>),
     /// Set was not performed (NX/XX condition not met).
     NotSet,
 }
