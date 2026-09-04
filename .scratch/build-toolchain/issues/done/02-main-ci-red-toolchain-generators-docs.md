@@ -145,3 +145,9 @@ job itself is only provable by a CI run of the branch.
 Left open, not filed: `.claude/skills/db-architect/references/crate-map.md` and
 `.claude/skills/doc-sync/references/doc-map.md` still name the deleted `frogdb-macros`
 crate (not path-checked, CI-neutral).
+
+**Addendum 2026-09-04:** the CI run of the merged branch (Test workflow `33928155916`) shows the
+generator/docs jobs green but Lint, Unit Tests, Quint, Turmoil and Shuttle still failing in the
+mise step under the pinned `2026.8.16`. The pin's premise was wrong — the `cargo:` backend
+check dates from mise `2026.8.11` and was masked by `jdx/mise-action` cache hits. Follow-up:
+[03](../open/03-ci-mise-cargo-backend-rust-dependency.md).
