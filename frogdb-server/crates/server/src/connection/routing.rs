@@ -35,8 +35,10 @@
 //! foreign-thread free of an already-detached-from-pool allocation, bounded
 //! to that one buffer.) The reply travels back by value over a `oneshot`.
 //! Retention past execution is handled the same way at each escape point:
-//! the keyspace install seam, blocking-park registration, MULTI queueing, and
-//! scatter partitioning all detach what they keep.
+//! the keyspace install seam, blocking-park registration and MULTI queueing
+//! all detach what they keep. Scatter batches (`partition_keys`, MSET pairs)
+//! are deliberately *not* detached: they are per-op slices, and the shard's
+//! install seam makes the one copy of whatever it retains.
 //!
 //! Scatter-gather (`dispatch_scatter`) is the multi-hop form: an MGET/MSET/DEL
 //! touching *k* distinct shards costs *k* hops, not one, and the merge waits on
@@ -368,16 +370,7 @@ impl ConnectionHandler {
 
     /// Inner implementation of shard execution (channel send + response wait).
     async fn execute_on_shard_inner(&self, shard_id: usize, cmd: Arc<ParsedCommand>) -> Response {
-        // Cross-core hop boundary of the zero-copy parse path: args sent to a
-        // foreign shard are copied out of this connection's pooled read buffer
-        // (one bulk copy per hop) so no other core ever holds a reference
-        // into this core's buffer pool. The zero-hop (local) case sends the
-        // zero-copy args as-is.
-        let cmd = if shard_id == self.shard_id {
-            cmd
-        } else {
-            Arc::new(cmd.detached())
-        };
+        let cmd = command_for_shard(cmd, self.shard_id, shard_id);
 
         let (response_tx, response_rx) = oneshot::channel();
 
@@ -401,5 +394,64 @@ impl ConnectionHandler {
             Ok(response) => response,
             Err(_) => Response::error("ERR shard dropped request"),
         }
+    }
+}
+
+/// Cross-core hop boundary of the zero-copy parse path.
+///
+/// Args sent to a foreign shard are copied out of this connection's pooled
+/// read buffer (one bulk copy per hop) so no other core ever holds a reference
+/// into this core's buffer pool. The zero-hop (local) case sends the zero-copy
+/// args as-is.
+fn command_for_shard(
+    cmd: Arc<ParsedCommand>,
+    local_shard: usize,
+    target_shard: usize,
+) -> Arc<ParsedCommand> {
+    if target_shard == local_shard {
+        cmd
+    } else {
+        Arc::new(cmd.detached())
+    }
+}
+
+#[cfg(test)]
+mod hop_tests {
+    use super::*;
+
+    fn read_buffer_command() -> (Bytes, Arc<ParsedCommand>) {
+        let backing = Bytes::from(b"GET key".to_vec());
+        let cmd = ParsedCommand::new(backing.slice(0..3), vec![backing.slice(4..7)]);
+        (backing, Arc::new(cmd))
+    }
+
+    // FM-MEMORY-003
+    #[test]
+    fn foreign_shard_hop_detaches_the_command_from_the_read_buffer() {
+        let (backing, cmd) = read_buffer_command();
+        let hopped = command_for_shard(cmd, 0, 1);
+        assert!(
+            !backing.as_ptr_range().contains(&hopped.args[0].as_ptr()),
+            "hopped arg must not alias the connection's read buffer"
+        );
+        assert!(
+            !backing.as_ptr_range().contains(&hopped.name.as_ptr()),
+            "hopped name must not alias the connection's read buffer"
+        );
+        assert_eq!(hopped.args[0].as_ref(), b"key");
+        assert!(
+            backing.is_unique(),
+            "a foreign-shard hop must leave no reference into the read buffer"
+        );
+    }
+
+    // FM-MEMORY-003
+    #[test]
+    fn local_shard_keeps_the_zero_copy_command() {
+        let (backing, cmd) = read_buffer_command();
+        let before = Arc::as_ptr(&cmd);
+        let local = command_for_shard(cmd, 0, 0);
+        assert_eq!(Arc::as_ptr(&local), before, "local dispatch must not copy");
+        assert!(backing.as_ptr_range().contains(&local.args[0].as_ptr()));
     }
 }

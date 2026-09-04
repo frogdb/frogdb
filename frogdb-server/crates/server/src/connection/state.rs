@@ -2011,4 +2011,31 @@ mod tests {
         assert_eq!(summary.queue[0].args[1].as_ref(), b"val");
         assert_eq!(summary.watches[0].entry.key.as_ref(), b"watched");
     }
+
+    // FM-MEMORY-003
+    /// BCAST tracking prefixes live for the tracking session and cross to
+    /// every shard, so `enable_tracking` copies them out of the read buffer:
+    /// neither the retained set nor the batch handed back for shard
+    /// registration may alias it.
+    #[test]
+    fn tracking_prefixes_detach_from_the_shared_read_buffer() {
+        let backing = Bytes::from(b"user: order:".to_vec());
+        let prefixes = vec![backing.slice(0..5), backing.slice(6..12)];
+
+        let mut s = state();
+        let batch = s
+            .enable_tracking(TrackingEnableRequest {
+                bcast: true,
+                prefixes,
+                ..Default::default()
+            })
+            .expect("BCAST with disjoint prefixes");
+
+        assert!(
+            backing.is_unique(),
+            "retained prefixes and the shard batch must not alias the read buffer"
+        );
+        assert_eq!(batch.len(), 2);
+        assert_eq!(s.tracking().prefixes[1].as_ref(), b"order:");
+    }
 }

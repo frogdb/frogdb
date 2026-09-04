@@ -28,8 +28,15 @@ use crate::ProtocolError;
 /// never reallocates the buffer out from under them. The one place a
 /// connection reads ahead mid-command — parking a blocking command while
 /// draining pipelined frames — copies each frame out with [`detach_frame`]
-/// before the next poll, so no slice is ever left as the sole holder of a
-/// reallocated-away buffer.
+/// before the next poll. A `reserve` during that read-ahead can still move
+/// the codec onto a fresh allocation and leave the *parked command's own*
+/// args holding the old one; two things keep that from pinning it behind a
+/// short key: a [`ParsedCommand`] holds its name and every arg as slices of
+/// one allocation (a parked command has a name and at least one key), so
+/// none of them is unique while the command is alive, and after the wait
+/// those args are only ever borrowed (the slow log always copies what it
+/// logs; the hot-key sampler takes `&[u8]`), never moved into a retention
+/// point.
 #[inline]
 pub fn detach_bytes(bytes: Bytes) -> Bytes {
     if bytes.is_unique() {

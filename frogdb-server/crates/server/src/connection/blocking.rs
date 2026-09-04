@@ -72,6 +72,26 @@ impl coordinator::PeerLiveness for SocketWatch<'_> {
     }
 }
 
+/// Blocking-park boundary of the zero-copy parse path.
+///
+/// The shard retains the keys (and any op-embedded bytes, e.g. the BLMOVE
+/// destination) for the whole park, which is unbounded — so they are copied
+/// out of the connection's pooled read buffer here, before registration. The
+/// buffer itself keeps serving the parked connection's socket watch and can be
+/// trimmed/recycled while the wait is parked.
+fn detach_wait_inputs(
+    keys: Vec<Bytes>,
+    proto_op: frogdb_protocol::BlockingOp,
+) -> (Vec<Bytes>, BlockingOp) {
+    let keys = keys
+        .into_iter()
+        .map(frogdb_protocol::detach_bytes)
+        .collect();
+    let mut op = convert_blocking_op(proto_op);
+    op.detach();
+    (keys, op)
+}
+
 impl ConnectionHandler {
     /// Handle a blocking command wait.
     ///
@@ -87,19 +107,7 @@ impl ConnectionHandler {
         timeout: f64,
         proto_op: frogdb_protocol::BlockingOp,
     ) -> Response {
-        // Blocking-park boundary of the zero-copy parse path: the shard
-        // retains the keys (and any op-embedded bytes) for the whole park,
-        // which is unbounded — so they are copied out of the connection's
-        // pooled read buffer here, before registration. The buffer itself
-        // keeps serving the parked connection's socket watch and can be
-        // trimmed/recycled while the wait is parked.
-        let keys: Vec<Bytes> = keys
-            .into_iter()
-            .map(frogdb_protocol::detach_bytes)
-            .collect();
-        let mut op = convert_blocking_op(proto_op);
-        op.detach();
-        let op = op;
+        let (keys, op) = detach_wait_inputs(keys, proto_op);
 
         // All keys are validated onto one shard by the command, so the wait
         // targets a single response channel.
@@ -809,5 +817,162 @@ mod reconcile_tests {
         drop(tx);
         let out = reconcile_ack(Ok(UnregisterAck::AlreadyServed), &mut rx).await;
         assert!(out.is_none());
+    }
+}
+
+/// The blocking-park seams of the zero-copy parse path (see
+/// [`frogdb_protocol::detach_bytes`]).
+#[cfg(test)]
+mod zero_copy_seam_tests {
+    use frogdb_protocol::Direction;
+
+    use super::*;
+
+    // FM-MEMORY-003
+    #[test]
+    fn wait_inputs_detach_from_the_shared_read_buffer() {
+        let backing = Bytes::from(b"BLMOVE src dst".to_vec());
+        let keys = vec![backing.slice(7..10)];
+        let proto_op = frogdb_protocol::BlockingOp::BLMove {
+            dest: backing.slice(11..14),
+            src_dir: Direction::Left,
+            dest_dir: Direction::Right,
+        };
+
+        let (keys, op) = detach_wait_inputs(keys, proto_op);
+
+        assert!(
+            backing.is_unique(),
+            "a parked wait must hold no reference into the connection's read buffer"
+        );
+        assert_eq!(keys, vec![Bytes::from_static(b"src")]);
+        match op {
+            BlockingOp::BLMove { dest, .. } => assert_eq!(dest.as_ref(), b"dst"),
+            other => panic!("BLMOVE converts to BLMove, got {other:?}"),
+        }
+    }
+}
+
+/// [`SocketWatch`] over a real loopback socket: read-ahead during a park
+/// reallocates the read buffer, and the parked command's own args are what is
+/// left holding the old allocation.
+#[cfg(all(test, not(feature = "turmoil")))]
+mod read_ahead_tests {
+    use bytes::BytesMut;
+    use frogdb_protocol::ParsedCommand;
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::{TcpListener, TcpStream};
+    use tokio_util::codec::FramedParts;
+
+    use super::coordinator::PeerLiveness;
+    use super::*;
+    use crate::tls::MaybeTlsStream;
+
+    /// Same seed size as the production read buffer (`lifecycle::READ_IDLE_TARGET`).
+    const READ_BUF: usize = 8 * 1024;
+
+    async fn loopback() -> (Framed<ConnectionStream, FrogDbResp2>, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback");
+        let addr = listener.local_addr().expect("loopback address");
+        let client = TcpStream::connect(addr).await.expect("connect loopback");
+        let (server, _) = listener.accept().await.expect("accept loopback");
+        let mut parts = FramedParts::new::<BytesFrame>(
+            MaybeTlsStream::Plain { inner: server },
+            FrogDbResp2::default(),
+        );
+        parts.read_buf = BytesMut::with_capacity(READ_BUF);
+        (Framed::from_parts(parts), client)
+    }
+
+    fn bulk_frame(payload: &[u8]) -> Vec<u8> {
+        let mut frame = format!("*1\r\n${}\r\n", payload.len()).into_bytes();
+        frame.extend_from_slice(payload);
+        frame.extend_from_slice(b"\r\n");
+        frame
+    }
+
+    // FM-MEMORY-003
+    /// Pipelined frames arriving behind a parked `BLPOP` overflow the 8 KiB
+    /// read buffer, so `reserve` moves the codec onto a fresh allocation while
+    /// the parked command still holds slices of the old one. Two things keep
+    /// that from pinning the old allocation behind a short key: the parked
+    /// frames were copied out before each poll (so they hold nothing), and
+    /// the command's name co-holds the allocation with its args, so no arg is
+    /// unique while the command is alive — `detach_bytes` copies.
+    #[tokio::test]
+    async fn read_ahead_realloc_leaves_parked_args_shared_and_parked_frames_detached() {
+        let (mut framed, mut client) = loopback().await;
+
+        client
+            .write_all(b"*2\r\n$5\r\nBLPOP\r\n$1\r\nk\r\n")
+            .await
+            .expect("write BLPOP");
+        let frame = framed
+            .next()
+            .await
+            .expect("a frame")
+            .expect("a well-formed frame");
+        let cmd = ParsedCommand::try_from(frame).expect("BLPOP parses");
+        assert!(
+            !cmd.args[0].is_unique(),
+            "name and key are slices of the one read buffer"
+        );
+
+        // 20 × ~620 B > 8 KiB, under MAX_PARKED_PIPELINE_FRAMES.
+        let read_ahead = 20;
+        assert!(read_ahead < MAX_PARKED_PIPELINE_FRAMES);
+        for i in 0..read_ahead {
+            let payload = vec![b'a' + (i as u8 % 26); 600];
+            client
+                .write_all(&bulk_frame(&payload))
+                .await
+                .expect("write pipelined frame");
+        }
+        client.shutdown().await.expect("client shutdown");
+
+        let mut parked = VecDeque::new();
+        SocketWatch {
+            framed: &mut framed,
+            parked: &mut parked,
+        }
+        .closed()
+        .await;
+
+        assert_eq!(parked.len(), read_ahead);
+        for frame in &parked {
+            match frame.as_ref().expect("a well-formed parked frame") {
+                BytesFrame::Array(items) => match &items[0] {
+                    BytesFrame::BulkString(payload) => assert!(
+                        payload.is_unique(),
+                        "each parked frame is copied out of the read buffer"
+                    ),
+                    other => panic!("expected a bulk string, got {other:?}"),
+                },
+                other => panic!("expected an array frame, got {other:?}"),
+            }
+        }
+
+        // The command is alive: its key is co-held by its name, so it is not
+        // unique and the retention-point copy still happens.
+        let key = cmd.args[0].clone();
+        assert!(!key.is_unique());
+        let detached = frogdb_protocol::detach_bytes(key.clone());
+        assert_ne!(
+            detached.as_ptr(),
+            key.as_ptr(),
+            "detach_bytes copies a shared slice"
+        );
+        assert_eq!(detached.as_ref(), b"k");
+
+        // Proof the read-ahead reallocated: once the rest of the command is
+        // gone, the key is the sole holder of the old allocation — the codec
+        // no longer references it.
+        drop(cmd);
+        assert!(
+            key.is_unique(),
+            "read-ahead past the buffer capacity must have moved the codec off the old allocation"
+        );
     }
 }

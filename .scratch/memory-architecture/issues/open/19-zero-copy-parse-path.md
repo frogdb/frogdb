@@ -77,17 +77,24 @@ lease is ever stored in a `Value`.
 
 Landed (each with its forcing test, most tagged `FM-MEMORY-003` in `specs/memory.md`):
 zero-copy `try_from` (`test_try_from_is_zero_copy`); escape-point copies at the keyspace
-install seam, blocking park, scatter partition, foreign-core hop, connection-local retention
-(MULTI queue, WATCH, tracking prefixes, client name/lib info), cross-connection retention
-(slow log, pub/sub publish, script cache) and collection-internal retention points
-(quicklist plain nodes, stream group/consumer/PEL names, vector-set element names,
-time-series compaction destinations), all through the single
-`frogdb_protocol::detach_bytes` chokepoint; the read buffer is pool-seeded at accept and
+install seam, blocking park (`detach_wait_inputs`), foreign-core hop (`command_for_shard`),
+connection-local retention (MULTI queue, WATCH, tracking prefixes, client name/lib info),
+cross-connection retention (slow log — always a copy — pub/sub publish, script cache) and
+collection-internal retention points (quicklist plain nodes, stream group/consumer/PEL
+names, vector-set element names, time-series compaction destinations), all through the
+single `frogdb_protocol::detach_bytes` chokepoint; scatter batches (`partition_keys`, MSET
+pairs) are deliberately per-op slices — one synchronous round trip, and the shard's install
+seam makes the one copy (`partition_batches_keys_per_shard_without_copying`,
+`mset_partition_sends_read_buffer_slices`); the read buffer is pool-seeded at accept and
 recycled/released back; parked pipelined frames are copied out (`detach_frame`) so the
-`is_unique` discriminator stays sound across the one mid-command read-ahead; hop batching
-K shards → K messages (`a_scatter_over_k_shards_sends_exactly_k_lock_messages`,
-`partition_batches_keys_per_shard_and_detaches_them`); pipelined-completion pool property
-test (`a_pipelined_burst_of_slices_releases_the_lease_only_when_the_last_drops`; no unsafe
+`is_unique` discriminator stays sound across the one mid-command read-ahead — a `reserve`
+during that read-ahead can leave the parked command's own args holding the old
+allocation, which never pins it because name and args co-hold one allocation and after
+the wait the args are only borrowed
+(`read_ahead_realloc_leaves_parked_args_shared_and_parked_frames_detached`, loopback TCP);
+hop batching K shards → K messages (`a_scatter_over_k_shards_sends_exactly_k_lock_messages`);
+pipelined-completion pool property test
+(`a_pipelined_burst_of_slices_releases_the_lease_only_when_the_last_drops`; no unsafe
 anywhere in the handoff, so no miri/loom needed).
 
 **Store boundary (§4) — enforced by convention, not by type.** No `Bytes` rooted in the
