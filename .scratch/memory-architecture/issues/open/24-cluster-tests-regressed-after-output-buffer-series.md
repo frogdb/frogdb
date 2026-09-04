@@ -50,3 +50,55 @@ test → fix), and the fix issue is carved from this investigation, not from thi
 ## Depends on
 
 Nothing. Overlaps: issue 23 (replica feed accounting, same handoff seam).
+
+## Investigation 2026-09-04
+
+Reproduced at `76b2a6dae`: 6 failed + 1 timed out + 9 flaky of 46 (360 s; quiet baseline
+`b3981f777` 46/46 in 45 s). Bisect over the 3-binary filter
+`-E 'binary(cluster_handoff_barrier) + binary(cluster_migration) + binary(cluster_finalization_window)'`
+(the `just test frogdb-server '<pattern>'` form matches test *names*, not binaries, and selects
+none of these; a single-binary run passes everywhere and is non-diagnostic):
+
+| commit | result |
+|---|---|
+| `b3981f777` | 46/46, 45.2 s |
+| `fe96d448a` output-buffer seam | 46/46, 48.4 s |
+| `22bf8c884` | 46/46, 48.6 s |
+| **`e67002d6f`** housekeeping tick | 1 fail / 7 fail (two runs), 57–118 s — **first bad** |
+| `cdbd9c3ee` (CI first red) | 3 fail, 59.9 s |
+| `dee17c47f` JSON tape | 9 fail, 104.7 s |
+| `76b2a6dae` | 6 fail + 1 timeout + 9 flaky, 360 s |
+
+**Root cause:** not a memory/limit defect. Every failure is one of the finalizer's three timeout
+arms in `frogdb-server/crates/server/src/slot_migration/mod.rs::complete()` (`source did not
+drain in 50ms` dominant; `prepare did not become visible`; `handoff barrier window elapsed`),
+surfaced through `cluster_handoff_barrier.rs:224` or `SETSLOT NODE failed`. `HANDOFF_DRAIN_WAIT_MS`
+(50 ms, `frogdb-cluster/src/types.rs:656`) was sized against the quiet-machine finalization
+measurement of 2026-08-05 with headroom against the *residual*, not against scheduler latency.
+Under nextest's `cluster` group (`max-threads = 2`) two 3-node debug clusters plus 32 writers
+share the cores and a Raft round trip routinely exceeds 50 ms. `e67002d6f` (1 Hz `IDLE_TICK`
+housekeeping arm on every connection; per-flush `account_buffered_output()` replacing
+`note_drained()`) is the first commit whose added per-connection cost crosses the threshold;
+every later series (JSON tape, jemalloc arenas, packed types) adds more, so reverting
+`e67002d6f` alone would not restore green. `test_e2e_migration_empty_slot` fails with zero
+keys, and solo runs pass, which rules out reply-volume/`NetworkOutput` shedding (ceiling 512 MiB).
+The handoff code path is byte-identical across the window.
+
+**Spec:** nothing violated — FM-CLUSTER-091 (`specs/cluster.md:1862`) is honoured to the letter;
+the source is descheduled, not wedged, and no row distinguishes the two. Missing row drafted as
+**FM-CLUSTER-104**: a slow-but-live source still finalizes; budgets derived from observed
+round-trip latency; `HANDOFF_BARRIER_MS` unchanged (FM-CLUSTER-095 fence); wedged source still
+aborts within `HANDOFF_DRAIN_TIMEOUT_MS`.
+
+**Proposed fix issue (M, LOCKED cluster, spec-first):** add FM-CLUSTER-104 + FM-CLUSTER-091
+cross-reference; move the budget derivation into `frogdb-cluster` (beside the constants) so the
+forcing unit test `a_slow_but_live_source_still_finalizes` lives in the mutated crate; have
+`await_prepared_seq`/`await_drained`/`poll_handoff` call it. Not the fix: raising
+`HANDOFF_BARRIER_MS`; capping the nextest cluster group at 1. No overlap with issue 23 (no shared
+file, spec area or failure mode) — sequence after it only to avoid racing the suite's green.
+
+**Open rulings:** (1) adaptive EWMA budget vs `max(50 ms, k × heartbeat_interval)` vs bounded
+retry; (2) whether `.config/nextest.toml` `cluster.max-threads` should drop to 1 as a separate,
+deliberate ruling; (3) confirm on the aarch64 testbox whether the margin is laptop-specific.
+Incidental finding filed as issue 25 (jemalloc arenas created in test binaries that never make
+jemalloc the global allocator).
