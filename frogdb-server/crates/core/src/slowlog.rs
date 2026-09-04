@@ -363,7 +363,7 @@ mod tests {
             "the key is the last holder of the 8 KiB buffer"
         );
 
-        let logged = SlowLog::truncate_args(&[key.clone()], 128);
+        let logged = SlowLog::truncate_args(std::slice::from_ref(&key), 128);
 
         assert_eq!(logged[0], key);
         assert_ne!(
