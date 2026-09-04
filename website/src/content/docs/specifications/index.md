@@ -16,6 +16,7 @@ claim.
 |---|---|
 | [Blocking](/specifications/blocking/) | Blocking commands: waits, wakeups, and disconnect handling. |
 | [Cluster](/specifications/cluster/) | Cluster topology, slot ownership, migration, and failover. |
+| [Memory](/specifications/memory/) | Where bytes come from, who is charged for them, and what happens when there are no more. |
 | [Persistence](/specifications/persistence/) | WAL, checkpoints, recovery, and durability acknowledgement. |
 | [Replication](/specifications/replication/) | Replication sessions, full sync, offsets, and acknowledgement. |
 | [Transactions](/specifications/txn/) | MULTI/EXEC transactions, WATCH, and script atomicity. |

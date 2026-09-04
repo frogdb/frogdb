@@ -14,7 +14,6 @@ allow-cross-slot-standalone = false
 scatter-gather-timeout-ms = 5000
 max-clients = 10000
 enable-debug-command = false
-pubsub-output-buffer-hard-limit = 33554432
 client-output-buffer-limit = "normal 0 0 0 replica 268435456 67108864 60 pubsub 33554432 8388608 60"
 
 [logging]

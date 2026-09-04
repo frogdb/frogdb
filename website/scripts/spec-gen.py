@@ -59,6 +59,11 @@ AREAS: dict[str, tuple[int, str, str]] = {
     "txn": (4, "Transactions", "MULTI/EXEC transactions, WATCH, and script atomicity."),
     "vll": (5, "VLL", "Very Lightweight Locking: acquisition, continuation, and drain."),
     "blocking": (6, "Blocking", "Blocking commands: waits, wakeups, and disconnect handling."),
+    "memory": (
+        7,
+        "Memory",
+        "Where bytes come from, who is charged for them, and what happens when there are no more.",
+    ),
 }
 
 # `](target)` or `](target "title")`
