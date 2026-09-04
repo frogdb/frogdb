@@ -147,7 +147,6 @@ frogdb-server/
 │   ├── vll/                   # Very Lightweight Locking
 │   ├── telemetry/             # Prometheus metrics, OpenTelemetry tracing
 │   ├── debug/                 # Debug web UI
-│   ├── frogdb-macros/         # Proc macros
 │   ├── metrics-derive/        # Typed metrics proc macro
 │   ├── test-harness/          # TestServer, ClusterHarness
 │   ├── testing/               # Consistency checker, test models

@@ -126,7 +126,7 @@ addendum (R4-R6) of [replication issue 24](https://github.com/frogdb/frogdb/blob
 | --- | --- |
 | Precondition | any row above that names `Durability::Committed` |
 | Postcondition | The variant is `Durability::Committed`, renamed from `Confirm` with [issue 05](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/done/05-persistence-advisory-sweep.md). `Committed` over `Synced` because the wait target is `committed_seq` (TR-PERSISTENCE-007) at *every* durability mode: under `sync` the commit it waits on is the fsync, under `periodic`/`async` it is a RocksDB write. `Synced` would have been true only in `sync` mode, and the old `Confirm` said nothing at all — it read as a durability guarantee at every call site and was one only under `sync` (FM-PERSISTENCE-043). Second half of the ruling: **no client-visible acknowledgment primitive binds to `synced_seq` today.** `WAITAOF`, which in Redis counts fsynced copies specifically, is a stub that replies `-ERR ... not implemented`; `WAIT` counts replica acknowledgments of the *replication* offset, a stream position with no fsync in it. `synced_seq` is not even in `WalLagStats` — the operator-visible watermark is `committed_sequence`, deliberately (`INFO persistence` publishes the buffered-vs-committed gap, never a durable one) — and `RocksWalWriter::durable_sequence` is read only inside the persistence crate. The moment a `WAITAOF` (or any other on-device acknowledgment) lands, it binds to `synced_seq` and not to `committed_seq`, and this row records the binding |
-| Source | `frogdb-core/src/shard/persistence.rs` (`enum Durability`, both variants); `flush.rs` (`committed_sequence`/`durable_sequence` accessors, the two candidates this binding chooses between); `frogdb-server/src/commands/stub.rs` (`WAITAOF`) |
+| Source | `frogdb-core/src/shard/persistence.rs` (`enum Durability`, both variants); `flush.rs` (`committed_sequence`/`durable_sequence` accessors, the two candidates this binding chooses between); `frogdb-server/crates/server/src/commands/stub.rs` (`WAITAOF`) |
 | Rulings | [issue 05](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/done/05-persistence-advisory-sweep.md) |
 
 *Flush and durable-sync advance.*
@@ -477,7 +477,7 @@ mode either (TR-PERSISTENCE-008's precondition).
 | --- | --- |
 | Precondition | phase 3 has completed; `functions.fdb` is unreadable or fails to parse |
 | Postcondition | the failure is still downgraded to an empty library set with a `warn!` — the boot proceeds — but it is counted: `RecoveryStats::functions_failed` gains `1`, `frogdb_recovery_functions_failed_total` increments, and `INFO persistence` reports `functions_last_load_failed` alongside `rdb_last_load_keys_failed` (mirrors TR-PERSISTENCE-039's `keys_failed` pattern). A library the wiring layer then fails to parse or register adds `1` to the same two. See [FM-PERSISTENCE-037](#fm-persistence-037--a-corrupt-function-library-does-not-block-startup) |
-| Source | `frogdb-recovery/src/functions.rs` (`restore`); `frogdb-server/src/server/init.rs` (per-library registration) |
+| Source | `frogdb-recovery/src/functions.rs` (`restore`); `frogdb-server/crates/server/src/server/init.rs` (per-library registration) |
 | Rulings | [issue 05](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/done/05-persistence-advisory-sweep.md) |
 
 ## TR-PERSISTENCE-042 — Phase 5: RestoreReplicationState
