@@ -15,3 +15,7 @@ CI smoke job for the shipping build path (to be filed once 01 has a fix directio
   checks); integration branch `build-toolchain/impl` branched from
   `origin/issue-cross-build-usearch` (= `origin/main` + issue 01) so the tracker dir exists
   from the first commit and issue 01 ships in the same PR.
+- D2: the Unit Tests regressions (cluster handoff/migration/finalization tests) are filed as
+  `.scratch/memory-architecture/issues/24` — a regression from that directory's issue 18 —
+  and investigated first (reproduce, bisect, root-cause), with the spec-first fix issue
+  carved from the investigation report rather than guessed now.
