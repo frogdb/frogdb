@@ -1,6 +1,6 @@
 # 02 — `main` CI red on seven jobs: mise regression, stale generators, stale doc paths
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -128,3 +128,20 @@ Unit Tests: `frogdb-server::cluster_handoff_barrier` (3–4 tests),
 `cluster_finalization_window::no_write_is_acknowledged_after_the_slot_is_handed_over_under_load`
 fail or time out on `main` since the output-buffer series `b012272d3..e090f0335`. Product
 regression in a LOCKED area; separate issue.
+
+## Resolution
+
+Landed on `build-toolchain/impl` at merge `0bbc66dd9` (2026-09-04). Five commits:
+`98df0f849` mise pin at the generator (all 38 generated mise steps carry
+`version: '2026.8.16'`), `02ba69da9` + `026c38088` regenerated spec pages / compat
+exclusions / command matrix / dashboard / helm / deb, `2bda2737d` the four real spec
+source paths + the `frogdb-macros` tree line + the `frogdb-server/cmd-full` allowlist
+entry, `3f93beca2` (review fix round) the hand-written
+`test-unit-tests-testbox.yml` pin, the unpin trigger in the `MISE_VERSION` comment, and
+the stale Crate Layers row. Gate (`docs-path-check`, `matrix-gen-check`,
+`generate-check`, `scratch-check`, `lint-gates`) green on the merged branch. The Lint
+job itself is only provable by a CI run of the branch.
+
+Left open, not filed: `.claude/skills/db-architect/references/crate-map.md` and
+`.claude/skills/doc-sync/references/doc-map.md` still name the deleted `frogdb-macros`
+crate (not path-checked, CI-neutral).

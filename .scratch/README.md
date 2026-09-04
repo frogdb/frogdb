@@ -23,10 +23,10 @@ temp dir. Several files here are load-bearing — `scripts/coverage-depth.py` wr
 | [hardening](hardening/) | active | 2 | 37 | foundation-hardening campaign, **exited 2026-08-05** — all four areas locked; specs remain the contract |
 | [naming-cleanup](naming-cleanup/) | active | 1 | 4 | canonical terminology; decisions now canon in `CONTEXT.md` files |
 | [testing-improvements](testing-improvements/) | archive-of-record | 1 | 18 | round-1 testing-gap audit. **Do not delete** — live write target + inbound refs |
-| [build-toolchain](build-toolchain/) | active | 2 | 0 | build/CI-toolchain/release-path defects, where dev builds stay green but a shipping or gating path is broken; opened 2026-09-02 with `just cross-build` failing on usearch under zig; 02 filed 2026-09-04 for `main` CI red on seven jobs |
+| [build-toolchain](build-toolchain/) | active | 1 | 1 | build/CI-toolchain/release-path defects, where dev builds stay green but a shipping or gating path is broken; opened 2026-09-02 with `just cross-build` failing on usearch under zig; 02 filed 2026-09-04 for `main` CI red on seven jobs, landed same day on `build-toolchain/impl` |
 | [roadmap](roadmap/) | active | — | — | roadmap + unfinished/follow-up items (migrated from the retired `todo/`); not an issue tracker |
 
-Totals: **108 open, 113 done**. `done/` holds only closed issues still referenced from
+Totals: **107 open, 114 done**. `done/` holds only closed issues still referenced from
 tracked files; unreferenced closed issues are pruned — git history is the archive.
 
 ## Conventions
