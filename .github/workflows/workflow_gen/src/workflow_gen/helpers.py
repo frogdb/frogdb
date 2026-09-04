@@ -55,6 +55,14 @@ RUST_VERSION = _read_rust_version()
 # `cargo` is actually missing from PATH.
 RUST_TOOLCHAIN = f"dtolnay/rust-toolchain@{RUST_VERSION}"
 
+# Pin mise itself. mise 2026.9.0 made the `cargo:` backend require a mise-managed
+# `rust` install, so `cargo:cargo-deny` fails with "requires configured install
+# dependency 'rust@...', but its selected version is not installed" — and this repo
+# deliberately installs Rust with dtolnay/rust-toolchain after the mise step (see the
+# RUST_TOOLCHAIN comment above), so adding `rust` to install_args is not the fix.
+# 2026.8.16 is the last 2026.8.x release, before the regression.
+MISE_VERSION = "2026.8.16"
+
 
 def ensure_path(path: str) -> str:
     """Validate that a repo-root-relative path exists, then return it."""
@@ -118,6 +126,7 @@ def mise_setup_step(install_args: str | None = None) -> Step:
         need Rust (e.g. docs jobs that only need Node + bun).
     """
     w = CommentedMap()
+    w["version"] = SQ(MISE_VERSION)
     w["install"] = SQ("true")
     if install_args:
         w["install_args"] = install_args
