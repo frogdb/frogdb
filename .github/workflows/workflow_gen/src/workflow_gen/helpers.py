@@ -60,7 +60,10 @@ RUST_TOOLCHAIN = f"dtolnay/rust-toolchain@{RUST_VERSION}"
 # dependency 'rust@...', but its selected version is not installed" — and this repo
 # deliberately installs Rust with dtolnay/rust-toolchain after the mise step (see the
 # RUST_TOOLCHAIN comment above), so adding `rust` to install_args is not the fix.
-# 2026.8.16 is the last 2026.8.x release, before the regression.
+# 2026.8.16 is the last 2026.8.x release, before the regression. Unpin once a mise
+# newer than this installs `cargo:cargo-deny` with no `rust` entry in .mise.toml, then
+# `just workflow-gen`; `.github/workflows/test-unit-tests-testbox.yml` is hand-written
+# and carries its own copy of this value, so it has to move in the same commit.
 MISE_VERSION = "2026.8.16"
 
 

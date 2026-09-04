@@ -43,9 +43,12 @@ jobs:
         with:
           key: ${{ github.repository }}-testbox-arm-cargo-registry
           path: /home/runner/.cargo/registry
+      # This workflow is hand-maintained (render.py's MANUAL_WORKFLOWS), so the mise
+      # pin below must be kept in step with MISE_VERSION in workflow_gen/helpers.py.
       - name: Set up mise toolchain
         uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
         with:
+          version: '2026.8.16'
           install: 'true'
           install_args: just cargo:cargo-nextest
           cache: 'true'
