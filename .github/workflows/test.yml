@@ -105,6 +105,7 @@ jobs:
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
+        version: '2026.8.16'
         install: 'true'
         install_args: just cargo:cargo-deny
         cache: 'true'
@@ -138,6 +139,7 @@ jobs:
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
+        version: '2026.8.16'
         install: 'true'
         install_args: python uv just
         cache: 'true'
@@ -157,6 +159,7 @@ jobs:
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
+        version: '2026.8.16'
         install: 'true'
         install_args: just npm:@informalsystems/quint
         cache: 'true'
@@ -176,6 +179,7 @@ jobs:
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
+        version: '2026.8.16'
         install: 'true'
         install_args: just cargo:cargo-nextest npm:@informalsystems/quint
         cache: 'true'
@@ -201,6 +205,7 @@ jobs:
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
+        version: '2026.8.16'
         install: 'true'
         install_args: just
         cache: 'true'
@@ -232,6 +237,7 @@ jobs:
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
+        version: '2026.8.16'
         install: 'true'
         install_args: just cargo:cargo-nextest
         cache: 'true'
@@ -257,6 +263,7 @@ jobs:
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
+        version: '2026.8.16'
         install: 'true'
         install_args: just cargo:cargo-nextest
         cache: 'true'
@@ -284,6 +291,7 @@ jobs:
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
+        version: '2026.8.16'
         install: 'true'
         install_args: just cargo:cargo-nextest
         cache: 'true'
@@ -309,6 +317,7 @@ jobs:
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
+        version: '2026.8.16'
         install: 'true'
         install_args: just
         cache: 'true'
@@ -334,6 +343,7 @@ jobs:
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
+        version: '2026.8.16'
         install: 'true'
         install_args: just
         cache: 'true'
@@ -387,6 +397,7 @@ jobs:
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
+        version: '2026.8.16'
         install: 'true'
         install_args: just
         cache: 'true'
@@ -412,6 +423,7 @@ jobs:
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
+        version: '2026.8.16'
         install: 'true'
         install_args: python uv just
         cache: 'true'
@@ -429,6 +441,7 @@ jobs:
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
+        version: '2026.8.16'
         install: 'true'
         install_args: python uv just
         cache: 'true'
@@ -446,6 +459,7 @@ jobs:
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
+        version: '2026.8.16'
         install: 'true'
         install_args: python uv just
         cache: 'true'
@@ -471,6 +485,7 @@ jobs:
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
+        version: '2026.8.16'
         install: 'true'
         install_args: python uv just
         cache: 'true'
@@ -488,6 +503,7 @@ jobs:
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
+        version: '2026.8.16'
         install: 'true'
         install_args: python uv just
         cache: 'true'
@@ -505,6 +521,7 @@ jobs:
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
+        version: '2026.8.16'
         install: 'true'
         install_args: python uv just
         cache: 'true'
@@ -522,6 +539,7 @@ jobs:
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
+        version: '2026.8.16'
         install: 'true'
         install_args: python uv ruff
         cache: 'true'
@@ -541,6 +559,7 @@ jobs:
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
+        version: '2026.8.16'
         install: 'true'
         install_args: helm
         cache: 'true'

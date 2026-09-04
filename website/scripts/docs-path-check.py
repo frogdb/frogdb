@@ -106,9 +106,17 @@ KNOWN_TOP_LEVEL = frozenset(
 
 # Repo-relative paths (post-normalization, exactly as they'd be reported
 # below) that are allowed to not exist -- e.g. a docs page intentionally
-# shows a hypothetical/future path in an example. Keep this empty unless a
+# shows a hypothetical/future path in an example. Keep this small unless a
 # specific doc genuinely needs it; prefer fixing the doc.
-ALLOWLIST: frozenset[str] = frozenset()
+ALLOWLIST: frozenset[str] = frozenset(
+    {
+        # A cargo feature spec, `<crate>/<feature>`, not a path: the docs build
+        # the deb package with `--features frogdb-server/cmd-full`, which the
+        # tokenizer cannot tell from a directory under the `frogdb-server`
+        # workspace prefix.
+        "frogdb-server/cmd-full",
+    }
+)
 
 # ---------------------------------------------------------------------------
 # Extraction
