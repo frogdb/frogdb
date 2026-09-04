@@ -1,10 +1,10 @@
-# build-toolchain — build, cross-compilation and release-path defects
+# build-toolchain — build, CI-toolchain and release-path defects
 
 State: active
 
 Working directory for defects in the *build* itself rather than in FrogDB's behavior: the
-cross-compilation path, vendored C/C++ dependency builds, and the recipes that produce
-distributable artifacts.
+cross-compilation path, vendored C/C++ dependency builds, the recipes that produce
+distributable artifacts, and the CI toolchain and generated-artifact checks that gate `main`.
 
 The distinguishing feature of this class of bug is that ordinary development stays green while
 a shipping path is broken. Per [ADR-0005](../../adr/0005-truthful-redis-86-surface.md) ruling 1,
