@@ -77,13 +77,27 @@ lease is ever stored in a `Value`.
 
 Landed (each with its forcing test, most tagged `FM-MEMORY-003` in `specs/memory.md`):
 zero-copy `try_from` (`test_try_from_is_zero_copy`); escape-point copies at the keyspace
-install seam, blocking park, scatter partition, foreign-core hop, and collection-internal
-retention points (quicklist plain nodes, stream group/consumer/PEL names), all through the
-single `frogdb_protocol::detach_bytes` chokepoint; hop batching K shards → K messages
-(`a_scatter_over_k_shards_sends_exactly_k_lock_messages`,
+install seam, blocking park, scatter partition, foreign-core hop, connection-local retention
+(MULTI queue, WATCH, tracking prefixes, client name/lib info), cross-connection retention
+(slow log, pub/sub publish, script cache) and collection-internal retention points
+(quicklist plain nodes, stream group/consumer/PEL names, vector-set element names,
+time-series compaction destinations), all through the single
+`frogdb_protocol::detach_bytes` chokepoint; the read buffer is pool-seeded at accept and
+recycled/released back; parked pipelined frames are copied out (`detach_frame`) so the
+`is_unique` discriminator stays sound across the one mid-command read-ahead; hop batching
+K shards → K messages (`a_scatter_over_k_shards_sends_exactly_k_lock_messages`,
 `partition_batches_keys_per_shard_and_detaches_them`); pipelined-completion pool property
 test (`a_pipelined_burst_of_slices_releases_the_lease_only_when_the_last_drops`; no unsafe
 anywhere in the handoff, so no miri/loom needed).
+
+**Store boundary (§4) — enforced by convention, not by type.** No `Bytes` rooted in the
+read buffer is stored in a `Value`: `HashMapStore::install` detaches args and calls
+`Value::detach_network_aliases`, whose exhaustive match makes every variant declare
+whether it copies on insert or detaches at its own retention point. There is no runtime
+assertion — `is_unique()` cannot distinguish "aliases a read buffer" from "shared with a
+COPY'd sibling", so a `debug_assert` would misfire on legitimately shared values. The
+forcing test is `install_detaches_args_that_alias_a_shared_read_buffer`; adding a
+variant does not compile until its arm — and therefore its copy/detach story — is written.
 
 Remaining — needs the Linux rig and a human decision, hence ready-for-human:
 

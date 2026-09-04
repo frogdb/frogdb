@@ -175,7 +175,8 @@ impl SlowLog {
             .iter()
             .map(|arg| {
                 if max_arg_len == 0 || arg.len() <= max_arg_len {
-                    arg.clone()
+                    // Slow-log entries outlive the command; never pin its read buffer.
+                    frogdb_protocol::detach_bytes(arg.clone())
                 } else {
                     // Truncate and add indicator
                     let truncated = &arg[..max_arg_len];

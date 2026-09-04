@@ -87,7 +87,7 @@ use futures::StreamExt;
 use lifecycle::TrackingIo;
 use redis_protocol::error::RedisProtocolError;
 use redis_protocol::resp2::types::BytesFrame;
-use tokio_util::codec::Framed;
+use tokio_util::codec::{Framed, FramedParts};
 use tracing::{Instrument, debug, info, trace, warn};
 
 use crate::commands::replication::PsyncHandoff;
@@ -316,7 +316,12 @@ impl ConnectionHandler {
         config: ConnectionConfig,
         observability: ObservabilityDeps,
     ) -> Self {
-        let framed = Framed::new(socket, FrogDbResp2::default());
+        // Seed the read buffer from the core's pool so the very first command
+        // lands in a class-sized, recyclable buffer; `trim_idle_buffers` and
+        // `release_buffers_to_pool` keep it there for the connection's life.
+        let mut parts = FramedParts::new::<BytesFrame>(socket, FrogDbResp2::default());
+        parts.read_buf = frogdb_net::buffers::lease(lifecycle::READ_IDLE_TARGET).into_inner();
+        let framed = Framed::from_parts(parts);
         // Dynamic auth check: also require auth if the default user is disabled
         let requires_auth = core.acl_manager.requires_auth()
             || core

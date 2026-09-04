@@ -1,6 +1,7 @@
 //! Parsed command representation.
 
 use bytes::Bytes;
+use bytes_utils::Str;
 use redis_protocol::resp2::types::BytesFrame;
 
 use crate::ProtocolError;
@@ -21,12 +22,43 @@ use crate::ProtocolError;
 /// `Bytes` that aliases it is never unique. A unique `Bytes` is already
 /// privately owned and passes through untouched — internal callers
 /// (replication apply, recovery, tests) pay nothing.
+///
+/// That discriminator rests on one read-loop invariant: the socket is only
+/// polled *between* commands, so while a command's args are alive the codec
+/// never reallocates the buffer out from under them. The one place a
+/// connection reads ahead mid-command — parking a blocking command while
+/// draining pipelined frames — copies each frame out with [`detach_frame`]
+/// before the next poll, so no slice is ever left as the sole holder of a
+/// reallocated-away buffer.
 #[inline]
 pub fn detach_bytes(bytes: Bytes) -> Bytes {
     if bytes.is_unique() {
         bytes
     } else {
         Bytes::copy_from_slice(&bytes)
+    }
+}
+
+/// Copy every payload in a decoded frame out of the buffer it was decoded
+/// from, via [`detach_bytes`].
+///
+/// Used where a frame is held across a further socket poll (see the
+/// invariant on [`detach_bytes`]). Frames without a payload (integers, null)
+/// pass through.
+pub fn detach_frame(frame: BytesFrame) -> BytesFrame {
+    match frame {
+        BytesFrame::BulkString(b) => BytesFrame::BulkString(detach_bytes(b)),
+        BytesFrame::SimpleString(b) => BytesFrame::SimpleString(detach_bytes(b)),
+        BytesFrame::Error(s) => {
+            let detached = detach_bytes(s.into_inner());
+            // Copying does not change the bytes, so the UTF-8 check that
+            // admitted the original still holds.
+            BytesFrame::Error(Str::from_inner(detached).expect("copied str stays valid UTF-8"))
+        }
+        BytesFrame::Array(frames) => {
+            BytesFrame::Array(frames.into_iter().map(detach_frame).collect())
+        }
+        other @ (BytesFrame::Integer(_) | BytesFrame::Null) => other,
     }
 }
 
@@ -211,6 +243,39 @@ mod tests {
         let detached = detach_bytes(owned);
         // Unique: passed through untouched.
         assert_eq!(detached.as_ptr(), ptr);
+    }
+
+    // FM-MEMORY-003
+    #[test]
+    fn test_detach_frame_releases_source_buffer() {
+        let buffer = Bytes::from(b"LPUSH list ERR".to_vec());
+        let frame = BytesFrame::Array(vec![
+            BytesFrame::BulkString(buffer.slice(0..5)),
+            BytesFrame::SimpleString(buffer.slice(6..10)),
+            BytesFrame::Error(Str::from_inner(buffer.slice(11..14)).unwrap()),
+            BytesFrame::Integer(7),
+            BytesFrame::Null,
+        ]);
+
+        let detached = detach_frame(frame);
+        drop(buffer);
+
+        let BytesFrame::Array(frames) = detached else {
+            panic!("array preserved");
+        };
+        assert!(matches!(&frames[0], BytesFrame::BulkString(b) if b.as_ref() == b"LPUSH"));
+        assert!(matches!(&frames[1], BytesFrame::SimpleString(b) if b.as_ref() == b"list"));
+        assert!(matches!(&frames[2], BytesFrame::Error(s) if s.as_bytes() == b"ERR"));
+        assert!(matches!(frames[3], BytesFrame::Integer(7)));
+        assert!(matches!(frames[4], BytesFrame::Null));
+        // Every payload is now privately owned.
+        for frame in frames {
+            match frame {
+                BytesFrame::BulkString(b) | BytesFrame::SimpleString(b) => assert!(b.is_unique()),
+                BytesFrame::Error(s) => assert!(s.into_inner().is_unique()),
+                _ => {}
+            }
+        }
     }
 
     // FM-MEMORY-003

@@ -270,6 +270,8 @@ impl VectorSetValue {
 
     /// Add or update an element. Returns true if the element is new.
     pub fn add(&mut self, name: Bytes, vector: Vec<f32>) -> Result<bool, String> {
+        // The name is retained by three indexes; never let it pin a read buffer.
+        let name = frogdb_protocol::detach_bytes(name);
         let is_new;
 
         if let Some(&existing_id) = self.name_to_id.get(&name) {

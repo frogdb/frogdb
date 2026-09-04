@@ -56,9 +56,17 @@ impl coordinator::PeerLiveness for SocketWatch<'_> {
             }
             // `StreamExt::next` on a `Framed` is cancel-safe: a partially read
             // frame stays in the codec's buffer if the select drops this branch.
+            //
+            // Each parked frame is copied out of the read buffer before the
+            // next poll: a later `reserve` may reallocate the buffer, and a
+            // slice left as the sole holder of the old allocation would
+            // look unique to `detach_bytes` and pin it (invariant documented
+            // on `frogdb_protocol::detach_bytes`).
             match self.framed.next().await {
                 None => return,
-                Some(item) => self.parked.push_back(item),
+                Some(item) => self
+                    .parked
+                    .push_back(item.map(frogdb_protocol::detach_frame)),
             }
         }
     }

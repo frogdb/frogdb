@@ -553,11 +553,13 @@ impl<'a> PubSubIo<'a> {
         // Broadcast pub/sub uses the coordinator shard so the count reflects
         // actual unique subscribers rather than being multiplied by the number
         // of shards.
+        // The payload sits in subscriber queues until each subscriber drains
+        // it: copy once here so no subscriber pins this connection's read buffer.
         let (response_tx, response_rx) = oneshot::channel();
         let _ = self.core.shard_senders[BROADCAST_SHARD]
             .send(PubSubMsg::Publish {
-                channel: channel.clone(),
-                message: message.clone(),
+                channel: frogdb_protocol::detach_bytes(channel.clone()),
+                message: frogdb_protocol::detach_bytes(message.clone()),
                 response_tx,
             })
             .await;
@@ -599,8 +601,8 @@ impl<'a> PubSubIo<'a> {
         let (response_tx, response_rx) = oneshot::channel();
         let _ = self.core.shard_senders[shard_id]
             .send(PubSubMsg::ShardedPublish {
-                channel: channel.clone(),
-                message: message.clone(),
+                channel: frogdb_protocol::detach_bytes(channel.clone()),
+                message: frogdb_protocol::detach_bytes(message.clone()),
                 response_tx,
             })
             .await;

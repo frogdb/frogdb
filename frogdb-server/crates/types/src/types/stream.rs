@@ -693,13 +693,22 @@ impl ConsumerGroup {
         // On creation the name is retained for the life of the group, so it
         // must not alias a network read buffer; existing consumers are looked
         // up without touching the caller's bytes.
-        if !self.consumers.contains_key(&name) {
+        //
+        // Not the `entry` API: a vacant entry is keyed by the caller's bytes
+        // and cannot be re-keyed with the detached copy, so it would cost an
+        // extra clone on every create. The lookup-then-insert costs one more
+        // probe only on the create path.
+        let name = if self.consumers.contains_key(&name) {
+            name
+        } else {
             let name = frogdb_protocol::detach_bytes(name);
             self.consumers
                 .insert(name.clone(), Consumer::new(name.clone()));
-            return self.consumers.get_mut(&name).expect("just inserted");
-        }
-        self.consumers.get_mut(&name).expect("checked above")
+            name
+        };
+        self.consumers
+            .get_mut(&name)
+            .expect("present or just inserted")
     }
 
     /// Whether a consumer with this name currently exists in the group.

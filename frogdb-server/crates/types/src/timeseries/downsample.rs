@@ -51,7 +51,8 @@ impl DownsampleRule {
     /// Create a new downsampling rule.
     pub fn new(dest_key: Bytes, bucket_duration_ms: i64, aggregation: Aggregation) -> Self {
         Self {
-            dest_key,
+            // Retained for the life of the source series; never alias a read buffer.
+            dest_key: frogdb_protocol::detach_bytes(dest_key),
             bucket_duration_ms,
             aggregation,
             current_bucket_start: None,

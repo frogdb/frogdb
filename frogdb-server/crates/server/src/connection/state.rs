@@ -1982,4 +1982,33 @@ mod tests {
         assert!(s.is_authenticated());
         assert_eq!(s.username(), "default");
     }
+
+    // ---- zero-copy escape points -----------------------------------------
+
+    // FM-MEMORY-003
+    /// MULTI queues and WATCH sets outlive the command that produced them, so
+    /// both must copy out of the (shared) read buffer at the retention point.
+    #[test]
+    fn queued_commands_and_watches_detach_from_the_shared_read_buffer() {
+        // One heap buffer standing in for the connection's read buffer; the
+        // command and watch key are slices of it, as the parser produces.
+        let backing = Bytes::from(b"SET key val watched".to_vec());
+        let queued = ParsedCommand::new(
+            backing.slice(0..3),
+            vec![backing.slice(4..7), backing.slice(8..11)],
+        );
+
+        let mut s = state();
+        s.begin_transaction().expect("MULTI");
+        s.push_queued_command(queued);
+        s.watch_key(backing.slice(12..19), 0, 1, true);
+
+        assert!(
+            backing.is_unique(),
+            "retained queue and watch must not alias the read buffer"
+        );
+        let summary = s.take_transaction().expect("in transaction");
+        assert_eq!(summary.queue[0].args[1].as_ref(), b"val");
+        assert_eq!(summary.watches[0].entry.key.as_ref(), b"watched");
+    }
 }

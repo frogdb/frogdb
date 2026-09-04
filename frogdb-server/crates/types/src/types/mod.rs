@@ -141,13 +141,26 @@ impl Value {
     ///
     /// Called by the keyspace install seam so a stored value never pins a
     /// connection's pooled read buffer (see [`frogdb_protocol::detach_bytes`]).
-    /// Only strings hold caller-supplied `Bytes` verbatim at install time;
-    /// every collection copies elements into packed storage on insert, and
-    /// the exceptions (quicklist plain nodes, stream group/consumer names)
-    /// detach at their own retention points inside the collection types.
+    /// Only strings hold caller-supplied `Bytes` verbatim at install time.
+    /// Every other variant either copies elements into packed storage on
+    /// insert or detaches at its own retention point (quicklist plain nodes,
+    /// stream group/consumer names, vector-set element names, time-series
+    /// compaction destinations). The match is exhaustive on purpose: adding a
+    /// variant forces the author to say which of the two it is.
     pub fn detach_network_aliases(&mut self) {
-        if let Value::String(sv) = self {
-            sv.detach();
+        match self {
+            Value::String(sv) => sv.detach(),
+            Value::List(_) | Value::Stream(_) | Value::VectorSet(_) | Value::TimeSeries(_) => {} // detach at retention points
+            Value::SortedSet(_)
+            | Value::Hash(_)
+            | Value::Set(_)
+            | Value::BloomFilter(_)
+            | Value::HyperLogLog(_)
+            | Value::Json(_)
+            | Value::CuckooFilter(_)
+            | Value::TopK(_)
+            | Value::TDigest(_)
+            | Value::CountMinSketch(_) => {} // copy on insert
         }
     }
 

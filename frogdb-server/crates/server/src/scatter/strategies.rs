@@ -13,16 +13,20 @@ use super::{PartitionResult, ScatterGatherStrategy};
 /// The partitioned keys cross to other cores (lock requests) and are held in
 /// shard lock tables, so they are detached from the connection's pooled read
 /// buffer here — one copy per key, made once per command, reused across
-/// wound-retry attempts. `key_order` shares the detached allocations.
+/// wound-retry attempts. `key_order` never leaves the connection and is
+/// dropped with the command, so it keeps the original slice rather than
+/// holding a second reference to the detached copy.
 fn partition_keys(keys: &[Bytes], num_shards: usize) -> PartitionResult {
     let mut shard_keys: BTreeMap<usize, Vec<Bytes>> = BTreeMap::new();
     let mut key_order: Vec<(usize, Bytes)> = Vec::new();
 
     for key in keys {
         let shard_id = shard_for_key(key, num_shards);
-        let key = frogdb_protocol::detach_bytes(key.clone());
-        shard_keys.entry(shard_id).or_default().push(key.clone());
-        key_order.push((shard_id, key));
+        shard_keys
+            .entry(shard_id)
+            .or_default()
+            .push(frogdb_protocol::detach_bytes(key.clone()));
+        key_order.push((shard_id, key.clone()));
     }
 
     PartitionResult {

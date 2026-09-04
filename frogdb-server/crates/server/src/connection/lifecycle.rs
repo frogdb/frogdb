@@ -17,6 +17,13 @@ use super::state::{STATS_SYNC_INTERVAL_COMMANDS, STATS_SYNC_INTERVAL_MS};
 use crate::scatter::ScatterGather;
 use frogdb_core::clock;
 
+/// The read buffer's resting size: what a connection is seeded with from the
+/// core's pool and what an idle one is trimmed back down to. Matches
+/// tokio-util's own `Framed` initial capacity (`INITIAL_CAPACITY`, 8 KiB) —
+/// trimming below it would hand the codec less than it would otherwise start
+/// with, so the very next command would grow it straight back.
+pub(super) const READ_IDLE_TARGET: usize = 8 * 1024;
+
 /// Client-tracking IO plumbing owned by the connection handler: the
 /// invalidation delivery channel and the optional REDIRECT forwarding task.
 /// Grouped into one value so the CLIENT executor can hold it as a
@@ -291,12 +298,6 @@ impl ConnectionHandler {
         /// pool's smallest class, which is also a sensible size for the next
         /// reply.
         const IDLE_TARGET: usize = buffers::MIN_CLASS_BYTES;
-
-        /// The read buffer's floor is tokio-util's own initial capacity for a
-        /// `Framed` (`INITIAL_CAPACITY`, 8 KiB). Trimming below it would hand
-        /// the codec less than it starts every connection with, so the very
-        /// next command would grow it straight back — churn, not reclamation.
-        const READ_IDLE_TARGET: usize = 8 * 1024;
 
         fn shrink(buf: &mut bytes::BytesMut, target: usize) {
             if buf.is_empty() && buf.capacity() > target {

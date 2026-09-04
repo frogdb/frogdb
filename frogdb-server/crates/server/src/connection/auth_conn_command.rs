@@ -57,9 +57,11 @@ impl ConnStateMut for ConnectionState {
     }
 
     fn set_name(&mut self, name: Option<Bytes>) {
-        // Retained for the life of the connection (and read by CLIENT LIST) —
-        // copy out of the pooled read buffer (zero-copy parse path).
-        self.name = name.map(frogdb_protocol::detach_bytes);
+        // Retained for the life of the connection and shared with the
+        // cross-thread client registry. The two callers (CLIENT SETNAME,
+        // HELLO SETNAME) detach once and hand the same copy to both, so
+        // detaching again here would only pay for a second copy.
+        self.name = name;
     }
 
     fn mark_hello_received(&mut self) {

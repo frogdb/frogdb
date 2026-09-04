@@ -25,9 +25,15 @@
 //! parsed command's arguments are refcounted slices of the connection's
 //! pooled read buffer, not owned copies. That is free for the zero-hop case —
 //! the same thread that owns the buffer executes the command — but a foreign
-//! core must never hold a reference into another core's buffer pool, so
+//! core must never *retain* a reference into another core's buffer pool, so
 //! `execute_on_shard_inner` detaches (bulk-copies) the command once per hop
-//! before it crosses. The reply still travels back by value over a `oneshot`.
+//! before it crosses. Per-op messages (`ScatterOp`, `DUMP`, ...) may still
+//! carry a borrowed slice for the duration of one synchronous request, since
+//! the connection holds the buffer alive until the reply arrives; what is
+//! forbidden is a slice outliving that round trip. (If the connection is
+//! killed mid-request the shard's drop can be the last one — a single
+//! foreign-thread free of an already-detached-from-pool allocation, bounded
+//! to that one buffer.) The reply travels back by value over a `oneshot`.
 //! Retention past execution is handled the same way at each escape point:
 //! the keyspace install seam, blocking-park registration, MULTI queueing, and
 //! scatter partitioning all detach what they keep.

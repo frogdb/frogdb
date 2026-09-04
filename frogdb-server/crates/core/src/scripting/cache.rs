@@ -19,6 +19,8 @@ pub struct CachedScript {
 impl CachedScript {
     /// Create a new cached script.
     pub fn new(source: Bytes) -> Self {
+        // Cached for the life of the shard; never alias a connection's read buffer.
+        let source = frogdb_protocol::detach_bytes(source);
         let sha = compute_sha(&source);
         Self { source, sha }
     }
