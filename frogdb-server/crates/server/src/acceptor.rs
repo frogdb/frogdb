@@ -694,7 +694,7 @@ mod tests {
     /// comes back, which is only possible if the move succeeded.
     #[tokio::test]
     async fn a_pinned_connection_is_served_from_the_shard_runtime() {
-        use crate::net::{RealShardExecutor, ShardExecutor};
+        use crate::net::{RealShardExecutor, ShardExecutor, shard_body};
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         // One shard on its own thread with its own current-thread runtime. The
@@ -702,7 +702,7 @@ mod tests {
         // runtime to place the connection on.
         let mut executor = RealShardExecutor::new();
         let _shard = executor
-            .launch(0, Box::pin(std::future::pending::<()>()))
+            .launch(0, shard_body(std::future::pending::<()>))
             .expect("shard launch");
         let placement = ShardPlacement::collect(&executor, 1);
         assert!(
