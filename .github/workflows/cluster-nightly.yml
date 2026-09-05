@@ -66,8 +66,9 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
-        version: '2026.8.16'
         install: 'true'
         install_args: just cargo:cargo-nextest
         cache: 'true'
@@ -94,8 +95,9 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
-        version: '2026.8.16'
         install: 'true'
         install_args: just cargo:cargo-nextest
         cache: 'true'
