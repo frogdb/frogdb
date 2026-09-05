@@ -34,11 +34,20 @@
 //! `unsafe impl<V: Send> Send for Table<V, N>`: the table and every record it
 //! owns move together, so after the move exactly one thread can still reach any
 //! of those refcounts. There is deliberately no `Sync` — a shared `&Table` would
-//! let two threads clone the same record at once — and no blanket `Send`, since
-//! `V` is the half of a slot a caller can take out by value.
+//! let two threads duplicate the same record at once — and no blanket `Send`,
+//! since `V` is the half of a slot a caller can take out by value.
+//!
+//! "Move together" is a claim about the public API, so the API has to enforce
+//! it. Neither word is `Clone`, and neither has any other method returning an
+//! owned word built from an existing one: the only key handle reachable from a
+//! `&Table` — `Slot::key`, through [`Table::iter`] or [`Table::scan`] — is
+//! therefore a borrow, and a borrow cannot outlive the move. The full
+//! enumeration of public routes is the SAFETY comment on the impl itself.
 //!
 //! The `compile_fail` doctests on [`Record`], [`KeyWord`], [`ValueWord`] and
-//! [`Table`] are what keep that from rotting.
+//! [`Table`] are what keep that from rotting — including one that spells out the
+//! iter-then-duplicate attack, so that giving a word a `Clone` impl again fails
+//! the build.
 //!
 //! # Module order
 //!

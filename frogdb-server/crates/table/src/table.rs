@@ -79,7 +79,7 @@ pub struct TableStats {
 ///
 /// A table may move to its shard thread but may never be *shared*: it is `Send`
 /// (for `V: Send`) and never `Sync`, because two threads holding `&Table` could
-/// clone the same non-atomically refcounted record at once.
+/// duplicate the same non-atomically refcounted record at once.
 ///
 /// ```compile_fail
 /// fn needs_sync<T: Sync>(_: &T) {}
@@ -91,6 +91,19 @@ pub struct TableStats {
 /// fn needs_send<T: Send>(_: T) {}
 /// let t: frogdb_table::Table<frogdb_table::ValueWord> = frogdb_table::Table::new();
 /// needs_send(t);
+/// ```
+///
+/// Nor can a handle be left behind on the sending thread: a key word cannot be
+/// duplicated out of the `&Slot` that [`Table::iter`] and [`Table::scan`] hand
+/// out, because [`KeyWord`](crate::KeyWord) is not `Clone`. Without that, this
+/// would compile, and the two `rc` decrements would race:
+///
+/// ```compile_fail
+/// let mut t: frogdb_table::Table<Box<u64>> = frogdb_table::Table::new();
+/// t.insert(b"a key too long to inline in its word", Box::new(1));
+/// let escaped = t.iter().next().unwrap().key.clone();
+/// std::thread::spawn(move || drop(t)).join().unwrap();
+/// drop(escaped);
 /// ```
 pub struct Table<V, const N: usize = SLOTS_PER_BUCKET> {
     /// `2^global_depth` entries, each the index of the segment serving it.
@@ -414,17 +427,35 @@ impl<V, const N: usize> Table<V, N> {
     }
 }
 
-// SAFETY: the table and every record it owns move together — no handle is left
-// behind. Its keys are `KeyWord`s, which are `!Send` so that a *single* word can
-// never cross a thread while the table keeps a co-owned record on the old one;
-// but a whole table carries every one of its words with it, so after the move
-// exactly one thread can reach any of its refcounts, which is what the plain
-// `u32` count needs. `V: Send` for the same reason at the value end: it is the
-// only part of a slot a caller can take out by value (`remove`, and the previous
-// value from `insert`), and a `Table<ValueWord>` is therefore deliberately not
-// `Send`. The one way to defeat this is to clone a `KeyWord` out of `&Slot` and
-// keep it on the sending thread; nothing in the store backend does, and no
-// `Sync` impl exists, so `&Table` still cannot be shared.
+// SAFETY: what the plain `u32` refcount needs is that at most one thread can
+// ever reach a given record. Moving a table is sound exactly when no handle to
+// any record the table owns can remain on the sending thread, so that is what
+// the public API has to make impossible. It does, and this is the enumeration —
+// every public way to reach a slot's contents, and why none of them yields an
+// owned handle that aliases a record the table owns:
+//
+//  - `iter` and `scan` yield `&Slot<V>`. `Slot::key` is a public field, but
+//    `KeyWord` is not `Clone` and has no other method producing a `KeyWord`, so
+//    the only key handle obtainable is a borrow — and a borrow of `self` cannot
+//    coexist with the move. `KeyWord::new` does build an owned word, but from
+//    bytes, with a fresh record of its own that the table does not share.
+//  - `get`/`get_mut` yield `&V`/`&mut V`, and `remove`/`insert` yield an owned
+//    `V`. All four are covered by the `V: Send` bound, which is why the bound is
+//    here rather than an unconditional impl: with `V = ValueWord` a caller could
+//    take a value word out by value, so `Table<ValueWord>` is deliberately not
+//    `Send`.
+//  - `Record` is `Clone` and `ValueWord::with_record` would hand a closure one,
+//    but reaching either needs a `&ValueWord`, which under `V: Send` is not
+//    reachable from a table at all. `Segment`/`Bucket` do expose owning
+//    accessors (`take`, `remove`), and they need a `&mut Segment`, which no
+//    public `Table` method hands out.
+//  - There is no `Sync` impl, so none of the above can be reached through a
+//    shared `&Table` from a second thread either.
+//
+// So after the move, every handle to every record the table owns has moved with
+// it. The `compile_fail` doctests on `Table` (the iter-clone route and the
+// `Sync` route) and on `KeyWord`/`ValueWord`/`Record` are what keep the
+// enumeration from rotting: adding a `Clone` impl to a word breaks the build.
 unsafe impl<V: Send, const N: usize> Send for Table<V, N> {}
 
 impl<V, const N: usize> Default for Table<V, N> {

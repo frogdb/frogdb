@@ -70,6 +70,15 @@ pub const fn int_fits_inline(v: i64) -> bool {
 /// type — [`crate::Slot`], [`crate::Bucket`], [`crate::Segment`],
 /// [`crate::Table`] — thread-bound too, which is the point.
 ///
+/// It is also **not `Clone`**, and has no other way to produce a second handle
+/// to one record. That is what makes `Table`'s `Send` impl sound rather than
+/// merely conventional: [`Table::iter`](crate::Table::iter) hands out
+/// `&Slot<V>` and [`Slot::key`](crate::Slot) is public, so a duplicating method
+/// here would let safe code outside the crate bump a record's `rc`, keep the
+/// second handle behind on this thread, send the table to another, and race the
+/// two non-atomic decrements. Key records are never shared — a split moves whole
+/// slots by value — so nothing is given up by having no such method.
+///
 /// ```compile_fail
 /// fn needs_send<T: Send>(_: T) {}
 /// needs_send(frogdb_table::KeyWord::new(b"a key long enough to allocate"));
@@ -143,19 +152,6 @@ impl Drop for KeyWord {
         // SAFETY: a non-inline word owns exactly one reference to its record,
         // taken in `KeyWord::new` and released exactly here.
         unsafe { drop_record(self.0) };
-    }
-}
-
-impl Clone for KeyWord {
-    /// Shares the record (an `rc` bump) rather than copying its bytes.
-    fn clone(&self) -> KeyWord {
-        if self.is_inline() {
-            KeyWord::from_bits(self.0)
-        } else {
-            // SAFETY: as `bytes`.
-            let record = unsafe { record_handle(self.0) };
-            KeyWord::from_bits(pack_record(Record::clone(&record)))
-        }
     }
 }
 
@@ -279,10 +275,23 @@ impl Drop for ValueWord {
     }
 }
 
-impl Clone for ValueWord {
+impl ValueWord {
     /// Shares the record (an `rc` bump) rather than copying its bytes — the read
     /// half of COW.
-    fn clone(&self) -> ValueWord {
+    ///
+    /// Not a `Clone` impl, for the reason spelled out on [`KeyWord`]: a public
+    /// way to duplicate a word is a public way to leave a handle behind. A
+    /// `Table<ValueWord>` is not `Send` anyway (the impl requires `V: Send`), so
+    /// a `Clone` here would not defeat that impl on its own — but a value word
+    /// is the same kind of handle to the same kind of non-atomic refcount, and
+    /// the two should not be able to drift apart.
+    ///
+    /// `#[cfg(test)]` because the store currently holds `Box<Entry>` rather than
+    /// value words, so COW sharing has no production caller yet; the tests that
+    /// pin the sharing and copy-on-write semantics do need it. When a caller
+    /// appears, the `cfg` comes off and this stays `pub(crate)`.
+    #[cfg(test)]
+    pub(crate) fn duplicate(&self) -> ValueWord {
         if self.is_inline() {
             ValueWord::from_bits(self.0)
         } else {
@@ -498,7 +507,7 @@ mod tests {
     #[test]
     fn cloning_an_out_of_line_word_shares_one_record() {
         let a = ValueWord::from_bytes(b"a long enough value to need a record");
-        let b = a.clone();
+        let b = a.duplicate();
         assert_eq!(a.with_record(Record::ref_count), Some(2));
         drop(b);
         assert_eq!(a.with_record(Record::ref_count), Some(1));
@@ -509,7 +518,7 @@ mod tests {
     #[test]
     fn writing_through_a_shared_value_word_copies_first() {
         let mut live = ValueWord::from_bytes(b"the original payload");
-        let snapshot = live.clone();
+        let snapshot = live.duplicate();
 
         live.with_record_mut(|r| r.make_mut()[4..12].copy_from_slice(b"REWRITTE"))
             .expect("the value is out of line");
@@ -534,7 +543,7 @@ mod tests {
     #[test]
     fn a_write_that_unwinds_leaves_the_word_owning_its_record() {
         let mut live = ValueWord::from_bytes(b"the original payload");
-        let snapshot = live.clone();
+        let snapshot = live.duplicate();
 
         let gave_up = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             live.with_record_mut(|r| {
