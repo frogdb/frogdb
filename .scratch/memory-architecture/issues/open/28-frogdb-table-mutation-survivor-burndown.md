@@ -1,6 +1,6 @@
 # 28: burn down the frogdb-table mutation survivors the lock did not force
 
-Status: needs-triage
+Status: ready-for-agent
 Type: AFK
 Origin: [issue 22](22-lock-memory-spec.md) audit, 2026-09-05 — the lock's mutation run over
 `frogdb-table` left survivors the audit did not chase
@@ -44,6 +44,13 @@ FM-MEMORY-005 says is the backend's and not a contract).
    2Q's promotion threshold. Neither is a coverage task today.
 4. Anything still surviving after that is documented at the code with why it is
    unobservable, per the locked-area rule — no blanket skips.
+5. Two comment-only nits from the whole-branch re-review, folded in because they share this
+   crate's files (D7): (a) `Segment::bucket` (`segment.rs:174`) is `#[cfg(test)]
+   pub(crate)`, so it vanishes under `cargo build`; one doc sentence above the attribute says
+   it is test-only and why (the raw accessor is UB-reachable, see the fix round). (b) The
+   SAFETY comment in `table.rs` at line 767 (`// SAFETY: what the plain u32 refcount
+   needs…`) wraps mid-phrase; reflow it so each sentence reads whole, no wording change.
+   Neither may touch code.
 
 ## Acceptance criteria
 
@@ -57,3 +64,17 @@ FM-MEMORY-005 says is the backend's and not a contract).
 
 Raising the gate itself. The gate number is set in `CLAUDE.md` and the ADR-0006 addendum;
 moving it is a decision about the whole area, not a side effect of one crate's burndown.
+
+## Files likely touched
+
+- `frogdb-server/crates/table/src/table.rs` (tests + the two comments)
+- `frogdb-server/crates/table/src/segment.rs` (tests + one doc comment)
+- `frogdb-server/crates/table/src/*.rs` mutation notes at surviving sites
+
+## Blocked by
+
+None.
+
+## Decisions
+
+D7

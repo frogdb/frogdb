@@ -255,3 +255,8 @@ Session decisions layered on the R1–R15 rulings above; D-numbers are cited by 
 - D6: `just lint-spec`'s `RUSTC_WRAPPER=""` sccache bypass (concurrent full recompiles
   starved sim suites → phantom nextest timeouts) gets investigate-and-fix, not a doc-only
   rule — filed as `.scratch/concurrency-testing/issues/19`.
+- D7: follow-up round scope (2026-09-05) — in: drafts 26, 28, 29, 30, 31 + three unfiled items
+  from the whole-branch re-review filed as 33 (feed_account test-double guard), 34 (quint
+  resolution in agent shells), and worktree prune (session task, no issue). Deferred: 24 (XL,
+  split per subsystem later), 25 (XL, own design interview), 27 (blocked on cluster
+  TR-CLUSTER-016 rewrite). 32 stays ready-for-human pending the atomicity ruling.
