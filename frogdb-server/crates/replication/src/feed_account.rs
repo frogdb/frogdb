@@ -403,6 +403,15 @@ mod tests {
             error.to_string().contains("soft_limit"),
             "the flush must fail naming the limit that shed it; got {error}"
         );
+
+        // A stream that has fired has to say so when it is dumped into a log:
+        // "this link is failing every I/O" is otherwise indistinguishable from
+        // a peer that went quiet.
+        let rendered = format!("{guarded:?}");
+        assert!(
+            rendered.contains("ShedGuardedStream") && rendered.contains("soft_limit"),
+            "a shed stream must render what it is and why it is failing; got {rendered}"
+        );
     }
 
     // FM-REPLICATION-069
