@@ -994,13 +994,13 @@ impl ConnectionHandler {
             // taken because sampling needs `&mut self`.
             let feed_memory_base = self.compute_client_memory();
             let feed_account: frogdb_replication::SharedFeedAccount =
-                std::sync::Arc::new(output_buffer::ReplicaFeedAccount::new(
+                output_buffer::ReplicaFeedAccount::new(
                     self.output_buffer,
                     self.admin.client_registry.clone(),
                     self.state.id,
                     feed_memory_base,
                     self.observability.metrics_recorder.clone(),
-                ));
+                );
 
             // A handoff is only ever stashed after `ReplicationHandshake` passed the
             // `primary_replication_handler.is_none()` gate, so the handler is

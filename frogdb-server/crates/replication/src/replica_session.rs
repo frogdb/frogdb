@@ -46,7 +46,7 @@ use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::broadcast;
 
 use crate::BoxedStream;
-use crate::feed_account::{FeedVerdict, SharedFeedAccount};
+use crate::feed_account::{FeedVerdict, SharedFeedAccount, ShedGuardedStream};
 use crate::feed_sequencer::{FeedAction, FeedInput, FeedSequencer};
 use crate::frame::{ReplconfCodec, ReplicationFrame};
 use crate::fullsync::{
@@ -688,6 +688,12 @@ impl ReplicaSession {
     /// Regardless of where the sync exits — a `?` out of any effect, or a link
     /// that simply ended — the exit step runs: checkpoint cleanup, the departure
     /// record, registry removal, and the disconnect log.
+    ///
+    /// The account's out-of-band shed is armed over the socket before anything
+    /// else touches it (FM-REPLICATION-069). Doing it here, once, covers the
+    /// full sync and both halves of the stream `start_streaming` splits, and it
+    /// reaches a session parked inside a `write_all` on a replica that has
+    /// stopped reading — which no code path of this session's own ever would.
     pub async fn run(
         self: Arc<Self>,
         stream: BoxedStream,
@@ -695,6 +701,10 @@ impl ReplicaSession {
         handler: Arc<PrimaryReplicationHandler>,
         feed: SharedFeedAccount,
     ) -> io::Result<()> {
+        let stream: BoxedStream = match feed.take_shed_signal() {
+            Some(shed) => Box::new(ShedGuardedStream::new(stream, shed)),
+            None => stream,
+        };
         let mut driver = SessionDriver::new(self.clone(), stream, sync_kind, &handler, feed);
         let result = driver.drive().await;
 
@@ -1550,7 +1560,10 @@ impl<'a> SessionDriver<'a> {
                 // the feed stops paying for it now rather than at the end of a
                 // link that may stream for hours (FM-REPLICATION-069).
                 drop(blobs);
-                report_feed(&self.feed, 0, "the written live dataset")?;
+                // No `?`: a report of zero is `Keep` under every limit, so this
+                // is a release, not a shed path. Reading a verdict off it would
+                // suggest a way this line can end the link, and there is none.
+                let _ = report_feed(&self.feed, 0, "the written live dataset");
                 Ok(Next::Event(SessionEvent::PayloadSent))
             }
 
@@ -5767,6 +5780,62 @@ mod tests {
             feed.reports().len() >= 2,
             "the window can only expire on a report after the first, got {:?}",
             feed.reports()
+        );
+    }
+
+    // FM-REPLICATION-069
+    /// The failure mode `client-output-buffer-limit`'s soft window exists for is
+    /// a replica that has *stopped*: it stalls mid-full-sync, the primary parks
+    /// inside `write_all` holding the whole staged dataset, and no further
+    /// report is ever made on that link — so no later verdict can drop it. The
+    /// account's out-of-band shed has to reach the session where it is actually
+    /// parked, and it does that by being armed over the session's socket.
+    #[tokio::test]
+    async fn a_shed_signal_drops_a_feed_parked_inside_a_write() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let handler = make_handler(tracker.clone(), None, dir.path().to_path_buf());
+        // Far more than the socket will take, so the write cannot complete.
+        let value = "x".repeat(256 * 1024);
+        with_live_dataset(&handler, vec![dataset_blob(&[("alpha", value.as_str())])]);
+        let repl_id = handler.state.read().replication_id.clone();
+
+        let feed = RecordingFeedAccount::with_shed_signal();
+        let (mut client, server) = tokio::io::duplex(1024);
+        let task = spawn_psync_with_feed(handler, Box::new(server), repl_id, -1, feed.clone());
+
+        let line = read_response_line(&mut client).await;
+        assert!(line.starts_with("+FULLRESYNC"), "got: {line:?}");
+
+        // The replica reads no further. The session is now parked inside the
+        // dataset write and will not run another line of its own code.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(
+            !task.is_finished(),
+            "the session must still be parked on the stalled socket"
+        );
+        let reports_before = feed.reports().len();
+
+        feed.shed_now("soft_limit");
+
+        let err = tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .expect("the shed must reach a session parked inside a write")
+            .unwrap()
+            .expect_err("a shed feed must not keep its link");
+        assert!(
+            err.to_string().contains("soft_limit"),
+            "the link dies naming the shed reason: {err}"
+        );
+        assert_eq!(
+            feed.reports().len(),
+            reports_before,
+            "the drop must not depend on a report the stalled feed never makes"
+        );
+        assert_eq!(
+            feed.releases(),
+            1,
+            "and the shed link still releases its charge exactly once"
         );
     }
 

@@ -22,7 +22,14 @@
 //! See `specs/replication.md` FM-REPLICATION-069.
 
 use std::fmt;
+use std::future::Future;
+use std::io;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
+
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::sync::oneshot;
 
 /// What the account says about a feed that has just reported its size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +62,150 @@ pub trait FeedOutputAccount: fmt::Debug + Send + Sync {
     /// Called once, from the session's single exit path, on every way a link
     /// can end.
     fn release(&self);
+
+    /// The account's out-of-band way of dropping this link, taken once when the
+    /// session starts.
+    ///
+    /// [`set_buffered`](Self::set_buffered) can only rule on a feed that is
+    /// still moving, and the failure mode `client-output-buffer-limit`'s soft
+    /// window exists for is a feed that has *stopped* — a replica that stalled
+    /// mid-full-sync holds its bytes and reports nothing more, so no later
+    /// verdict is ever asked for. The account watches that case on its own
+    /// clock and fires this one-shot with the shed reason when the window
+    /// expires.
+    ///
+    /// The session arms it over its socket (see [`ShedGuardedStream`]), so it
+    /// reaches a link parked inside a write or a read rather than waiting for
+    /// code that is never going to run. An account with no out-of-band shed
+    /// returns `None`.
+    fn take_shed_signal(&self) -> Option<oneshot::Receiver<&'static str>>;
+}
+
+/// The error a shed signal turns into on the socket it was armed over.
+fn shed_error(reason: &'static str) -> io::Error {
+    io::Error::other(format!(
+        "replica feed exceeded its client-output-buffer-limit ({reason}) while its link was idle"
+    ))
+}
+
+/// A session's socket with its account's shed signal armed over it.
+///
+/// Every read and write polls the signal first, which is what makes an
+/// out-of-band shed reach a session parked in `write_all` on a replica that has
+/// stopped reading — the exact position a stalled full sync occupies. Polling
+/// the one-shot in place registers the task's waker with it, so the parked
+/// future is woken by the shed rather than only noticing it after the socket
+/// next moves.
+///
+/// Wrapping the whole stream, before the session splits it, covers both halves
+/// of a streaming link with one signal.
+pub struct ShedGuardedStream<S> {
+    inner: S,
+    /// The signal, until it resolves or its sender is dropped.
+    shed: Option<oneshot::Receiver<&'static str>>,
+    /// The reason it resolved with, once it has: every subsequent poll fails
+    /// the same way rather than re-polling a completed one-shot.
+    fired: Option<&'static str>,
+}
+
+impl<S> ShedGuardedStream<S> {
+    /// Arm `shed` over `inner`.
+    pub fn new(inner: S, shed: oneshot::Receiver<&'static str>) -> Self {
+        Self {
+            inner,
+            shed: Some(shed),
+            fired: None,
+        }
+    }
+
+    /// The error this stream is now failing with, if the shed has fired.
+    fn poll_shed(&mut self, cx: &mut Context<'_>) -> Option<io::Error> {
+        if let Some(reason) = self.fired {
+            return Some(shed_error(reason));
+        }
+        let receiver = self.shed.as_mut()?;
+        match Pin::new(receiver).poll(cx) {
+            Poll::Ready(Ok(reason)) => {
+                self.fired = Some(reason);
+                self.shed = None;
+                Some(shed_error(reason))
+            }
+            // The account is gone, so nothing will ever fire: stop watching and
+            // let the link live or die on its own I/O.
+            Poll::Ready(Err(_)) => {
+                self.shed = None;
+                None
+            }
+            Poll::Pending => None,
+        }
+    }
+}
+
+impl<S: fmt::Debug> fmt::Debug for ShedGuardedStream<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ShedGuardedStream")
+            .field("inner", &self.inner)
+            .field("fired", &self.fired)
+            .finish()
+    }
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for ShedGuardedStream<S> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        if let Some(error) = this.poll_shed(cx) {
+            return Poll::Ready(Err(error));
+        }
+        Pin::new(&mut this.inner).poll_read(cx, buf)
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for ShedGuardedStream<S> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        if let Some(error) = this.poll_shed(cx) {
+            return Poll::Ready(Err(error));
+        }
+        Pin::new(&mut this.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        if let Some(error) = this.poll_shed(cx) {
+            return Poll::Ready(Err(error));
+        }
+        Pin::new(&mut this.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        // Not guarded: shutting the socket down is how a shed link is closed,
+        // so failing it on the shed would leave the socket open.
+        Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        if let Some(error) = this.poll_shed(cx) {
+            return Poll::Ready(Err(error));
+        }
+        Pin::new(&mut this.inner).poll_write_vectored(cx, bufs)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.inner.is_write_vectored()
+    }
 }
 
 /// A [`FeedOutputAccount`] as the session carries it: one account, shared
@@ -86,6 +237,11 @@ pub(crate) mod testing {
         reports: Vec<u64>,
         over_limit_reports: usize,
         released: usize,
+        /// The out-of-band shed, until the session takes it or the test fires
+        /// it. Both ends are held here so a test can arm one and pull the
+        /// trigger later, standing in for the server's re-judge ticker.
+        shed_tx: Option<oneshot::Sender<&'static str>>,
+        shed_rx: Option<oneshot::Receiver<&'static str>>,
     }
 
     impl RecordingFeedAccount {
@@ -136,6 +292,32 @@ pub(crate) mod testing {
         pub(crate) fn releases(&self) -> usize {
             self.state.lock().unwrap().released
         }
+
+        /// An account that never sheds on a report but carries an out-of-band
+        /// shed the test fires by hand — the server's re-judge ticker, with the
+        /// clock replaced by the test's own timing.
+        pub(crate) fn with_shed_signal() -> Arc<Self> {
+            let (tx, rx) = oneshot::channel();
+            Arc::new(Self {
+                shed_at: u64::MAX,
+                state: Mutex::new(RecordingState {
+                    shed_tx: Some(tx),
+                    shed_rx: Some(rx),
+                    ..RecordingState::default()
+                }),
+                ..Self::default()
+            })
+        }
+
+        /// Fire the out-of-band shed, as the re-judge does when the soft window
+        /// expires on a feed that has stopped reporting.
+        pub(crate) fn shed_now(&self, reason: &'static str) {
+            let sender = self.state.lock().unwrap().shed_tx.take();
+            sender
+                .expect("armed with with_shed_signal")
+                .send(reason)
+                .ok();
+        }
     }
 
     impl FeedOutputAccount for RecordingFeedAccount {
@@ -157,6 +339,10 @@ pub(crate) mod testing {
 
         fn release(&self) {
             self.state.lock().unwrap().released += 1;
+        }
+
+        fn take_shed_signal(&self) -> Option<oneshot::Receiver<&'static str>> {
+            self.state.lock().unwrap().shed_rx.take()
         }
     }
 }

@@ -63,7 +63,7 @@ pub use apply::{
     ApplyError, ConsumeStats, ControlApplier, ReplicaApplier, ReplicaTxnBound, StreamedFrame,
     consume_frames, parse_frame_payload,
 };
-pub use feed_account::{FeedOutputAccount, FeedVerdict, SharedFeedAccount};
+pub use feed_account::{FeedOutputAccount, FeedVerdict, SharedFeedAccount, ShedGuardedStream};
 pub use feed_gate::ReplicaFeedGate;
 pub use feed_sequencer::{FeedAction, FeedInput, FeedSequencer};
 pub use frame::{
