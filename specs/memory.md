@@ -1,7 +1,7 @@
 # Memory — failure modes
 
 Status: LOCKED (2026-09-05) — Phase 6 mutation gates passed (frogdb-memory 97.2%,
-frogdb-table TABLE_SCORE, vs an 85% gate). Behavior changes to this area are spec-first: edit
+frogdb-table 92.5%, vs an 85% gate). Behavior changes to this area are spec-first: edit
 the row, update the forcing test, then the code. See CLAUDE.md "Locked core areas".
 
 Every way FrogDB refuses bytes, sheds a client, evicts a key, or accounts for what it is
