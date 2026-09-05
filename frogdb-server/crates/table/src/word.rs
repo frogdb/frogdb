@@ -151,6 +151,14 @@ impl Drop for KeyWord {
     fn drop(&mut self) {
         // SAFETY: a non-inline word owns exactly one reference to its record,
         // taken in `KeyWord::new` and released exactly here.
+        //
+        // Mutation note: emptying this body survives every test, and no test in
+        // this process can catch it. The failure it produces is a leak — the
+        // record's refcount never reaches zero, so the allocation is never
+        // returned — and a leak has no in-process observable: the key still
+        // reads back, the table still reports the same sizes. Catching it needs
+        // an allocator-level checker (Miri, LeakSanitizer, heaptrack), which is
+        // where `Drop for Record`'s bound check is caught too.
         unsafe { drop_record(self.0) };
     }
 }
@@ -199,6 +207,11 @@ impl ValueWord {
 
     /// Encodes an integer, inlining when it keeps all its bits. Wider integers
     /// fall back to an 8-byte little-endian record, as the spike's control does.
+    ///
+    /// Mutation note: the `|` below is an equivalent mutant under `^`. `v << 3`
+    /// leaves the low three bits zero — that is what `int_fits_inline` checks —
+    /// and `TAG_INT` lives entirely inside them, so the two operators write the
+    /// same word on every input that reaches this branch.
     #[inline]
     pub fn from_int(v: i64) -> ValueWord {
         if int_fits_inline(v) {
@@ -314,6 +327,9 @@ impl std::fmt::Debug for ValueWord {
 // know which bit means what.
 // ---------------------------------------------------------------------------
 
+/// Mutation note: the `|` in the tag byte is an equivalent mutant under `^`.
+/// `TAG_STR` occupies the low three bits and the length occupies the five above
+/// them, so the two operands never share a bit and the two operators agree.
 #[inline]
 fn pack_inline_str(b: &[u8]) -> u64 {
     debug_assert!(b.len() <= INLINE_STR_MAX);
@@ -491,6 +507,31 @@ mod tests {
             let mut buf: InlineBuf = [0; 16];
             assert_eq!(w.decode(&mut buf), Decoded::Bytes(&v.to_le_bytes()));
         }
+    }
+
+    /// The word's own contribution to a shard's accounted contents: zero while
+    /// the value rides in the word, and the record's requested size once it
+    /// spills. The keyspace's memory figure is a sum of these, so a constant
+    /// here would be a constant there.
+    #[test]
+    fn heap_bytes_is_zero_inline_and_the_record_size_out_of_line() {
+        assert_eq!(ValueWord::from_int(7).heap_bytes(), 0);
+        assert_eq!(ValueWord::from_bytes(b"tiny").heap_bytes(), 0);
+        assert_eq!(ValueWord::from_bytes(b"").heap_bytes(), 0);
+
+        for len in [8usize, 64, 4096] {
+            let w = ValueWord::from_bytes(&vec![b'v'; len]);
+            assert!(!w.is_inline(), "len {len} must spill");
+            assert_eq!(
+                w.heap_bytes(),
+                crate::record::HEADER_BYTES + len,
+                "len {len}"
+            );
+        }
+        assert_eq!(
+            ValueWord::from_int(i64::MAX).heap_bytes(),
+            crate::record::HEADER_BYTES + 8
+        );
     }
 
     #[test]

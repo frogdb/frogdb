@@ -152,8 +152,12 @@ whose `memory_size()` the `maxmemory` verdict is measured against. Behaviour in 
 now spec-first: failure-mode row, then failing test, then code, with `just lint-spec`
 enforcing that every row names live forcing tests and every tagged test names a row.
 
-The gate is **0.85** for both crates (measured at lock: frogdb-memory MEMORY_SCORE,
-frogdb-table TABLE_SCORE, caught / caught+missed).
+The gate is **0.85** for both crates (measured at lock: frogdb-memory 97.2%,
+frogdb-table TABLE_SCORE, caught / caught+missed). `frogdb-table` is the crate that sets
+the number — it measured 90.0% before this audit's forcing tests and its residue is
+equivalent and cfg-gated mutants — while `frogdb-memory` clears it with room. A 0.90 gate
+would sit inside `frogdb-table`'s timeout noise, where the probe loop's `bits &= bits - 1`
+mutants hang by construction, and would gate on scheduling luck rather than on tests.
 
 Two of the rulings above need qualifying against what actually landed. Both narrow a claim;
 neither reopens a seam.

@@ -415,6 +415,13 @@ impl<V, const N: usize> Table<V, N> {
         // Every directory entry that agrees with `di` in the low `depth` bits and
         // has bit `depth` set now belongs to the new half. They are strided, not
         // contiguous: the routing bits are the *low* bits of the hash.
+        //
+        // Two mutants here are equivalent rather than unforced. The `|` below is
+        // `^`: its left operand is masked to the low `depth` bits and its right
+        // operand is bit `depth` alone, so they never share a bit. And `<` is
+        // `<=`: the directory length is a power of two that is a multiple of
+        // `stride`, while every `e` is congruent to `1 << depth` modulo
+        // `stride` and therefore never equal to it.
         let stride = 1usize << (depth + 1);
         let mut e = (di & ((1usize << depth) - 1)) | (1usize << depth);
         while e < self.directory.len() {
@@ -426,11 +433,28 @@ impl<V, const N: usize> Table<V, N> {
         self.stats.splits += 1;
         self.stats.split_scanned += u64::from(stats.scanned);
         self.stats.split_moved += u64::from(stats.moved);
+        // Mutation note: mutating this update survives, and the counter is why.
+        // `rehashed` is nonzero only once the directory is deeper than the
+        // stored route width, which is 2^16 segments — a table of a gibibyte of
+        // directory and segments. No unit test builds one, so every mutation
+        // adds zero to zero. `the_growth_counters_are_the_split_and_directory_work_the_table_did`
+        // pins it at zero for exactly that reason; the fallback path it counts
+        // is forced separately by
+        // `segment::tests::a_split_past_the_route_width_falls_back_to_hashing`.
         self.stats.split_rehashed += u64::from(stats.rehashed);
 
         // A target that filled up mid-split leaves entries with nowhere legal to
         // live. Re-inserting them goes through the ordinary path, which splits
         // again if that is what it takes.
+        //
+        // Mutation note: mutating this counter, or emptying `place` itself, also
+        // survives — `leftovers` is empty on every split any test performs, so
+        // the loop below never runs and the counter never moves off zero. A
+        // split can only overfill its target when both halves of a bucket chain
+        // land in the same target bucket, which needs a hash distribution no
+        // key sequence in the suite produces. It is left as unforced rather
+        // than papered over: the code is the recovery path, and the honest
+        // forcing test is a fault-injecting hasher, not an assertion.
         self.stats.split_leftovers += leftovers.len() as u64;
         for item in leftovers {
             self.place(item);
@@ -1186,6 +1210,72 @@ mod tests {
                 break;
             }
         }
+    }
+
+    #[test]
+    /// The other half of the table's contribution to a shard's accounted
+    /// contents: what the keys hold outside their slot words. Inline keys hold
+    /// nothing, so a table of short keys must report exactly zero — a constant
+    /// return would be indistinguishable from the truth without that case.
+    #[test]
+    fn entry_heap_bytes_counts_only_the_keys_that_spilled_out_of_their_word() {
+        let mut inline = table();
+        for i in 0..64i64 {
+            inline.insert(format!("k{i:02}").as_bytes(), ValueWord::from_int(i));
+        }
+        assert_eq!(inline.len(), 64);
+        assert_eq!(inline.entry_heap_bytes(), 0);
+
+        let mut spilled = table();
+        for i in 0..64i64 {
+            spilled.insert(
+                format!("a-much-longer-key:{i:04}").as_bytes(),
+                ValueWord::from_int(i),
+            );
+        }
+        // Summed here rather than read back from the method under test, so the
+        // assertion is not a tautology.
+        let per_key: usize = spilled.iter().map(|s| s.key.heap_bytes()).sum();
+        assert!(
+            per_key >= 64 * 22,
+            "64 keys of 22 bytes must spill: {per_key}"
+        );
+        assert_eq!(spilled.entry_heap_bytes(), per_key);
+    }
+
+    /// The split and directory counters an operator reads to explain a table's
+    /// growth. Nothing else asserts them, so every arithmetic mutation of the
+    /// counter updates in `split`, `place` and `double_directory` is invisible
+    /// unless the numbers themselves are pinned. They are deterministic for a
+    /// fixed seed and a fixed insert order — a growth-policy or layout change is
+    /// allowed to move them, but it has to come here and say so. The invariants
+    /// under the pinned figures are what a re-pin has to keep true.
+    #[test]
+    fn the_growth_counters_are_the_split_and_directory_work_the_table_did() {
+        let mut t = table();
+        fill(&mut t, 100_000);
+        let s = t.stats();
+
+        assert_eq!(
+            s.splits as usize,
+            t.segment_count() - 1,
+            "one segment exists at the start and each split adds exactly one"
+        );
+        assert_eq!(s.doublings, u64::from(t.global_depth()));
+        assert_eq!(t.directory.len(), 1usize << t.global_depth());
+        assert!(s.split_moved > 0 && s.split_moved <= s.split_scanned);
+        assert_eq!(
+            s.split_rehashed, 0,
+            "a table this size never runs out of route bits"
+        );
+        assert!(
+            s.dir_writes > t.directory.len() as u64,
+            "the doublings alone write a directory's worth, and every split writes more"
+        );
+        assert_eq!(
+            s.split_leftovers, 0,
+            "no split of this table overfills its target"
+        );
     }
 
     #[test]
