@@ -21,8 +21,12 @@ OK: 20 budgeted growth site(s); 83 unconverted site(s) pinned in 32 file(s)
 Four of the seven declared `Subsystem` variants hold a live budget today
 (`network_output`, `client_tracking`, `txn_buffering`, `persistence`). The other three —
 `replication_backlog`, `wal_channel`, `fullsync_staging` — appear in the operator's
-breakdown and are charged by nobody, which is worse than absent: a gauge that reads zero
-because nothing reports is indistinguishable from a subsystem holding nothing.
+breakdown charged by nobody. The broker is honest about it: a slot carries an `opened`
+flag and an unopened budget has a limit of zero, so the breakdown distinguishes "declared,
+nothing has taken it" from "taken and holding nothing". The gap is not the gauge, it is
+the buffers behind it — the backlog, the WAL channel and full-sync staging grow on paths
+that charge no budget at all, so the growth the subsystem is named for happens outside the
+number an operator reads.
 
 Because of that, the lock of `specs/memory.md` deliberately writes **no** row claiming any
 buffer is bounded that does not name its own `Budget`. Issue 22's audit found that the

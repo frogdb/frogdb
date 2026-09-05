@@ -584,6 +584,21 @@ impl<V, const N: usize> Table<V, N> {
         // back in front of the walk, so `2n` steps is the proven bound rather
         // than a guess — spelled out here so "makes progress or reports it
         // cannot" is a property of the code and not of an argument about it.
+        //
+        // Mutation note: this counter's arithmetic survives mutation, and has
+        // to. Mutating either operator here (`2 * n + 2` → `2 + n + 2` or
+        // `2 * n * 2`) or the decrement below (`-= 1` → `+= 1` or `/= 1`)
+        // leaves a limit the walk still never reaches: a walk visits each
+        // segment at most once per queue, so it spends about `n` steps against
+        // an allowance of `2n + 2`. Forcing one would take an input whose walk
+        // exceeds its bound, and the paragraph above is the argument that no
+        // such input exists — this counter is that proof made executable, a
+        // backstop rather than a decision the walk makes, and it fires into a
+        // `debug_assert!` precisely because reaching it means the proof was
+        // wrong. What the tests force is what the bound exists for: the walk
+        // terminates and reports zero rather than circling
+        // (`a_walk_with_nothing_to_take_reports_zero_rather_than_spinning`,
+        // `a_frozen_epoch_still_makes_progress`).
         let mut budget = 2 * self.segments.len() + 2;
         for queue in [QueueId::A1in, QueueId::Am] {
             let Some(mut si) = self.queues.tail(queue) else {
@@ -635,6 +650,18 @@ impl<V, const N: usize> Table<V, N> {
         let (hits, misses) = (seg.hits(), seg.misses());
         let referenced = match queue {
             QueueId::A1in => hits >= PROMOTE_HITS,
+            // Mutation note: this comparison survives being mutated to `==`,
+            // `<` and `>=` — no test distinguishes "a referenced Am segment
+            // gets a second chance" from "it never does" or "it always does".
+            // That is deliberate. Which segment a policy ranks coldest is
+            // explicitly not contracted: specs/memory.md FM-MEMORY-005 owns the
+            // candidate *set* and says the order within it belongs to the
+            // backend, so a forcing test that pinned this threshold would
+            // contract 2Q's tuning as behaviour. What is contracted is what a
+            // promotion does to the walk around it — the segment is withheld
+            // from nomination and the generation moves, so a caller cannot
+            // cache the refusal — and that is forced by
+            // `a_walk_that_promotes_a_segment_moves_the_generation`.
             QueueId::Am => hits > 0,
             // Ghosts are never selection candidates, so never reconciled.
             QueueId::A1out => return false,

@@ -5,7 +5,7 @@ Type: AFK
 Origin: [issue 22](22-lock-memory-spec.md) audit, 2026-09-05 — the lock's mutation run over
 `frogdb-table` left survivors the audit did not chase
 Area: frogdb-table
-Phase: 4 — keyspace structure
+Phase: 6 — polish. Follows the lock; **locked-area work: spec-first discipline applies.**
 
 ## Why
 
@@ -25,21 +25,23 @@ check that the *directory* is what it should be after a split. A structural asse
 every directory entry points at the segment whose local depth and route bits it agrees
 with — kills both and is worth more than either individually.
 
-The rest are ordinary untested arithmetic in the 2Q eviction path (`cold_candidates`,
-`reconcile`, `nominate_from`) and in `scan`/`next_cursor`, where the existing tests assert
-the end-to-end guarantee and not the intermediate figures.
+The rest are ordinary untested arithmetic in `scan`/`next_cursor`, where the existing tests
+assert the end-to-end cursor guarantee and not the intermediate masking. The 2Q eviction
+path is no longer in that list: the review round that followed the lock forced
+`cold_candidates`' guard and `nominate_from`'s lap, and documented the two survivors that
+remain there at the code — the step counter (a proof obligation made executable, which no
+input can drive to its bound) and `reconcile`'s promotion threshold (ranking, which
+FM-MEMORY-005 says is the backend's and not a contract).
 
 ## What to do
 
 1. Add the directory-consistency assertion after growth and after an explicit `split`, and
    confirm it kills the two `split` survivors above.
-2. Force the eviction-path arithmetic: `cold_candidates`' want/stride computation,
-   `reconcile`'s comparison, `nominate_from`'s modular walk. These are behaviour
-   [specs/memory.md](../../../../specs/memory.md) FM-MEMORY-005 and FM-MEMORY-007 already
-   contract, so the tests belong in `frogdb-table` where `cargo mutants -p frogdb-table`
-   can see them.
-3. Force `scan`'s masking and `next_cursor`'s reverse-bit increment directly, rather than
+2. Force `scan`'s masking and `next_cursor`'s reverse-bit increment directly, rather than
    only through the end-to-end cursor guarantee.
+3. Revisit the two documented eviction-path survivors only if the argument at the code
+   stops holding — if the step bound ever becomes reachable, or if a row starts contracting
+   2Q's promotion threshold. Neither is a coverage task today.
 4. Anything still surviving after that is documented at the code with why it is
    unobservable, per the locked-area rule — no blanket skips.
 
