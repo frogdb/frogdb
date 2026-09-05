@@ -1,6 +1,6 @@
 # 04 — CI: mise `npm:` backend refuses to install quint because `node@22` is not installed first
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Size: XS
 Origin: Test run on `build-toolchain/impl` @ c66fc0fb5 (https://github.com/nathanjordan/frogdb/actions/runs/33937564779), first full run after 03
@@ -72,3 +72,16 @@ None (03 is landed).
 ## Decisions
 
 D4
+
+## Resolution
+
+Landed on `build-toolchain/impl` at merge `2b1db3e03` (2026-09-04). One commit, `43ca011c2`:
+`node` prepended to `MISE_JUST_QUINT` / `MISE_JUST_NEXTEST_QUINT` in `test.py`, `quint_verify.py`
+and `cluster_quint_quarantine_nightly.py`, with a one-line why beside each constant; the three
+workflows regenerated (`test.yml`, `quint-verify-nightly.yml`,
+`cluster-quint-quarantine-nightly.yml`). Not consolidated into `helpers.py` — the sibling
+`MISE_JUST_NEXTEST` is already duplicated verbatim across eight workflow files by convention.
+`.mise.toml` untouched (`node = "22"` already pinned there, so the bare `node` resolves to it);
+issue 03's `MISE_DISABLE_TOOLS: rust` env untouched. `just workflow-gen --check`,
+`generate-check`, `lint-gates` green. Proof in CI: next `workflow_dispatch` of `test.yml` on
+`build-toolchain/impl`.
