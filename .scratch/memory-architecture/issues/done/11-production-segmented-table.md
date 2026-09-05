@@ -1,6 +1,6 @@
 # 11: production segmented keyspace table (Dashtable, 8-byte tagged words)
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Origin: drafted 2026-09-01 from the landed
 [spike report](../../spike-report-table.md) — [PRD.md](../../PRD.md) R5/R6, D5
@@ -130,3 +130,81 @@ threshold or slot width (ruled).
 [Issue 10](../) (landed — the spike report is the contract). Not blocked by the value
 representation issues; the table stores words and heap records regardless of what the
 payload encodes.
+
+## Resolution
+
+Landed 2026-09-05 on `mem-arch-integration` (picks `0612ab94a`..`6988ef192`, 15 commits).
+**Default store backend unchanged (griddle)** — the swap is gated on a testbox lookup
+measurement that could not be taken in local build mode (see below).
+
+What shipped: new crate `frogdb-table` — segment geometry sized to the 16 KiB jemalloc
+class, tagged 8-byte `KeyWord`/`ValueWord` (inline ≤ 7 B, else an R6 refcounted/COW heap
+record), SIMD fingerprint match, 16 route bits in the slot so a split never rehashes, Dash
+displacement + stash, 13-slot × 256 B buckets (the 64 B `KeyMetadata` rides in the entry:
+layout (a) measured 27.1 vs 42.0 structural B/entry against a third slot word),
+keyed-ahash hasher with sim-seed plumbing, directory + incremental one-segment split, and a
+split-stable reverse-binary SCAN cursor (Redis's actual cursor — one segment per step at its
+local depth, replacing the incumbent's whole-shard sort per SCAN step). Safety: words carry
+`PhantomData<*mut u8>` (not `Send`/`Sync`); the one `unsafe impl` in the crate is
+`Send for Table<V: Send, N>` (no `Sync`), with `KeyWord` deliberately not `Clone` and
+`ValueWord::duplicate` `#[cfg(test)] pub(crate)`, so no second handle to a record can leave
+the table from safe code; the SAFETY comment enumerates every public route; six
+`compile_fail` doctests pin the attacks. `with_record_mut` is panic-safe via a `LentRecord`
+drop guard. `frogdb-core` gains a `Keyspace` seam (`store/keyspace.rs`, `KeyRef`,
+visitor-style iteration, reservoir `random_key`/`sample_keys`): `GriddleKeyspace` is the
+incumbent moved not rewritten and stays `Selected`; `TableKeyspace` (`Table<Box<Entry>>`)
+sits behind the `table-keyspace` cargo feature. `HashMapStore`'s public API is
+byte-identical. Also: `tests/layout_cost.rs` (layout decision + occupancy cycle),
+`benches/{lookup,split}.rs` with `just bench-table` / `just bench-table-split`, fuzz target
+`table_ops` (model check vs `HashMap` incl. SCAN under mid-scan splits, values compared).
+
+Numbers, honest: occupancy oscillates in rounds (all segments fill together, then a burst of
+splits) — peak 0.913 / 21.9 B/entry, trough 0.515 / 38.9, cycle mean 0.716 / 28.7 at 200 k
+and 0.685 / 30.1 at 1 M, settled at 1 M 0.596 / 33.6 = the spike's settled figure. The test
+asserts peak ≥ 0.85, trough ≥ 0.50, cycle mean < 33.6 B/entry and > 0.581. Split p50
+11.2 µs vs the spike's 44.4 µs (4.0×), 28 ns per moved entry, `rehashed/split = 0.000`.
+End to end 132.7 B/key table vs 179.9 griddle (26 %), half of the table figure being the
+boxed 64 B `Entry`.
+
+Review: round 0 (1 Critical, 3 Important, 4 Minor) — words were auto-`Send`/`Sync`; growth
+past 2^16 segments asserted instead of degrading; occupancy claim not like-for-like; fuzz
+oracle compared presence not values. Fix r1 (6 commits) addressed all eight; re-review r1
+found the `Send` impl defeatable from safe code via `iter()` + public `KeyWord: Clone`. Fix
+r2 (1 commit) removed the capability; re-review r2 independently enumerated the public
+surface and verified the doctest fails for the stated reason: all addressed, no new
+Critical/Important. Gates: crate 68/68, doctests 6/6, miri 46/0 (documented skip set),
+`cargo check`/clippy `frogdb-core --features table-keyspace --all-targets` clean, clippy
+`frogdb-table` clean, lint-spec, lint-gates, `just fuzz table_ops 900` 36 966 runs clean,
+full `just test frogdb-server` 2144/2145 (253 s; the one failure, `integration_persistence::lastsave_reports_the_snapshot_time_after_restart`, died on a test-harness RocksDB `LOCK: No locks available` restart race while another session compiled — 6/6 green re-run in isolation, no persistence code in this diff; one cluster flake passed on retry) before landing.
+
+Deviations from the brief, for human sign-off:
+
+- **Lookup gate not measured; swap not made.** Laptop numbers (`just bench-table`) were
+  unusable — 17× spread on griddle between two statistically identical workloads while
+  three other agents compiled. Decision recorded: default stays griddle. To decide:
+  `just tb-warmup; just tb-run "just bench-table"`, read
+  `lookup-hit/{redis-feel,sessions}/{griddle,table}`, gate is within 1.25×. Flip is one
+  `cfg` swap on `Selected` in `frogdb-server/crates/core/src/store/keyspace.rs`.
+- **"scanned == moved" read as "no rehash".** A split must examine every occupied slot
+  (797 scanned) and moves half (399); the operative property `rehashed/split = 0` holds
+  and is asserted.
+- **`scripts/budget-growth.py` is outside the file boundary**: one path
+  (`frogdb-server/crates/table/src/`) added to `KEYSPACE_MODULES`, the script's own scope
+  boundary (keyspace bytes are attributed by the per-shard arena under ADR-0006 §3), not the
+  `ALLOWLIST` ratchet.
+- **13-slot geometry** falls out of the 16 B slot in a 256 B bucket; the brief's ~0.9 /
+  ~21.7 B/entry prediction is met at the cycle peak only.
+
+Follow-ups to file: (1) collapse `Entry` into tagged words — the boxed 64 B entry is a
+per-key allocation griddle does not pay and is the single most valuable next step for the
+PRD's memory target; (2) a `.config/nextest.toml` override for
+`store::scan_stress::scan_present_throughout_is_subset_of_returned` (15 s ×3), the same
+starvation its sibling already has an override for — passes in 11–12 s idle, 0.5 s on the
+table backend.
+
+Known gaps carried: `Slot.key` is `pub`, so a future public `&mut Slot`/`&mut Segment`
+accessor on `Table` would reopen the `Send` escape (SAFETY comment names `take`/`remove`
+specifically); `ValueWord::with_record` is a public clone-a-record-out-of-a-borrow
+primitive, harmless while no `Send` value type holds a `ValueWord`; `benches/split.rs`
+`split_rehashed == 0` is asserted by measurement not construction, `end_occupancy`/`end_bpe`
+printed only.
