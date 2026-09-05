@@ -1238,7 +1238,7 @@ cross-install:
 # target-scoped to keep it out of native builds and the Docker builder, but still reaches every
 # C++ unit cc-rs compiles for this target (rocksdb, aws-lc, mlua, ...). `AR` is plain because
 # jemalloc's autoconf reads only that name and the host `ar` is Mach-O-only. Why, in full:
-# `.scratch/build-toolchain/issues/open/01-cross-build-usearch-zig.md`. `docker-cross-build`
+# `.scratch/build-toolchain/issues/done/01-cross-build-usearch-zig.md`. `docker-cross-build`
 # depends on this recipe and inherits both.
 cross-build:
     CXXFLAGS_x86_64_unknown_linux_gnu="-x c++ -mevex512" AR="zig ar" cargo zigbuild --release --target x86_64-unknown-linux-gnu --bin frogdb-server --features cmd-full

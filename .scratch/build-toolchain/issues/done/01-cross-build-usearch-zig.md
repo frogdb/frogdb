@@ -1,6 +1,6 @@
 # 01 — `just cross-build` is broken: usearch/simsimd rejects zig's C++ driver
 
-Status: ready-for-agent
+Status: done
 
 ## Summary
 
@@ -135,3 +135,21 @@ Fix at the recipe: target-scoped env on the two `cargo zigbuild` invocations so 
 
 - `Justfile` (`cross-build`, `cross-build-arm`)
 - docs mentioning the raw zigbuild invocation, if any
+
+## Resolution
+
+Landed on `build-toolchain/impl` at merge `f7928f807` (2026-09-04). Three commits:
+`6659226fc` target-scoped `CXXFLAGS_x86_64_unknown_linux_gnu="-x c++ -mevex512"` /
+`CXXFLAGS_aarch64_unknown_linux_gnu="-x c++"` on the two `cargo zigbuild` recipe lines (D3;
+aarch64 needs no SIMD flag — its simsimd targets are NEON/SVE, no AVX-512 probe runs),
+`2061a0cef` `AR="zig ar"` on both recipes for a second, previously unreachable defect
+(tikv-jemalloc-sys builds jemalloc with autoconf, whose `configure` reads only plain `AR`, so the
+host's Mach-O-only `ar` archived none of the ELF objects — 96-byte empty `libjemalloc_pic.a`,
+undefined `mallctl`/`mallocx`/`rallocx`/`sdallocx` at link; `RANLIB` verified unnecessary),
+`8437ce917` recipe comments trimmed after review. `just cross-build` green in 3m36s
+(`cross-verify`: Linux x86-64 ELF), `just cross-build-arm` green (aarch64 ELF), zero
+`SIMSIMD_TARGET_*` peels on either target, `lint-gates` ship count unchanged at 6. `Justfile` only.
+
+Still open (not this issue): nothing in CI runs `just cross-build`, and `.mise.toml` pins
+`zig = "latest"` while `-mevex512` is tied to zig 0.15.2's clang — the smoke-job follow-up (PRD
+"Detection gap") is the detector. `cross-verify` still checks only the x86-64 artifact.

@@ -23,10 +23,10 @@ temp dir. Several files here are load-bearing — `scripts/coverage-depth.py` wr
 | [hardening](hardening/) | active | 2 | 37 | foundation-hardening campaign, **exited 2026-08-05** — all four areas locked; specs remain the contract |
 | [naming-cleanup](naming-cleanup/) | active | 1 | 4 | canonical terminology; decisions now canon in `CONTEXT.md` files |
 | [testing-improvements](testing-improvements/) | archive-of-record | 1 | 18 | round-1 testing-gap audit. **Do not delete** — live write target + inbound refs |
-| [build-toolchain](build-toolchain/) | active | 5 | 2 | build/CI-toolchain/release-path defects, where dev builds stay green but a shipping or gating path is broken; opened 2026-09-02 with `just cross-build` failing on usearch under zig; 02 filed 2026-09-04 for `main` CI red on seven jobs, landed same day on `build-toolchain/impl`; 03 filed 2026-09-04 when that branch's CI run showed the mise pin from 02 ineffective, landed same day; 04–07 filed 2026-09-04 from the first full CI run after 03 (npm-backend node dependency, h2 advisory, 15 s nextest timeouts, config golden counts on Linux) |
+| [build-toolchain](build-toolchain/) | active | 4 | 3 | build/CI-toolchain/release-path defects, where dev builds stay green but a shipping or gating path is broken; opened 2026-09-02 with `just cross-build` failing on usearch under zig; 02 filed 2026-09-04 for `main` CI red on seven jobs, landed same day on `build-toolchain/impl`; 03 filed 2026-09-04 when that branch's CI run showed the mise pin from 02 ineffective, landed same day; 04–07 filed 2026-09-04 from the first full CI run after 03 (npm-backend node dependency, h2 advisory, 15 s nextest timeouts, config golden counts on Linux); 01 landed 2026-09-04 (target-scoped CXXFLAGS + `AR="zig ar"` for autoconf jemalloc) |
 | [roadmap](roadmap/) | active | — | — | roadmap + unfinished/follow-up items (migrated from the retired `todo/`); not an issue tracker |
 
-Totals: **113 open, 116 done**. `done/` holds only closed issues still referenced from
+Totals: **112 open, 117 done**. `done/` holds only closed issues still referenced from
 tracked files; unreferenced closed issues are pruned — git history is the archive.
 
 ## Conventions
