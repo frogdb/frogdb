@@ -2122,6 +2122,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "frogdb-table"
+version = "0.1.0"
+dependencies = [
+ "ahash 0.8.12",
+ "criterion",
+ "griddle",
+ "rand 0.10.0",
+]
+
+[[package]]
 name = "frogdb-telemetry"
 version = "0.1.0"
 dependencies = [
