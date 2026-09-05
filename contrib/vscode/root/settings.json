@@ -26,5 +26,19 @@
     "markdown.validate.enabled": true,
     "[python]": {
         "editor.defaultFormatter": "charliermarsh.ruff",
-    }
+    },
+    // Keep cargo build output and Claude Code worktrees out of the file watcher,
+    // search, and Pylance. Each worktree under .claude/worktrees carries its own
+    // 30-40GB target/ dir; watching them costs the frogdb window >1.5GB RAM.
+    "files.watcherExclude": {
+        "**/target/**": true,
+        "**/.claude/worktrees/**": true
+    },
+    "search.exclude": {
+        "**/target/**": true,
+        "**/.claude/worktrees/**": true
+    },
+    "python.analysis.exclude": [
+        "**/.claude/worktrees/**"
+    ]
 }
