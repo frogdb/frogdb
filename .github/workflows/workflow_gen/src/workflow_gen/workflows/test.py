@@ -35,11 +35,16 @@ RUNS_ON = "ubuntu-latest"
 MISE_JUST = "just"
 MISE_JUST_DENY = "just cargo:cargo-deny"
 MISE_JUST_NEXTEST = "just cargo:cargo-nextest"
-MISE_JUST_QUINT = "just npm:@informalsystems/quint"
+# mise >= 2026.8.11 checks a tool's declared install dependencies before
+# installing it (jdx/mise#12234); the npm: backend depends on node, so `node`
+# must be listed alongside the quint tool or mise refuses to install it
+# ("requires configured install dependency 'node@22', but its selected
+# version is not installed"). See .scratch/build-toolchain/issues/ issue 04.
+MISE_JUST_QUINT = "just node npm:@informalsystems/quint"
 # `unit-tests` runs `cargo nextest run --all`, which picks up
 # frogdb-cluster's quint_conformance test binary (see that job's comment) —
 # it needs both cargo-nextest and the quint CLI quint-connect shells out to.
-MISE_JUST_NEXTEST_QUINT = "just cargo:cargo-nextest npm:@informalsystems/quint"
+MISE_JUST_NEXTEST_QUINT = "just node cargo:cargo-nextest npm:@informalsystems/quint"
 MISE_PYTHON_WORKFLOW_GEN = "python uv just"
 MISE_PYTHON_LINT = "python uv ruff"
 MISE_HELM = "helm"
