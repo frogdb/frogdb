@@ -1,6 +1,6 @@
 # 07 — CI: `frogdb-config` golden counts are one param short on Linux (46/125 vs 47/126)
 
-Status: needs-info
+Status: done
 Type: AFK
 Size: S
 Origin: Test run on `build-toolchain/impl` @ c66fc0fb5 (https://github.com/nathanjordan/frogdb/actions/runs/33937564779); identical on the Sept 3 `main` run (76b2a6dae)
@@ -68,4 +68,11 @@ None.
 
 ## Decisions
 
-Pending — which of the two fixes in step 2.
+D10 (close as resolved by memory-architecture #21).
+
+## Resolution
+
+Closed 2026-09-05 per D10: resolved by memory-architecture #21 (`98599d0d2`, "transaction
+buffering budget and hard cap"), which corrected the golden constant — it still subtracted the
+retired `pubsub-output-buffer-hard-limit`. No platform-gated param existed; the ubuntu runs after
+04 landed (33941010778 onward) report the same counts as macOS.

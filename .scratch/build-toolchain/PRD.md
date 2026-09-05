@@ -56,3 +56,7 @@ filed as issue 08 once 01 landed.
   pins `zig = "0.15.2"` (the clang whose `-mevex512` D3 depends on) instead of `latest`.
   `cross-verify` asserts the ELF machine type rather than printing `file` output. Carved as
   issue 08 (rewritten from needs-triage to ready-for-agent).
+- D10: issue 07 (config golden counts one short on Linux) closes as resolved by memory-architecture
+  #21 (`98599d0d2`): the stale constant subtracted the retired `pubsub-output-buffer-hard-limit`;
+  the counts no longer differ on the ubuntu runs after 04 landed. No param is named because none
+  was platform-gated — the constant was wrong.
