@@ -1,6 +1,6 @@
 # 31: budget refusal reply prefix, and refusal counting polish
 
-Status: needs-triage
+Status: ready-for-agent
 Type: AFK
 Origin: whole-branch review 2026-09-05
 Area: frogdb-server + frogdb-persistence + frogdb-memory
@@ -46,9 +46,11 @@ changes.
 
 ## What to build
 
-1. **Rule the prefix.** Pick one code for budget refusals — the reviewer's recommendation is
-   `-OOM`, matching Redis's `maxmemory` precedent and FrogDB's own txn cap — and apply it to
-   `net_charge.rs::shed_error`. Update the socket tests that assert the string.
+1. **Prefix ruled `-OOM` (D8).** `net_charge.rs::shed_error` replies exactly
+   `OOM <what> reply dropped: network output memory budget exceeded` (only the leading
+   `ERR` → `OOM` changes). The txn cap and the `maxmemory` verdict do not move. Update the
+   socket tests that assert the string; record the ruling in `specs/memory.md` at the row
+   that owns the network-output shed (FM-MEMORY-002) as one sentence.
 2. **Document the deviation** on the website compat page: the two FrogDB-only budgets, their
    error code, and the fact that Redis has no equivalent.
 3. **Count refusals per excursion.** `RocksMemory::refresh` counts once on the transition into
@@ -89,3 +91,7 @@ Nothing.
 ## Blocks
 
 Nothing.
+
+## Decisions
+
+D7, D8

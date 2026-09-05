@@ -1,6 +1,6 @@
 # 30: one `memory_size` figure — capacity, not len
 
-Status: needs-triage
+Status: ready-for-agent
 Type: AFK
 Origin: whole-branch review 2026-09-05
 Area: frogdb-types + frogdb-core + frogdb-memory
@@ -38,9 +38,9 @@ to capacity makes that reclaim visible, which is the behaviour an operator runni
 
 ## What to build
 
-Move listpack-backed forms to capacity-based sizing — or rule the alternative explicitly (unify
-downward on len, and re-word what the budget claims to bound). Either way the outcome is **one
-philosophy, stated once**.
+**Ruled capacity (D9).** Move listpack-backed forms to capacity-based sizing; the hash and set
+listpack forms (`types/hash.rs`, `types/set.rs` `memory_size`) follow the same accessor. One
+philosophy, stated once in `specs/memory.md`.
 
 Under the capacity ruling:
 
@@ -95,3 +95,11 @@ Nothing.
 ## Blocks
 
 Nothing.
+
+## Decisions
+
+D7, D9
+
+## Conflicts with
+
+[issue 31](31-budget-refusal-prefix-and-counting.md) (both edit `specs/memory.md`) — 31 lands first.

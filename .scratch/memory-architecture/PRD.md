@@ -260,3 +260,12 @@ Session decisions layered on the R1–R15 rulings above; D-numbers are cited by 
   resolution in agent shells), and worktree prune (session task, no issue). Deferred: 24 (XL,
   split per subsystem later), 25 (XL, own design interview), 27 (blocked on cluster
   TR-CLUSTER-016 rewrite). 32 stays ready-for-human pending the atomicity ruling.
+- D8: memory-budget refusals reply `-OOM` (Redis maxmemory precedent, txn cap already does);
+  `net_charge.rs` shed reply moves from `ERR` to `OOM <what> reply dropped: network output memory
+  budget exceeded`; `maxmemory` string stays byte-identical to Redis; compat page documents the
+  two FrogDB-only budgets and their code. Persistence refusal counter counts per excursion.
+  Resolves issue 31's open ruling.
+- D9: `memory_size` counts allocated capacity, not encoded len, for every form (listpack,
+  quicklist, hash/set listpack forms follow blockstore and sorted-set). `byte_len` stays for
+  encoding-threshold decisions; sizing gets its own accessor. Test constants bound to
+  `memory_size` are re-derived from the definition, not fitted. Resolves issue 30's ruling.
