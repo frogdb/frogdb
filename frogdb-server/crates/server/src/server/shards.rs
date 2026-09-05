@@ -53,6 +53,8 @@ pub(super) struct ShardSpawnContext {
     pub client_registry: Arc<ClientRegistry>,
     pub config_manager: Arc<ConfigManager>,
     pub shard_memory_used: Arc<Vec<AtomicU64>>,
+    /// Each shard's `TxnBuffering` budget (see `InitResult::txn_budgets`).
+    pub txn_budgets: Arc<Vec<frogdb_memory::Budget>>,
     pub shard_monitor: tokio_metrics::TaskMonitor,
 }
 
@@ -189,6 +191,9 @@ pub(super) fn spawn_shard_workers(ctx: ShardSpawnContext) -> anyhow::Result<Spaw
 
         // Share the process-wide keyspace hit/miss accumulator
         worker.set_keyspace_stats(ctx.keyspace_stats.clone());
+
+        // Adopt the transaction-buffer budget minted for this core.
+        worker.set_txn_buffer_budget(ctx.txn_budgets[shard_id].clone());
 
         // Share this node's boot-time recovery outcome (issue 42).
         worker.set_recovery_stats(ctx.recovery_stats.clone());

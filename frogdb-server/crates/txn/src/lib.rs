@@ -28,5 +28,6 @@ mod state;
 pub use exec::{TransactionOutcome, execute_transaction, handle_exec, record_transaction_metrics};
 pub use host::{Deferral, ShardTxnReply, TxnHost};
 pub use state::{
-    TransactionState, TransactionTarget, TxnError, TxnMetrics, TxnSummary, WatchedKey,
+    TXN_BUFFER_LIMIT_ERROR, TransactionState, TransactionTarget, TxnError, TxnMetrics, TxnSummary,
+    WatchedKey,
 };

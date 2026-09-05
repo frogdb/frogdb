@@ -328,7 +328,12 @@ impl ConnectionHandler {
                 .acl_manager
                 .get_user("default")
                 .is_some_and(|u| !u.enabled);
-        let state = ConnectionState::new(conn_id, addr, requires_auth);
+        let state = ConnectionState::new(
+            conn_id,
+            addr,
+            requires_auth,
+            core.txn_budgets[shard_id].clone(),
+        );
 
         debug!(conn_id = conn_id, addr = %addr, "Connection established");
 

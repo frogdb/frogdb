@@ -10,6 +10,7 @@ description = "Connection-side MULTI/EXEC transaction orchestration and state"
 async-trait.workspace = true
 bytes.workspace = true
 frogdb-core.workspace = true
+frogdb-memory.workspace = true
 frogdb-protocol.workspace = true
 frogdb-telemetry.workspace = true
 tracing.workspace = true

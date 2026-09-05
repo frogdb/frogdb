@@ -541,7 +541,12 @@ mod tests {
                 ),
                 // `requires_auth = false` → starts as the default authenticated
                 // user, matching a standalone server with no requirepass.
-                state: ConnectionState::new(1, "127.0.0.1:0".parse().unwrap(), false),
+                state: ConnectionState::new(
+                    1,
+                    "127.0.0.1:0".parse().unwrap(),
+                    false,
+                    crate::connection::deps::unbounded_txn_budget(),
+                ),
             }
         }
 

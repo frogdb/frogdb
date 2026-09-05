@@ -239,8 +239,9 @@ ALLOWLIST: dict[str, tuple[int, str]] = {
     # --- Transactions
     "frogdb-server/crates/txn/src/state.rs": (
         2,
-        "MULTI queue watches and queued errors — the `TxnBuffering` budget class, whose "
-        "conversion is spec-first (frogdb-txn is locked)",
+        "MULTI watches and queued errors — the queued commands themselves are charged "
+        "to the `TxnBuffering` budget (FM-TXN-054); these two remain spec-first "
+        "(frogdb-txn is locked)",
     ),
     # --- VLL
     "frogdb-server/crates/vll/src/coordinator.rs": (1, "revocation watch receivers"),

@@ -1040,6 +1040,7 @@ mod idle_tick_tests {
                 registry: Arc::new(CommandRegistry::new()),
                 shard_senders: Arc::new(vec![ShardSender::new(shard_tx)]),
                 acl_manager: AclManager::new(Default::default()),
+                txn_budgets: crate::connection::deps::unbounded_txn_budgets(1),
             },
             AdminDeps {
                 client_registry,

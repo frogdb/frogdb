@@ -506,6 +506,7 @@ mod tests {
                 registry,
                 shard_senders,
                 acl_manager,
+                txn_budgets: crate::connection::deps::unbounded_txn_budgets(1),
             },
             admin: AdminDeps {
                 client_registry,

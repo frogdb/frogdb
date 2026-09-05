@@ -615,13 +615,28 @@ Deliberate non-guarantees, so a future reader does not mistake them for gaps:
   not another's — FrogDB's documented model (execution atomicity via locking, not durability
   atomicity). `test_checkpoint_cross_shard_mset_contract_under_concurrent_bgsave` pins the
   contract as written, including its limits.
-* **A group is not size-capped.** Atomicity and size-capping are mutually exclusive; an oversized
-  transaction buys its atomicity with one oversized `WriteBatch`. The flush thread keeps draining
-  the channel while a group is open, so backpressure cannot deadlock — the memory moves from the
-  channel into the staged batch.
+* **A group is not size-capped here.** Atomicity and size-capping at the WAL are mutually
+  exclusive; a group that opens closes as one `WriteBatch` however large. The flush thread keeps
+  draining the channel while a group is open, so backpressure cannot deadlock — the memory moves
+  from the channel into the staged batch. The *bound* lives upstream, before the first apply, where
+  refusing costs nothing to undo: FM-PERSISTENCE-062.
 * **`WalEntry::Clear` remains a hard flush barrier** and cuts a group, because a range tombstone's
   bound is only correct against committed state. Unreachable in practice: core's
   `WalStrategy::ClearShard` yields exactly one action, so a clear is always a group of its own.
+
+---
+
+## FM-PERSISTENCE-062 — a transaction that outgrows the buffer budget applies nothing
+
+| Field | Value |
+|---|---|
+| Trigger | A `CoreMsg::ExecTransaction` whose pre-apply footprint on the shard — the batch's own retained command bytes, plus (under `rollback` failure policy) the rollback snapshots it would take of every key its write commands name — would push the shard's `TxnBuffering` budget (`txn-buffer-limit`, per core, default 512 MiB) past its limit. Reached by a batch that passed queue-time charging on a *different* core (an unpinned connection, a replica-fed stream) or by a limit lowered by `CONFIG SET` between queuing and `EXEC`. |
+| Observable | `EXEC` answers `-OOM transaction buffer limit exceeded` and the keyspace is exactly as it was: no queued command ran, no WAL entry was staged, no watch was consumed, no dirty count moved. A batch that fits charges its footprint for the duration of the apply and releases it before the reply is sent, so the next batch on the core sees the whole limit again. |
+| NOT observable | A committed *prefix* — the refusal landing after the first command has applied, which is exactly the tear FM-PERSISTENCE-001 exists to forbid and which a refusal mid-loop could only avoid by taking rollback snapshots for every transaction, WAL or not (a copy-on-write clone of every touched value, paid by every `MULTI` on every node). A refused batch reaching `persist`. The shard blocked on the budget — `Disposition::Shed`, never `Backpressure`. A charge that outlives the batch. |
+| Invariant | `ShardWorker::execute_transaction` computes the footprint and `grow`s a fresh `Charge` on the shard's own `Subsystem::TxnBuffering` budget **after** every admission gate (routing fence, rate limiter, watch check, minted-fence verify) and **before** the apply loop; a `Refused` returns `TransactionResult::Error` with the OOM text and falls through none of the apply, persist or write-effect paths. The charge is a local dropped at the end of the call, so every exit — refusal, a WAL rollback, a panic isolated by `panic_guard`, a normal commit — releases it. The queue-time half of the same bound is [txn.md FM-TXN-054](txn.md#fm-txn-054--a-multi-that-outgrows-the-transaction-buffer-is-poisoned-at-queue-time); the replica-side pending group is [replication.md FM-REPLICATION-045](replication.md#fm-replication-045--an-unterminated-replicated-multi-is-bounded-and-abandoned-never-accumulated). |
+| Outcome variant | `TransactionResult::Error` (the coordinator reports it as `TransactionOutcome::Error`); `frogdb_memory_budget_refusals_total{subsystem="txn_buffering"}` |
+| Forced by | `a_transaction_past_the_buffer_limit_applies_nothing`, `a_transaction_under_the_buffer_limit_applies_and_releases_its_charge`, `the_rollback_snapshot_footprint_counts_toward_the_buffer_charge` |
+| Bug refs | [memory-architecture issue 21](../.scratch/memory-architecture/issues/done/21-txn-budget-hard-cap.md) |
 
 ---
 

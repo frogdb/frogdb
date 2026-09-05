@@ -1784,6 +1784,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "frogdb-config-derive",
+ "frogdb-memory",
  "rand 0.10.0",
  "schemars 1.2.1",
  "serde",
@@ -1963,6 +1964,7 @@ name = "frogdb-replication"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "frogdb-memory",
  "frogdb-persistence",
  "frogdb-protocol",
  "frogdb-types",
@@ -2190,6 +2192,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "frogdb-core",
+ "frogdb-memory",
  "frogdb-protocol",
  "frogdb-telemetry",
  "tokio",

@@ -65,11 +65,13 @@ impl ConnectionHandlerBuilder {
         shard_senders: Arc<Vec<ShardSender>>,
         metrics_recorder: Arc<dyn MetricsRecorder>,
         acl_manager: Arc<AclManager>,
+        txn_budgets: Arc<Vec<frogdb_memory::Budget>>,
     ) -> Self {
         let mut builder = Self::new(CoreDeps {
             registry,
             shard_senders,
             acl_manager,
+            txn_budgets,
         });
         builder.observability.metrics_recorder = metrics_recorder;
         builder
@@ -239,12 +241,14 @@ pub fn connection_builder(
     shard_senders: Arc<Vec<ShardSender>>,
     metrics_recorder: Arc<dyn MetricsRecorder>,
     acl_manager: Arc<AclManager>,
+    txn_budgets: Arc<Vec<frogdb_memory::Budget>>,
 ) -> ConnectionHandlerBuilder {
     ConnectionHandlerBuilder::with_core_parts(
         registry,
         shard_senders,
         metrics_recorder,
         acl_manager,
+        txn_budgets,
     )
 }
 

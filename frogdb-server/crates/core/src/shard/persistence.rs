@@ -950,6 +950,7 @@ mod sync_durability_ack_tests {
     use crate::shard::FakeWalRegistry;
     use crate::shard::builder::{ShardWorkerBuilder, WalMode};
     use crate::shard::message::{ShardReceiver, ShardSender};
+    use crate::shard::types::TransactionResult;
     use crate::shard::worker::ShardWorker;
     use crate::store::{HashMapStore, Store};
     use crate::types::Value;
@@ -1103,5 +1104,126 @@ mod sync_durability_ack_tests {
             log.durable_writes().is_empty(),
             "periodic durability acks without waiting — durability comes from the syncer"
         );
+    }
+
+    /// The shard's half of the transaction buffer bound (FM-PERSISTENCE-062):
+    /// a batch's footprint is charged to the core's `TxnBuffering` budget after
+    /// every gate and before the first apply, so a refusal applies nothing.
+    async fn exec(worker: &mut ShardWorker, commands: Vec<ParsedCommand>) -> TransactionResult {
+        worker
+            .execute_transaction(
+                commands,
+                &[],
+                1,
+                ProtocolVersion::Resp2,
+                &crate::write_seam::WriteAdmission::internal(),
+                None,
+                Default::default(),
+            )
+            .await
+    }
+
+    fn footprint(commands: &[ParsedCommand]) -> u64 {
+        commands.iter().map(ParsedCommand::retained_bytes).sum()
+    }
+
+    // FM-PERSISTENCE-062
+    #[tokio::test]
+    async fn a_transaction_past_the_buffer_limit_applies_nothing() {
+        let (mut worker, log) = shard_with_mode(DurabilityMode::Sync);
+        let commands = vec![set("a", "1"), set("b", "2")];
+        let budget = worker.txn_buffer_budget();
+        // Room for the first command alone; the batch is charged as a whole.
+        budget.set_limit(footprint(&commands) - 1);
+
+        let result = exec(&mut worker, commands).await;
+
+        assert!(
+            matches!(result, TransactionResult::Error(ref e) if e == crate::TXN_BUFFER_LIMIT_ERROR),
+            "the whole batch is refused with the OOM text, got {result:?}"
+        );
+        assert!(worker.store.get(b"a").is_none(), "nothing applied");
+        assert!(worker.store.get(b"b").is_none(), "nothing applied");
+        assert!(
+            log.effects().iter().all(|e| e.kind != WalEffectKind::Set),
+            "nothing reached the WAL: {:?}",
+            log.effects()
+        );
+        assert_eq!(budget.refusals(), 1);
+        assert_eq!(budget.charged(), 0, "a refusal charges nothing");
+    }
+
+    // FM-PERSISTENCE-062
+    #[tokio::test]
+    async fn a_transaction_under_the_buffer_limit_applies_and_releases_its_charge() {
+        let (mut worker, _log) = shard_with_mode(DurabilityMode::Sync);
+        let commands = vec![set("a", "1"), set("b", "2")];
+        let budget = worker.txn_buffer_budget();
+        // Exactly the batch's footprint: the bound is inclusive.
+        let bytes = footprint(&commands);
+        budget.set_limit(bytes);
+
+        let result = exec(&mut worker, commands).await;
+
+        assert!(
+            matches!(result, TransactionResult::Success(ref r) if r.len() == 2),
+            "the batch fits, got {result:?}"
+        );
+        assert!(worker.store.get(b"a").is_some());
+        assert!(worker.store.get(b"b").is_some());
+        assert_eq!(budget.refusals(), 0);
+        assert_eq!(budget.charged(), 0, "the charge is released with the batch");
+        assert_eq!(budget.peak(), bytes, "the batch was charged while it ran");
+    }
+
+    // FM-PERSISTENCE-062
+    #[tokio::test]
+    async fn the_rollback_snapshot_footprint_counts_toward_the_buffer_charge() {
+        let (mut worker, _log) = shard_with_mode(DurabilityMode::Sync);
+        // A large existing value: under `rollback`, the apply loop snapshots it
+        // (pinning one copy while the write clones another), so it is part of
+        // what the transaction holds.
+        let big = ParsedCommand::new(
+            Bytes::from_static(b"SET"),
+            vec![Bytes::from_static(b"k"), Bytes::from(vec![b'x'; 8192])],
+        );
+        let response = worker
+            .execute_command(&big, 1, ProtocolVersion::Resp2, false)
+            .await;
+        assert!(matches!(response, Response::Simple(ref s) if s.as_ref() == b"OK"));
+        let existing = worker.store.get(b"k").expect("written").memory_size() as u64;
+
+        let commands = vec![set("k", "v")];
+        let budget = worker.txn_buffer_budget();
+        // Just the commands: enough under `continue`, not under `rollback`.
+        budget.set_limit(footprint(&commands));
+        worker
+            .persistence
+            .set_failure_policy(Arc::new(AtomicU8::new(
+                crate::WalFailurePolicy::Rollback.as_u8(),
+            )));
+        assert!(worker.persistence.should_rollback());
+
+        let result = exec(&mut worker, commands.clone()).await;
+        assert!(
+            matches!(result, TransactionResult::Error(ref e) if e == crate::TXN_BUFFER_LIMIT_ERROR),
+            "the snapshot's bytes push the batch past the limit, got {result:?}"
+        );
+        assert_eq!(budget.refusals(), 1);
+        assert_eq!(
+            worker.store.get(b"k").expect("untouched").memory_size() as u64,
+            existing,
+            "the refused write did not run"
+        );
+
+        // With room for the snapshot too, the same batch applies.
+        budget.set_limit(footprint(&commands) + existing);
+        let result = exec(&mut worker, commands.clone()).await;
+        assert!(
+            matches!(result, TransactionResult::Success(_)),
+            "commands plus snapshot fit exactly, got {result:?}"
+        );
+        assert_eq!(budget.peak(), footprint(&commands) + existing);
+        assert_eq!(budget.charged(), 0);
     }
 }

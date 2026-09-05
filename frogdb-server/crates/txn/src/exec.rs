@@ -144,8 +144,15 @@ pub async fn execute_transaction<H: TxnHost + ?Sized>(
         exec_abort,
         asking,
         start_time,
+        charge,
     } = summary;
     let queued_count = queue.len();
+    // The queued bytes stay charged against the home core's `TxnBuffering`
+    // budget for as long as this frame holds the queue: every return below
+    // drops the guard, so the release is exactly "EXEC has its reply"
+    // (FM-TXN-054). Bound to a local rather than left inside `summary` so the
+    // destructure above cannot silently drop it early.
+    let _charge = charge;
 
     // Check if we should abort due to queuing errors
     if exec_abort {

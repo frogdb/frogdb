@@ -242,6 +242,10 @@ pub struct Server {
     /// Per-shard memory usage atomics for SystemMetricsCollector fragmentation ratio.
     shard_memory_used: Arc<Vec<AtomicU64>>,
 
+    /// Each shard's `TxnBuffering` budget, handed to every connection (its
+    /// queued MULTI) and to the replica applier (its pending groups).
+    txn_budgets: Arc<Vec<frogdb_memory::Budget>>,
+
     /// Optional TLS runtime handle (only when TLS is enabled): owns the
     /// `TlsManager` plus the live TLS config, and is the reload seam for
     /// certificate rotation and TLS CONFIG SETs.
@@ -401,6 +405,7 @@ impl Server {
                 infra.function_registry.clone(),
                 infra.config_manager.clone(),
             ))),
+            infra.txn_budgets.clone(),
             #[cfg(not(feature = "turmoil"))]
             &infra.tls_runtime,
         )
@@ -442,6 +447,7 @@ impl Server {
             client_registry: infra.client_registry.clone(),
             config_manager: infra.config_manager.clone(),
             shard_memory_used: infra.shard_memory_used.clone(),
+            txn_budgets: infra.txn_budgets.clone(),
             shard_monitor: infra.shard_monitor,
         })?;
 
@@ -544,6 +550,7 @@ impl Server {
             role_manager_handle: cluster.role_manager_handle,
             shared_maxmemory: infra.shared_maxmemory,
             shard_memory_used: infra.shard_memory_used,
+            txn_budgets: infra.txn_budgets,
             #[cfg(not(feature = "turmoil"))]
             tls_runtime: infra.tls_runtime,
             tls_listener: infra.tls_listener,

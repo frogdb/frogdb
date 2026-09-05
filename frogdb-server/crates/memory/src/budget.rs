@@ -177,6 +177,15 @@ struct BudgetInner {
 /// an uncontended cache line is the same instruction a plain load would be;
 /// this is a `Send` accommodation, not cross-core sharing, and nothing here
 /// may be read as a licence to charge a budget from a foreign core.
+///
+/// Two named exceptions, both for [`Subsystem::TxnBuffering`], whose holders
+/// are *pinned to* a core without always *running on* it: a client connection
+/// that could not be colocated with its home shard's runtime, and the replica
+/// applier, which runs on the ambient runtime and charges the budget of the
+/// shard each replicated group is tagged for. Both charge the budget of the
+/// core the transaction will execute on, so the breakdown still answers "what
+/// is this core holding" — the atomics make the off-thread `grow`/`release`
+/// correct, and the contention is one transaction's worth of updates.
 #[derive(Debug, Clone)]
 pub struct Budget {
     inner: Arc<BudgetInner>,

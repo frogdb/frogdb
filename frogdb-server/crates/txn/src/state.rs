@@ -9,7 +9,9 @@ use frogdb_core::clock;
 use std::collections::HashMap;
 
 use bytes::Bytes;
+pub use frogdb_core::TXN_BUFFER_LIMIT_ERROR;
 use frogdb_core::{WatchEntry, redirect, shard_for_key, slot_for_key};
+use frogdb_memory::{Budget, Charge, Refused};
 use frogdb_protocol::{ParsedCommand, Response};
 
 /// Target shard(s) for a transaction (prepared for future multi-shard support).
@@ -157,6 +159,9 @@ pub struct TxnSummary {
     pub asking: bool,
     /// When MULTI was issued, for duration metrics.
     pub start_time: Option<std::time::Instant>,
+    /// The queued commands' bytes, held against the home core's
+    /// `TxnBuffering` budget until EXEC has its reply (released on drop).
+    pub charge: Option<Charge>,
 }
 
 /// Lightweight metrics captured by DISCARD.
@@ -192,6 +197,11 @@ pub struct TransactionState {
     queued_errors: Vec<String>,
     /// Start time of the transaction (when MULTI was called).
     start_time: Option<std::time::Instant>,
+    /// One charge per open transaction on the home core's `TxnBuffering`
+    /// budget, grown per queued command. `None` outside a transaction. Every
+    /// wholesale reset (`take`, `discard`, `clear`) drops it, which is what
+    /// releases the bytes — the lifetime *is* the transaction's.
+    charge: Option<Charge>,
 }
 
 impl TransactionState {
@@ -213,11 +223,15 @@ impl TransactionState {
 
     /// Begin a transaction (MULTI). Errors with [`TxnError::Nested`] if one is
     /// already open. Existing watches are preserved (WATCH before MULTI).
-    pub fn begin(&mut self) -> Result<(), TxnError> {
+    ///
+    /// `budget` is the home core's `TxnBuffering` budget; the transaction opens
+    /// a zero-byte charge on it that [`Self::push_queued_command`] grows.
+    pub fn begin(&mut self, budget: &Budget) -> Result<(), TxnError> {
         if self.queue.is_some() {
             return Err(TxnError::Nested);
         }
         self.queue = Some(Vec::new());
+        self.charge = Some(budget.open_charge());
         self.slots = TxnSlotAccumulator::default();
         self.exec_abort = false;
         self.queued_errors.clear();
@@ -227,10 +241,23 @@ impl TransactionState {
 
     /// Push a validated command onto the transaction queue (no-op outside a
     /// transaction, matching the historical guard).
-    pub fn push_queued_command(&mut self, cmd: ParsedCommand) {
-        if let Some(ref mut queue) = self.queue {
-            queue.push(cmd);
+    ///
+    /// The command's retained bytes are charged *before* it is queued. A
+    /// refusal leaves the queue as it was, poisons the transaction with
+    /// [`TXN_BUFFER_LIMIT_ERROR`] so EXEC answers EXECABORT, and hands the
+    /// refusal back for the connection's own reply (FM-TXN-054).
+    pub fn push_queued_command(&mut self, cmd: ParsedCommand) -> Result<(), Refused> {
+        let Some(queue) = self.queue.as_mut() else {
+            return Ok(());
+        };
+        if let Some(charge) = self.charge.as_mut()
+            && let Err(refused) = charge.grow(cmd.retained_bytes())
+        {
+            self.abort(Some(TXN_BUFFER_LIMIT_ERROR.to_string()));
+            return Err(refused);
         }
+        queue.push(cmd);
+        Ok(())
     }
 
     /// Mark the transaction poisoned so EXEC aborts. An accompanying error
@@ -330,6 +357,7 @@ impl TransactionState {
             exec_abort: txn.exec_abort,
             asking,
             start_time: txn.start_time,
+            charge: txn.charge,
         })
     }
 
@@ -354,12 +382,111 @@ impl TransactionState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use frogdb_memory::{Disposition, Subsystem};
+
+    /// A `TxnBuffering` budget no test here can fill.
+    fn roomy() -> Budget {
+        Budget::new(Subsystem::TxnBuffering, Disposition::Shed, u64::MAX)
+    }
 
     fn cmd(name: &'static [u8]) -> ParsedCommand {
         ParsedCommand {
             name: Bytes::from_static(name),
             args: vec![],
         }
+    }
+
+    fn sized(name: &'static [u8], arg_len: usize) -> ParsedCommand {
+        ParsedCommand {
+            name: Bytes::from_static(name),
+            args: vec![Bytes::from(vec![b'x'; arg_len])],
+        }
+    }
+
+    // FM-TXN-054
+    #[test]
+    fn a_queued_command_past_the_buffer_limit_is_refused_and_poisons_the_transaction() {
+        let small = sized(b"SET", 16);
+        let big = sized(b"SET", 4096);
+        // Room for the small one, not for the small one plus the big one.
+        let budget = Budget::new(
+            Subsystem::TxnBuffering,
+            Disposition::Shed,
+            small.retained_bytes() + big.retained_bytes() - 1,
+        );
+        let mut t = TransactionState::default();
+        t.begin(&budget).unwrap();
+        t.push_queued_command(small.clone())
+            .expect("the first command fits");
+        assert_eq!(budget.charged(), small.retained_bytes());
+
+        let refused = t
+            .push_queued_command(big)
+            .expect_err("the second command crosses the limit");
+        assert_eq!(refused.subsystem, Subsystem::TxnBuffering);
+        assert_eq!(refused.disposition, Disposition::Shed);
+        assert_eq!(budget.refusals(), 1);
+        // Refused means not queued: the queue and the charge are as they were.
+        assert_eq!(t.queued_commands().map(<[_]>::len), Some(1));
+        assert_eq!(budget.charged(), small.retained_bytes());
+
+        // ...and the transaction is poisoned with the OOM text, so EXEC aborts.
+        assert!(t.exec_abort);
+        assert_eq!(t.queued_errors, vec![TXN_BUFFER_LIMIT_ERROR.to_string()]);
+        let summary = t.take(false).expect("still open");
+        assert!(summary.exec_abort);
+        drop(summary);
+        assert_eq!(budget.charged(), 0, "EXEC's summary releases the charge");
+    }
+
+    // FM-TXN-054
+    #[test]
+    fn queued_commands_charge_their_retained_bytes_until_the_transaction_ends() {
+        let budget = roomy();
+        let a = sized(b"SET", 100);
+        let b = sized(b"SET", 200);
+        let expected = a.retained_bytes() + b.retained_bytes();
+
+        // DISCARD releases.
+        let mut t = TransactionState::default();
+        t.begin(&budget).unwrap();
+        t.push_queued_command(a.clone()).unwrap();
+        t.push_queued_command(b.clone()).unwrap();
+        assert_eq!(budget.charged(), expected);
+        t.discard().expect("open");
+        assert_eq!(budget.charged(), 0, "DISCARD releases the charge");
+
+        // RESET / QUIT (clear) releases.
+        t.begin(&budget).unwrap();
+        t.push_queued_command(a.clone()).unwrap();
+        assert_eq!(budget.charged(), a.retained_bytes());
+        t.clear();
+        assert_eq!(budget.charged(), 0, "clear releases the charge");
+
+        // A dropped connection (the state itself dropped) releases.
+        t.begin(&budget).unwrap();
+        t.push_queued_command(b.clone()).unwrap();
+        assert_eq!(budget.charged(), b.retained_bytes());
+        drop(t);
+        assert_eq!(
+            budget.charged(),
+            0,
+            "dropping the state releases the charge"
+        );
+
+        // EXEC carries the charge into the summary; it is released when the
+        // summary is dropped, not when `take` runs.
+        let mut t = TransactionState::default();
+        t.begin(&budget).unwrap();
+        t.push_queued_command(a).unwrap();
+        t.push_queued_command(b).unwrap();
+        let summary = t.take(false).expect("open");
+        assert_eq!(budget.charged(), expected, "take keeps the bytes charged");
+        assert!(!t.is_open());
+        drop(summary);
+        assert_eq!(budget.charged(), 0);
+        assert_eq!(budget.refusals(), 0);
+        assert!(budget.peak() >= expected);
     }
 
     // FM-TXN-001
@@ -370,11 +497,11 @@ mod tests {
         assert!(t.take(false).is_none(), "EXEC without MULTI");
         assert!(t.discard().is_none(), "DISCARD without MULTI");
 
-        t.begin().expect("first MULTI succeeds");
+        t.begin(&roomy()).expect("first MULTI succeeds");
         assert!(t.is_open());
-        assert_eq!(t.begin(), Err(TxnError::Nested));
+        assert_eq!(t.begin(&roomy()), Err(TxnError::Nested));
 
-        t.push_queued_command(cmd(b"GET"));
+        t.push_queued_command(cmd(b"GET")).unwrap();
         let summary = t.take(true).expect("in transaction");
         assert_eq!(summary.queue.len(), 1);
         assert!(summary.asking, "ASKING is carried into the summary");
@@ -389,7 +516,7 @@ mod tests {
         let mut t = TransactionState::default();
         t.watch_key(Bytes::from_static(b"a"), 0, 11, true);
         t.watch_key(Bytes::from_static(b"b"), 1, 22, true);
-        t.begin().expect("MULTI after WATCH");
+        t.begin(&roomy()).expect("MULTI after WATCH");
         t.fold_shard(1);
 
         let summary = t.take(false).expect("in transaction");
@@ -408,7 +535,7 @@ mod tests {
         // `-CROSSSLOT` a transaction Redis commits.
         let mut t = TransactionState::default();
         t.watch_key(Bytes::from_static(b"counter"), 1, 7, false);
-        t.begin().expect("MULTI after WATCH");
+        t.begin(&roomy()).expect("MULTI after WATCH");
         t.fold_shard(0);
 
         let summary = t.take(false).expect("in transaction");
@@ -434,7 +561,7 @@ mod tests {
         let mut t = TransactionState::default();
         t.watch_key(Bytes::from_static(b"live"), 1, 11, true);
         t.watch_key(Bytes::from_static(b"dead"), 2, 22, false);
-        t.begin().expect("MULTI after WATCH");
+        t.begin(&roomy()).expect("MULTI after WATCH");
         t.fold_shard(0);
 
         let summary = t.take(false).expect("in transaction");
@@ -458,7 +585,7 @@ mod tests {
         // version nor the liveness observation may be laundered away here.
         t.watch_key(Bytes::from_static(b"k"), 0, 22, false);
 
-        t.begin().expect("MULTI after WATCH");
+        t.begin(&roomy()).expect("MULTI after WATCH");
         let summary = t.take(false).expect("in transaction");
         assert_eq!(summary.watches.len(), 1, "one entry per watched key");
         assert_eq!(
@@ -474,7 +601,7 @@ mod tests {
         t.watch_key(Bytes::from_static(b"k"), 0, 33, false);
         t.unwatch_all();
         t.watch_key(Bytes::from_static(b"k"), 0, 44, true);
-        t.begin().expect("MULTI after UNWATCH + WATCH");
+        t.begin(&roomy()).expect("MULTI after UNWATCH + WATCH");
         let summary = t.take(false).expect("in transaction");
         assert_eq!(
             summary.watches[0].entry.version, 44,
@@ -487,7 +614,7 @@ mod tests {
     fn unwatch_drops_the_stale_cross_shard_fold() {
         let mut t = TransactionState::default();
         t.watch_key(Bytes::from_static(b"a"), 0, 11, true);
-        t.begin().expect("MULTI after WATCH");
+        t.begin(&roomy()).expect("MULTI after WATCH");
         t.unwatch_all();
         t.fold_shard(1);
 
@@ -502,7 +629,7 @@ mod tests {
         // "a" and "b" hash to different CRC16 slots, but may share a shard;
         // cluster mode must still promote to Multi.
         let mut t = TransactionState::default();
-        t.begin().expect("MULTI");
+        t.begin(&roomy()).expect("MULTI");
         t.fold_keys(&[b"a".as_slice(), b"b".as_slice()], 1, true);
         let summary = t.take(false).expect("in transaction");
         assert!(
@@ -624,16 +751,16 @@ mod tests {
     #[test]
     fn abort_is_reported_in_the_summary_and_discard_clears_watches() {
         let mut t = TransactionState::default();
-        t.begin().unwrap();
-        t.push_queued_command(cmd(b"GET"));
+        t.begin(&roomy()).unwrap();
+        t.push_queued_command(cmd(b"GET")).unwrap();
         t.abort(Some("ERR boom".to_string()));
         assert!(t.take(false).expect("in transaction").exec_abort);
 
-        t.begin().unwrap();
+        t.begin(&roomy()).unwrap();
         t.watch_key(Bytes::from_static(b"k"), 0, 1, true);
         let metrics = t.discard().expect("in transaction");
         assert_eq!(metrics.queued_count, 0);
-        t.begin().unwrap();
+        t.begin(&roomy()).unwrap();
         assert!(
             t.take(false).unwrap().watches.is_empty(),
             "DISCARD unwatches"
@@ -645,14 +772,14 @@ mod tests {
         let mut t = TransactionState::default();
         assert!(t.queued_commands().is_none(), "no transaction open -> None");
 
-        t.begin().unwrap();
+        t.begin(&roomy()).unwrap();
         assert!(
             t.queued_commands().is_some_and(|q| q.is_empty()),
             "MULTI with nothing queued yet is Some(&[])"
         );
 
-        t.push_queued_command(cmd(b"GET"));
-        t.push_queued_command(cmd(b"SET"));
+        t.push_queued_command(cmd(b"GET")).unwrap();
+        t.push_queued_command(cmd(b"SET")).unwrap();
         let queued = t.queued_commands().expect("transaction open");
         assert_eq!(queued.len(), 2, "both queued commands are visible");
         assert_eq!(queued[0].name, Bytes::from_static(b"GET"));
@@ -684,8 +811,8 @@ mod tests {
     #[test]
     fn clear_resets_everything_unconditionally() {
         let mut t = TransactionState::default();
-        t.begin().unwrap();
-        t.push_queued_command(cmd(b"GET"));
+        t.begin(&roomy()).unwrap();
+        t.push_queued_command(cmd(b"GET")).unwrap();
         t.watch_key(Bytes::from_static(b"k"), 0, 1, true);
         t.abort(Some("ERR boom".to_string()));
         assert!(t.is_open());
@@ -697,7 +824,7 @@ mod tests {
         assert_eq!(t.watched_key_iter().count(), 0, "watches are dropped too");
 
         // A clean MULTI after clear must not carry over the aborted flag.
-        t.begin().unwrap();
+        t.begin(&roomy()).unwrap();
         assert!(
             !t.take(false).unwrap().exec_abort,
             "clear must not leave exec_abort latched"

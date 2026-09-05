@@ -16,6 +16,7 @@ use frogdb_core::{
     persistence::{RecoveryStats, SnapshotCoordinator},
 };
 use frogdb_debug::MemoryDiagConfig;
+use frogdb_memory::Budget;
 use frogdb_telemetry::SharedTracer;
 
 use frogdb_core::ClientRegistry;
@@ -45,6 +46,31 @@ pub struct CoreDeps {
 
     /// ACL manager for authentication and authorization.
     pub acl_manager: Arc<AclManager>,
+
+    /// Each shard's `TxnBuffering` budget, indexed by shard id. A connection
+    /// charges the budget of the shard it is assigned to for the commands it
+    /// queues under MULTI (`specs/txn.md` FM-TXN-054); the shard charges the
+    /// same budget for the batch it holds at EXEC (`specs/persistence.md`
+    /// FM-PERSISTENCE-062). One `Budget` handle per shard, cloned per
+    /// connection — the handle is the slot, not a copy of its counters.
+    pub txn_budgets: Arc<Vec<Budget>>,
+}
+
+/// A `TxnBuffering` budget no test can fill, for connection state built
+/// outside the shard builder.
+#[cfg(test)]
+pub(crate) fn unbounded_txn_budget() -> Budget {
+    Budget::new(
+        frogdb_memory::Subsystem::TxnBuffering,
+        frogdb_memory::Disposition::Shed,
+        u64::MAX,
+    )
+}
+
+/// One [`unbounded_txn_budget`] per shard.
+#[cfg(test)]
+pub(crate) fn unbounded_txn_budgets(num_shards: usize) -> Arc<Vec<Budget>> {
+    Arc::new((0..num_shards).map(|_| unbounded_txn_budget()).collect())
 }
 
 // ============================================================================

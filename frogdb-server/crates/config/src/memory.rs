@@ -71,6 +71,17 @@ pub struct MemoryConfig {
     #[param(mutable)]
     pub maxmemory_clients: String,
 
+    /// Per-core bound, in bytes, on what one transaction may hold before it
+    /// applies: the commands a `MULTI` block queues on the connection plus the
+    /// batch the shard holds at `EXEC` (with the rollback snapshots it will
+    /// take, under `wal-failure-policy = "rollback"`). A transaction that would
+    /// cross it is refused with `-OOM transaction buffer limit exceeded`; an
+    /// `EXEC` so refused applies nothing. The node-wide bound is this value
+    /// times the shard count. Floor: 1 MiB.
+    #[serde(default = "default_txn_buffer_limit")]
+    #[param(mutable)]
+    pub txn_buffer_limit: u64,
+
     /// How often (Hz) the per-shard jemalloc arena figures are refreshed.
     ///
     /// One epoch advance per tick refreshes every shard's arena at once. ADR-0006
@@ -150,6 +161,18 @@ fn default_maxmemory_clients() -> String {
     "0".to_string()
 }
 
+/// The shipped `txn-buffer-limit`: `frogdb_memory::defaults::TXN_BUFFER_BYTES`.
+pub const DEFAULT_TXN_BUFFER_LIMIT: u64 = frogdb_memory::defaults::TXN_BUFFER_BYTES;
+
+/// The smallest `txn-buffer-limit` accepted, at boot or by `CONFIG SET`:
+/// `frogdb_memory::defaults::TXN_BUFFER_MIN_BYTES`. Below it an ordinary
+/// pipeline-sized `MULTI` could not queue.
+pub const MIN_TXN_BUFFER_LIMIT: u64 = frogdb_memory::defaults::TXN_BUFFER_MIN_BYTES;
+
+fn default_txn_buffer_limit() -> u64 {
+    DEFAULT_TXN_BUFFER_LIMIT
+}
+
 /// 20 Hz: a 50 ms-stale per-shard bound for ~0.045 % of one core at eight
 /// shards. Mirrors `frogdb_telemetry::ArenaSampleRate::DEFAULT_HZ`, which is
 /// also what clamps an out-of-band value.
@@ -171,6 +194,7 @@ impl Default for MemoryConfig {
             doctor_max_big_keys: default_doctor_max_big_keys(),
             doctor_imbalance_threshold: default_doctor_imbalance_threshold(),
             maxmemory_clients: default_maxmemory_clients(),
+            txn_buffer_limit: default_txn_buffer_limit(),
             arena_sample_hz: default_arena_sample_hz(),
         }
     }
@@ -193,6 +217,13 @@ impl MemoryConfig {
 
         if self.doctor_imbalance_threshold <= 0.0 || self.doctor_imbalance_threshold > 100.0 {
             anyhow::bail!("memory.doctor_imbalance_threshold must be > 0.0 and <= 100.0");
+        }
+
+        if self.txn_buffer_limit < MIN_TXN_BUFFER_LIMIT {
+            anyhow::bail!(
+                "memory.txn_buffer_limit must be >= {MIN_TXN_BUFFER_LIMIT} bytes, got {}",
+                self.txn_buffer_limit
+            );
         }
 
         Ok(())

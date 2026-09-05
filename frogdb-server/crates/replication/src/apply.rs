@@ -202,6 +202,14 @@ pub struct ReplicaTxnBound {
     max_commands: usize,
     max_bytes: u64,
     abandoned: AtomicU64,
+    /// Each shard's `TxnBuffering` budget, indexed by shard id, once the node's
+    /// memory broker is wired in ([`Self::with_budgets`]). A pending group is
+    /// charged to the budget of the shard it is tagged for — the same slot
+    /// that shard charges at `EXEC` — so the breakdown shows the group while
+    /// it is open, and a refusal abandons it exactly as a ceiling breach
+    /// does. Absent in unit builds: nothing is charged and the two ceilings
+    /// alone bound the group.
+    budgets: Option<Arc<Vec<frogdb_memory::Budget>>>,
 }
 
 impl Default for ReplicaTxnBound {
@@ -219,7 +227,25 @@ impl ReplicaTxnBound {
             max_commands,
             max_bytes,
             abandoned: AtomicU64::new(0),
+            budgets: None,
         }
+    }
+
+    /// Charge every pending group to its tagged shard's `TxnBuffering` budget.
+    #[must_use]
+    pub fn with_budgets(mut self, budgets: Arc<Vec<frogdb_memory::Budget>>) -> Self {
+        self.budgets = Some(budgets);
+        self
+    }
+
+    /// An empty charge on `shard_id`'s budget, or `None` when no budgets are
+    /// wired (or the frame names a shard this node does not have — the apply
+    /// will refuse it; there is nothing to charge).
+    fn open_charge(&self, shard_id: u16) -> Option<frogdb_memory::Charge> {
+        self.budgets
+            .as_ref()?
+            .get(usize::from(shard_id))
+            .map(frogdb_memory::Budget::open_charge)
     }
 
     pub fn max_commands(&self) -> usize {
@@ -263,6 +289,11 @@ struct PendingTxn {
     /// the group goes to its shard — an interrupted group must never leave the
     /// applied offset claiming data no shard ever saw.
     bytes: u64,
+    /// What the buffered commands hold, charged to the tagged shard's
+    /// `TxnBuffering` budget; released as the group goes to its shard (which
+    /// charges the batch itself, FM-PERSISTENCE-062) or is dropped. `None`
+    /// when the bound carries no budgets.
+    charge: Option<frogdb_memory::Charge>,
 }
 
 /// What one run of [`consume_frames`] did with the stream it was handed.
@@ -661,6 +692,7 @@ pub async fn consume_frames<A: ReplicaApplier>(
                     // The MULTI frame's own bytes ride with the group and are
                     // claimed with it at EXEC.
                     bytes: frame_bytes,
+                    charge: txn_bound.open_charge(frame.shard_id),
                 });
             }
             "EXEC" => match pending.take() {
@@ -671,6 +703,11 @@ pub async fn consume_frames<A: ReplicaApplier>(
                     // apply this loop has started always completes, but the
                     // promotion boundary is frozen without waiting for it.
                     claim_or_stop!(txn.bytes + frame_bytes);
+                    // The shard charges the batch it holds (FM-PERSISTENCE-062)
+                    // on the same budget: release this side's charge as the
+                    // group is handed over, or the bytes would count twice
+                    // and a legal group could be refused at the shard.
+                    drop(txn.charge);
                     if let Err(e) = applier.apply_group(txn.shard_id, txn.commands).await {
                         diverged!(e, format!("MULTI/EXEC of {n} commands"));
                     } else {
@@ -688,18 +725,28 @@ pub async fn consume_frames<A: ReplicaApplier>(
             _ => {
                 if let Some(txn) = pending.as_mut() {
                     // Inside a MULTI/EXEC: buffer for the atomic apply. The
-                    // bytes ride with the group until EXEC.
-                    txn.commands.push(cmd);
+                    // bytes ride with the group until EXEC. What the command
+                    // will hold is charged to the tagged shard's transaction
+                    // buffer first; a refusal is one more way the group cannot
+                    // be held, and takes the same path as a ceiling breach.
+                    let refused = match txn.charge.as_mut() {
+                        Some(charge) => charge.grow(cmd.retained_bytes()).err(),
+                        None => None,
+                    };
+                    if refused.is_none() {
+                        txn.commands.push(cmd);
+                    }
                     txn.bytes += frame_bytes;
                     let (commands, bytes) = (txn.commands.len(), txn.bytes);
-                    if txn_bound.exceeded(commands, bytes) {
-                        // The `EXEC` is not coming. Drop the group — its bytes
-                        // stay unclaimed, as for any group that never reached a
-                        // shard — and end the history, the same disposition an
-                        // admitted divergence gets: further claims are refused
-                        // and the connection rewinds so its reconnect can only
-                        // be answered `+FULLRESYNC`. A `+CONTINUE` would resume
-                        // inside the very group that could not be completed.
+                    if refused.is_some() || txn_bound.exceeded(commands, bytes) {
+                        // The `EXEC` is not coming, or the group cannot be
+                        // held. Drop it — its bytes stay unclaimed, as for any
+                        // group that never reached a shard — and end the
+                        // history, the same disposition an admitted divergence
+                        // gets: further claims are refused and the connection
+                        // rewinds so its reconnect can only be answered
+                        // `+FULLRESYNC`. A `+CONTINUE` would resume inside the
+                        // very group that could not be completed.
                         pending = None;
                         errors += 1;
                         // Counted outside the `error!` — a `tracing` macro does
@@ -712,6 +759,7 @@ pub async fn consume_frames<A: ReplicaApplier>(
                             bytes,
                             max_commands = txn_bound.max_commands(),
                             max_bytes = txn_bound.max_bytes(),
+                            budget_refusal = ?refused,
                             abandoned_total,
                             shard = frame.shard_id,
                             sequence = frame.sequence,
@@ -1494,6 +1542,119 @@ mod tests {
         assert_eq!(groups[0].0, 1, "on the shard the MULTI was tagged with");
         assert_eq!(groups[0].1.len(), commands, "with every inner command");
         assert_eq!(offset, total, "the whole group's byte span is claimed");
+    }
+
+    /// Per-shard `TxnBuffering` budgets for the applier, `limit` bytes each.
+    fn txn_budgets(shards: usize, limit: u64) -> Arc<Vec<frogdb_memory::Budget>> {
+        Arc::new(
+            (0..shards)
+                .map(|_| {
+                    frogdb_memory::Budget::new(
+                        frogdb_memory::Subsystem::TxnBuffering,
+                        frogdb_memory::Disposition::Shed,
+                        limit,
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    /// What `unterminated_multi(count, value)`'s inner commands hold once
+    /// decoded: the same `ParsedCommand` shape the consume loop builds.
+    fn inner_retained_bytes(count: usize, value: &str) -> u64 {
+        (0..count)
+            .map(|i| {
+                ParsedCommand::new(
+                    Bytes::from_static(b"SET"),
+                    vec![Bytes::from(format!("k{i}")), Bytes::from(value.to_string())],
+                )
+                .retained_bytes()
+            })
+            .sum()
+    }
+
+    // FM-REPLICATION-045
+    /// The group's bytes are visible to the memory broker while it is open:
+    /// charged to the tagged shard's transaction buffer as each command is
+    /// buffered, and released as the group goes to its shard — which charges
+    /// the batch itself — so nothing is counted twice and nothing lingers.
+    #[tokio::test]
+    async fn a_pending_group_charges_its_shards_txn_buffer_and_releases_on_commit() {
+        let budgets = txn_budgets(2, u64::MAX);
+        let bound = Arc::new(ReplicaTxnBound::default().with_budgets(budgets.clone()));
+        let commands = 3;
+        let mut frames = unterminated_multi(commands, "v");
+        frames.push(frame_on(1, commands as u64 + 1, "EXEC", &[]));
+
+        let applier = Arc::new(MockApplier::default());
+        let (_, applied, _) = drive_bounded(frames, applier.clone(), bound.clone()).await;
+
+        assert!(!applied.has_diverged());
+        assert_eq!(applier.groups.lock().unwrap().len(), 1, "the group applied");
+        let tagged = &budgets[1];
+        assert_eq!(
+            tagged.peak(),
+            inner_retained_bytes(commands, "v"),
+            "the tagged shard's budget held exactly what the group retained"
+        );
+        assert_eq!(tagged.charged(), 0, "released with the group");
+        assert_eq!(tagged.refusals(), 0);
+        assert_eq!(budgets[0].peak(), 0, "only the tagged shard is charged");
+    }
+
+    // FM-REPLICATION-045
+    /// A budget refusal is a third ceiling with the same disposition: the
+    /// group is dropped, counted, and the history ended, with the refusing
+    /// command never buffered and nothing left charged.
+    #[tokio::test]
+    async fn a_pending_group_the_txn_buffer_refuses_is_abandoned() {
+        let commands = 4;
+        // Room for all but the last command.
+        let limit = inner_retained_bytes(commands - 1, "v");
+        let budgets = txn_budgets(2, limit);
+        let bound = Arc::new(ReplicaTxnBound::default().with_budgets(budgets.clone()));
+        let mut frames = unterminated_multi(commands, "v");
+        frames.push(frame_on(1, commands as u64 + 1, "EXEC", &[]));
+        frames.push(frame_on(0, 99, "SET", &["after", "1"]));
+
+        let applier = Arc::new(MockApplier::default());
+        let (offset, applied, stats) = drive_bounded(frames, applier.clone(), bound.clone()).await;
+
+        assert_eq!(
+            bound.abandoned(),
+            1,
+            "the refusal is counted as an abandoned group"
+        );
+        assert_eq!(
+            stats,
+            ConsumeStats {
+                frames_processed: 0,
+                // The refusal, and the `EXEC` that arrived after the history
+                // it closed had already ended.
+                errors: 2,
+                // That `EXEC` and the bare command after it.
+                discarded: 2,
+                skipped: 0,
+                floor_skipped: 0,
+            },
+            "nothing applies once the refusal ends the history"
+        );
+        assert!(
+            applier.groups.lock().unwrap().is_empty(),
+            "an abandoned group must not reach a shard, in whole or in part"
+        );
+        assert_eq!(
+            offset, 0,
+            "its bytes were never applied and must not be claimed"
+        );
+        assert!(
+            applied.has_diverged(),
+            "the link is forced through a full resync"
+        );
+        let tagged = &budgets[1];
+        assert_eq!(tagged.refusals(), 1);
+        assert_eq!(tagged.charged(), 0, "the dropped group released its charge");
+        assert_eq!(tagged.peak(), limit, "it held what fit until the refusal");
     }
 
     // ---- frames that outlive their history (issue 06) ---------------------

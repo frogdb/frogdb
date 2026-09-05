@@ -772,6 +772,23 @@ impl RealReplicaStreamer {
         self.net_bytes = Some(net_bytes);
         self
     }
+
+    /// Wire the shards' `TxnBuffering` budgets into the group bound every
+    /// stream this streamer starts consumes under, so a pending replicated
+    /// `MULTI` is charged to its shard's transaction buffer
+    /// (FM-REPLICATION-045). Separate from [`Self::new`] like the other
+    /// optional seams: unit builds run without a memory broker.
+    #[must_use]
+    pub fn with_txn_budgets(mut self, budgets: Arc<Vec<frogdb_memory::Budget>>) -> Self {
+        self.txn_bound = Arc::new(
+            frogdb_replication::ReplicaTxnBound::new(
+                self.txn_bound.max_commands(),
+                self.txn_bound.max_bytes(),
+            )
+            .with_budgets(budgets),
+        );
+        self
+    }
 }
 
 impl RealReplicaStreamer {

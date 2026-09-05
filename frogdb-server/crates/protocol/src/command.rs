@@ -87,6 +87,21 @@ impl ParsedCommand {
         Self { name, args }
     }
 
+    /// Bytes this command holds while it is retained (queued in a `MULTI`,
+    /// carried in a shard message): the struct, the name, and each argument
+    /// with its `Bytes` handle. Assumes every buffer is owned rather than a
+    /// slice of a shared read buffer — the retained copy is what gets charged.
+    pub fn retained_bytes(&self) -> u64 {
+        let bytes = std::mem::size_of::<Self>()
+            + self.name.len()
+            + self
+                .args
+                .iter()
+                .map(|arg| std::mem::size_of::<Bytes>() + arg.len())
+                .sum::<usize>();
+        bytes as u64
+    }
+
     /// Get the command name as uppercase bytes for lookup.
     pub fn name_uppercase(&self) -> Vec<u8> {
         self.name.to_ascii_uppercase()

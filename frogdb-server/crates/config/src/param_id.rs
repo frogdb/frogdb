@@ -86,6 +86,7 @@ param_id_enum! {
         LfuLogFactor => "lfu-log-factor",
         LfuDecayTime => "lfu-decay-time",
         MaxmemoryClients => "maxmemory-clients",
+        TxnBufferLimit => "txn-buffer-limit",
         // === Logging family ===
         Loglevel => "loglevel",
         PerRequestSpans => "per-request-spans",
@@ -370,8 +371,10 @@ mod tests {
         // no-op: FrogDB has no AOF, so GET always reports "no")
         // + 1 added by redis-feel issue 17 (`replica-serve-stale-data`, the
         // stale-read gate; FrogDB defaults it to `no` where Redis defaults
-        // `yes`).
-        assert_eq!(MutableParamId::ALL.len(), 79);
+        // `yes`) + 1 added by memory-architecture issue 21 (`txn-buffer-limit`,
+        // the per-shard MULTI buffering ceiling, applied live to every shard's
+        // `TxnBuffering` budget).
+        assert_eq!(MutableParamId::ALL.len(), 80);
         // 16 original immutable ids + 22 promote-immutable params added by 13-01
         // Pass 2a (26 classified, minus 4 metrics OTLP/bind rows downgraded to
         // justify as dead config) + 20 promote-immutable startup-consumed params
@@ -383,9 +386,9 @@ mod tests {
         // round (`recovery-on-decode-failure`, `require-existing-data`).
         // + 1 added by memory-architecture issue 18
         // (`client-output-buffer-limit`, consumed when a connection is built),
-        // which also *retired* issue-29's `pubsub-output-buffer-hard-limit`:
-        // the pub/sub delivery queue is now bounded by that value's `pubsub`
-        // class, so the two knobs became one.
-        assert_eq!(ImmutableParamId::ALL.len(), 47);
+        // which also *retired* issue-29's `pubsub-output-buffer-hard-limit`
+        // (minus 1): the pub/sub delivery queue is now bounded by that value's
+        // `pubsub` class, so the two knobs became one.
+        assert_eq!(ImmutableParamId::ALL.len(), 46);
     }
 }

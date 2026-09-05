@@ -21,6 +21,7 @@ use frogdb_core::{
     AuthenticatedUser, ClientStatsDelta, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
     MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION,
 };
+use frogdb_memory::{Budget, Refused};
 use frogdb_protocol::{ParsedCommand, ProtocolVersion};
 
 pub use frogdb_txn::{TransactionState, TransactionTarget, TxnError, TxnMetrics, TxnSummary};
@@ -445,6 +446,10 @@ pub struct ConnectionState {
     /// lifecycle methods (`begin_transaction`, `take_transaction`, ...).
     transaction: TransactionState,
 
+    /// The assigned shard's `TxnBuffering` budget, charged for the commands
+    /// this connection queues under MULTI (FM-TXN-054).
+    txn_budget: Budget,
+
     /// Pub/Sub state. Private: mutate via the subscription methods
     /// (`admit_subscriptions`, `add_subscription`, `exit_pubsub`, ...).
     pubsub: PubSubState,
@@ -494,7 +499,7 @@ pub struct ConnectionState {
 
 impl ConnectionState {
     /// Create a new connection state.
-    pub fn new(id: u64, addr: SocketAddr, requires_auth: bool) -> Self {
+    pub fn new(id: u64, addr: SocketAddr, requires_auth: bool, txn_budget: Budget) -> Self {
         let now = clock::now();
         Self {
             id,
@@ -505,6 +510,7 @@ impl ConnectionState {
             hello_at: None,
             name: None,
             transaction: TransactionState::default(),
+            txn_budget,
             pubsub: PubSubState::default(),
             tracking: TrackingState::default(),
             auth: if requires_auth {
@@ -700,17 +706,19 @@ impl ConnectionState {
     /// Begin a transaction (MULTI). Errors with [`TxnError::Nested`] if one is
     /// already open. Existing watches are preserved (WATCH before MULTI).
     pub fn begin_transaction(&mut self) -> Result<(), TxnError> {
-        self.transaction.begin()
+        self.transaction.begin(&self.txn_budget)
     }
 
     /// Push a validated command onto the transaction queue (no-op outside a
-    /// transaction, matching the historical guard).
-    pub fn push_queued_command(&mut self, mut cmd: ParsedCommand) {
-        // Queued commands are retained until EXEC/DISCARD, which is unbounded
-        // — copy them out of the connection's pooled read buffer (zero-copy
-        // parse path escape point).
+    /// transaction, matching the historical guard). `Err` when the command's
+    /// retained bytes would take the transaction past the buffer limit: it is
+    /// not queued and the transaction is already poisoned (FM-TXN-054).
+    pub fn push_queued_command(&mut self, mut cmd: ParsedCommand) -> Result<(), Refused> {
+        // Queued commands are retained until EXEC/DISCARD, which is bounded
+        // only by the buffer budget — copy them out of the connection's pooled
+        // read buffer (zero-copy parse path escape point).
         cmd.detach();
-        self.transaction.push_queued_command(cmd);
+        self.transaction.push_queued_command(cmd)
     }
 
     /// Mark the transaction poisoned so EXEC aborts. An accompanying error
@@ -1136,8 +1144,16 @@ mod tests {
     use frogdb_core::WatchEntry;
     use frogdb_txn::WatchedKey;
 
+    fn roomy() -> Budget {
+        Budget::new(
+            frogdb_memory::Subsystem::TxnBuffering,
+            frogdb_memory::Disposition::Shed,
+            u64::MAX,
+        )
+    }
+
     fn state() -> ConnectionState {
-        ConnectionState::new(1, "127.0.0.1:0".parse().unwrap(), false)
+        ConnectionState::new(1, "127.0.0.1:0".parse().unwrap(), false, roomy())
     }
 
     fn cmd(name: &'static [u8]) -> ParsedCommand {
@@ -1391,8 +1407,8 @@ mod tests {
         assert!(s.in_transaction());
         assert_eq!(s.begin_transaction(), Err(TxnError::Nested));
 
-        s.push_queued_command(cmd(b"GET"));
-        s.push_queued_command(cmd(b"SET"));
+        s.push_queued_command(cmd(b"GET")).unwrap();
+        s.push_queued_command(cmd(b"SET")).unwrap();
         s.transaction.fold_shard(2);
         s.watch_key(Bytes::from_static(b"k"), 2, 7, true);
 
@@ -1433,7 +1449,7 @@ mod tests {
 
         s.begin_transaction().expect("MULTI after WATCH");
         // Queue a single-shard command (shard 1), as seed 8 does (DEL {t1}kv1).
-        s.push_queued_command(cmd(b"DEL"));
+        s.push_queued_command(cmd(b"DEL")).unwrap();
         s.transaction.fold_shard(1);
 
         let summary = s.take_transaction().expect("in transaction");
@@ -1465,7 +1481,7 @@ mod tests {
         // UNWATCH inside MULTI clears the live watch set (dispatched immediately).
         s.unwatch_all();
         // Queue a single-shard command on a *different* shard than the old watch.
-        s.push_queued_command(cmd(b"SET"));
+        s.push_queued_command(cmd(b"SET")).unwrap();
         s.transaction.fold_shard(1);
 
         let summary = s.take_transaction().expect("in transaction");
@@ -1486,7 +1502,7 @@ mod tests {
     fn transaction_abort_marks_summary() {
         let mut s = state();
         s.begin_transaction().unwrap();
-        s.push_queued_command(cmd(b"GET"));
+        s.push_queued_command(cmd(b"GET")).unwrap();
         s.abort_transaction(Some("ERR boom".to_string()));
 
         let summary = s.take_transaction().expect("in transaction");
@@ -1498,7 +1514,7 @@ mod tests {
     fn discard_resets_everything_including_watches() {
         let mut s = state();
         s.begin_transaction().unwrap();
-        s.push_queued_command(cmd(b"GET"));
+        s.push_queued_command(cmd(b"GET")).unwrap();
         s.watch_key(Bytes::from_static(b"k"), 0, 1, true);
 
         let metrics = s.discard_transaction().expect("in transaction");
@@ -1587,7 +1603,7 @@ mod tests {
         use std::sync::Arc;
 
         // A connection that requires auth starts unauthenticated.
-        let mut s = ConnectionState::new(1, "127.0.0.1:0".parse().unwrap(), true);
+        let mut s = ConnectionState::new(1, "127.0.0.1:0".parse().unwrap(), true, roomy());
         assert!(!s.is_authenticated());
         assert!(s.authenticated_user().is_none());
         assert_eq!(s.username(), "(not authenticated)");
@@ -2000,7 +2016,7 @@ mod tests {
 
         let mut s = state();
         s.begin_transaction().expect("MULTI");
-        s.push_queued_command(queued);
+        s.push_queued_command(queued).unwrap();
         s.watch_key(backing.slice(12..19), 0, 1, true);
 
         assert!(
