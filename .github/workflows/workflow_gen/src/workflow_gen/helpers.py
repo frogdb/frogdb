@@ -123,15 +123,9 @@ def mise_setup_step(install_args: str | None = None) -> Step:
         w["install_args"] = install_args
     w["cache"] = SQ("true")
     w["experimental"] = SQ("true")  # enables cargo: and ubi: backends
-    # mise >= 2026.8.11 refuses to install a `cargo:` tool while `.mise.toml`
-    # declares a `rust` that mise did not install itself (jdx/mise#12234):
-    # `cargo:cargo-deny` fails with "requires configured install dependency
-    # 'rust@...', but its selected version is not installed". This repo
-    # deliberately installs Rust with dtolnay/rust-toolchain *after* the mise
-    # step (see the RUST_TOOLCHAIN comment above), so `rust` is never
-    # mise-installed here. MISE_DISABLE_TOOLS=rust hides `rust` from mise for
-    # this step, so the `cargo:` backend falls back to the runner's PATH cargo
-    # instead of bailing. See .scratch/build-toolchain/issues/ issue 03.
+    # MISE_DISABLE_TOOLS=rust: mise >= 2026.8.11 refuses `cargo:` tools while `.mise.toml`
+    # declares a `rust` it did not install (jdx/mise#12234); Rust comes from dtolnay after
+    # this step. See .scratch/build-toolchain/issues/done/03-ci-mise-cargo-backend-rust-dependency.md.
     return Step(
         name="Set up mise toolchain",
         uses=MISE_ACTION,

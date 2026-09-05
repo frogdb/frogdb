@@ -43,13 +43,9 @@ jobs:
         with:
           key: ${{ github.repository }}-testbox-arm-cargo-registry
           path: /home/runner/.cargo/registry
-      # This workflow is hand-maintained (render.py's MANUAL_WORKFLOWS): keep this
-      # step's env and with: in step with mise_setup_step() in workflow_gen/helpers.py.
-      # mise >= 2026.8.11 refuses to install a `cargo:` tool while .mise.toml declares
-      # a `rust` that mise did not install itself (jdx/mise#12234); this repo installs
-      # Rust with dtolnay/rust-toolchain after this step, so the env below hides
-      # `rust` from mise and the `cargo:` backend falls back to PATH cargo. See
-      # .scratch/build-toolchain/issues/ issue 03.
+      # This workflow is hand-maintained (render.py's MANUAL_WORKFLOWS): keep this step's
+      # env and with: in step with mise_setup_step() in workflow_gen/helpers.py. See
+      # .scratch/build-toolchain/issues/done/03-ci-mise-cargo-backend-rust-dependency.md.
       - name: Set up mise toolchain
         uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
         env:

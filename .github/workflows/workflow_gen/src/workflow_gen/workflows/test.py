@@ -35,11 +35,8 @@ RUNS_ON = "ubuntu-latest"
 MISE_JUST = "just"
 MISE_JUST_DENY = "just cargo:cargo-deny"
 MISE_JUST_NEXTEST = "just cargo:cargo-nextest"
-# mise >= 2026.8.11 checks a tool's declared install dependencies before
-# installing it (jdx/mise#12234); the npm: backend depends on node, so `node`
-# must be listed alongside the quint tool or mise refuses to install it
-# ("requires configured install dependency 'node@22', but its selected
-# version is not installed"). See .scratch/build-toolchain/issues/ issue 04.
+# `node` first: the `npm:` backend depends on it and mise >= 2026.8.11 enforces that
+# (jdx/mise#12234) — see .scratch/build-toolchain/issues/done/04-ci-mise-npm-backend-node-dependency.md.
 MISE_JUST_QUINT = "just node npm:@informalsystems/quint"
 # `unit-tests` runs `cargo nextest run --all`, which picks up
 # frogdb-cluster's quint_conformance test binary (see that job's comment) —
