@@ -421,7 +421,15 @@ async fn test_replica_feed_past_its_soft_window_is_disconnected() {
 
     let (mut replica, _replica_id) = psync_and_stall(&server).await;
 
-    let closed = tokio::time::timeout(Duration::from_secs(30), async {
+    // Stay stalled: reading here would drain the primary's buffer back under
+    // the soft mark and reset the very window under test. Nothing at all
+    // happens on this link for longer than `soft_seconds`, which is the point —
+    // the drop has to come from the account's own clock.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    // Only now drain, and only to prove the far end is gone: whatever the
+    // kernel already buffered comes out first, then EOF.
+    let closed = tokio::time::timeout(Duration::from_secs(10), async {
         let socket = replica.framed.get_mut();
         let mut scratch = vec![0u8; 64 * 1024];
         loop {
