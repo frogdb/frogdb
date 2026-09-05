@@ -1,4 +1,4 @@
-# 33: cluster handoff/migration/finalization tests regressed on `main` after the output-buffer series
+# 35: cluster handoff/migration/finalization tests regressed on `main` after the output-buffer series
 
 Status: done
 Type: AFK
@@ -100,14 +100,14 @@ file, spec area or failure mode) — sequence after it only to avoid racing the 
 **Open rulings:** (1) adaptive EWMA budget vs `max(50 ms, k × heartbeat_interval)` vs bounded
 retry; (2) whether `.config/nextest.toml` `cluster.max-threads` should drop to 1 as a separate,
 deliberate ruling; (3) confirm on the aarch64 testbox whether the margin is laptop-specific.
-Incidental finding filed as issue 34 (jemalloc arenas created in test binaries that never make
+Incidental finding filed as issue 36 (jemalloc arenas created in test binaries that never make
 jemalloc the global allocator).
 
 ## Resolution
 
 Investigation issue; closed 2026-09-04 with the findings above. The fix is carved as
-[issue 35](../open/35-slot-handoff-drain-budget-derived-from-heartbeat-interval.md) under
+[issue 37](../open/37-slot-handoff-drain-budget-derived-from-heartbeat-interval.md) under
 build-toolchain D5 (derived budget `max(50 ms, k × heartbeat_interval)` inside an unchanged
 barrier; nextest `cluster.max-threads` stays 2; no testbox confirmation). The spec row drafted
 above as FM-CLUSTER-104 lands as **FM-CLUSTER-108** — 104 already names the barrier
-reconstruction row. Incidental finding → [issue 34](../open/34-jemalloc-arenas-created-when-jemalloc-is-not-the-global-allocator.md).
+reconstruction row. Incidental finding → [issue 36](../open/36-jemalloc-arenas-created-when-jemalloc-is-not-the-global-allocator.md).

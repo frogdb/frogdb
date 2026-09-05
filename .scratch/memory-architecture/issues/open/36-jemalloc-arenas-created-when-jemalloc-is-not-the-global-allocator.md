@@ -1,8 +1,8 @@
-# 34: shard arenas and the arena sampler run in binaries where jemalloc is not the global allocator
+# 36: shard arenas and the arena sampler run in binaries where jemalloc is not the global allocator
 
 Status: needs-triage
 Type: AFK
-Origin: issue 33 investigation, 2026-09-04 (incidental finding)
+Origin: issue 35 investigation, 2026-09-04 (incidental finding)
 Area: frogdb-server (net.rs `JemallocShardArenas`), frogdb-telemetry (`jemalloc`, `shard_arenas`)
 Phase: 5 — polish
 
@@ -21,7 +21,7 @@ arena per shard, binds the shard threads to it, and runs the `ArenaSampler` at 1
 the process-global jemalloc epoch (`EPOCH_COST_PER_ARENA_NANOS = 13_400`,
 `telemetry/src/shard_arenas.rs:329`) — for an allocator that serves none of that process's
 allocations. Arenas are never destroyed, so they accumulate across the tests in one binary. Pure
-overhead in tests; a contributor (not the cause) to the cluster-suite slowdown bisected in issue 33.
+overhead in tests; a contributor (not the cause) to the cluster-suite slowdown bisected in issue 35.
 
 ## What to build
 
@@ -46,4 +46,4 @@ skip arena creation and never start the sampler; `main.rs` and `arena_reading.rs
 
 ## Depends on
 
-Nothing. Independent of the issue 33 fix; do not fold into it.
+Nothing. Independent of the issue 35 fix; do not fold into it.
