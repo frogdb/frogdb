@@ -179,7 +179,13 @@ async fn an_unevictable_segmented_keyspace_refuses_writes_and_still_reads() {
             .command(&["SET", &format!("new:{attempt}"), &payload])
             .await
         {
-            Response::Error(e) => assert!(e.contains("OOM"), "expected an -OOM refusal, got: {e}"),
+            Response::Error(e) => {
+                let text = String::from_utf8_lossy(&e).to_string();
+                assert!(
+                    text.contains("OOM"),
+                    "expected an -OOM refusal, got: {text}"
+                );
+            }
             other => panic!("expected the write to be refused, got {other:?}"),
         }
     }
