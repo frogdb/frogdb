@@ -1,6 +1,6 @@
 # 33: the replica-feed test double keeps a zero report, like the real account
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Origin: whole-branch re-review nit, 2026-09-05 (D7)
 Area: frogdb-replication (test support)
@@ -72,3 +72,19 @@ None.
 ## Decisions
 
 D7
+
+## Resolution
+
+Landed 2026-09-05 on `mem-arch-integration` as `cde0fc33` (pick of `6eec7e6c`, one file).
+
+`RecordingFeedAccount::set_buffered` returns `FeedVerdict::Keep` for a zero report before the
+`shed_at` comparison, without touching `over_limit_reports`, and still records the zero in
+`reports`. The invariant is stated at the check: a zero report is a release, never a shed,
+matching the production `FeedOutputAccount`. New unit test
+`a_zero_report_is_always_kept_even_at_a_zero_limit` builds the double with
+`shedding_at(0, "hard_limit")` (so `shed_after == 0`), asserts report 0 → `Keep` and report 1
+→ `Shed`, and names the `replica_session.rs` `debug_assert!` it protects. RED before, GREEN
+after; `just test frogdb-replication` 636/636.
+
+Review (sonnet, one round): Approved, no Critical/Important. One Minor left as-is: the
+invariant sentence sits inline above the `if` rather than as a doc comment on the method.
