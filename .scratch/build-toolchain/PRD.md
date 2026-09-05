@@ -5,8 +5,9 @@ installs, generated artifacts, and the doc checks that guard them. Session of 20
 opened this from the Knossos/Jepsen thread (PR #93) after finding `main` red on seven jobs
 and `just cross-build` broken.
 
-Follow-ups tracked here: main CI red (issue 02), cross-build usearch/zig (issue 01), and a
-CI smoke job for the shipping build path (to be filed once 01 has a fix direction).
+Follow-ups tracked here: main CI red (issue 02), cross-build usearch/zig (issue 01), and the
+detection gap behind 01 — no CI job runs `just cross-build` and `.mise.toml` floats `zig` —
+filed as issue 08 once 01 landed.
 
 ## Decisions
 

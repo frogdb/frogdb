@@ -86,7 +86,7 @@ Option 1. `MISE_DISABLE_TOOLS=rust` on every CI mise step; drop the `MISE_VERSIO
 - [ ] `test-unit-tests-testbox.yml` matches by hand
 - [ ] `just workflow-gen-check`, `just generate-check`, `just lint-gates` green
 - [ ] `MISE_VERSION` no longer exists in the generator; `grep -rn "2026.8.16" .github/` is empty
-- [ ] local proof in the report: with a mise ≥ 2026.8.11 binary, an empty `MISE_DATA_DIR`, and this repo's `.mise.toml`, `MISE_DISABLE_TOOLS=rust mise install just cargo:cargo-deny --dry-run` lists both tools and `mise install` without the env fails with the dependency error (the real install is not required — it compiles cargo-deny)
+- [ ] local proof in the report: with a mise ≥ 2026.8.11 binary, an empty `MISE_DATA_DIR`, and a minimal `mise.toml` (`rust` + one small `cargo:` tool), `mise install` without the env fails with the dependency error and `MISE_DISABLE_TOOLS=rust mise install` succeeds via `PATH` cargo (`--dry-run` does not exercise the check — see Root cause; the proof used `cargo:rustfilt`, not `cargo-deny`, to keep the real install short)
 
 ## Files likely touched
 

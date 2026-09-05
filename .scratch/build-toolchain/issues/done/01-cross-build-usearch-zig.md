@@ -151,5 +151,5 @@ undefined `mallctl`/`mallocx`/`rallocx`/`sdallocx` at link; `RANLIB` verified un
 `SIMSIMD_TARGET_*` peels on either target, `lint-gates` ship count unchanged at 6. `Justfile` only.
 
 Still open (not this issue): nothing in CI runs `just cross-build`, and `.mise.toml` pins
-`zig = "latest"` while `-mevex512` is tied to zig 0.15.2's clang — the smoke-job follow-up (PRD
-"Detection gap") is the detector. `cross-verify` still checks only the x86-64 artifact.
+`zig = "latest"` while `-mevex512` is tied to zig 0.15.2's clang — issue 08 (the PRD's
+"Detection gap" follow-up) is the detector. `cross-verify` still checks only the x86-64 artifact.

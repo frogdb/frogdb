@@ -51,9 +51,17 @@ memory-architecture/27.
 
 - `.config/nextest.toml`
 
+## See also
+
+`test-unit-tests-testbox.yml` (hand-maintained) still lists `install_args: just
+cargo:cargo-nextest` — no `node`/quint — so an on-box `cargo nextest run --all` hits the
+`quint_conformance` gap 04 fixed in `test.yml`. The workflow itself only prebuilds
+(`--no-run`), so it is not red; fix alongside this issue or when the testbox flow next changes.
+
 ## Blocked by
 
-04 (quint must install on the runner before the `quint_conformance` durations mean anything).
+None — 04 landed 2026-09-04 (`b6cd9276a` and earlier); the `quint_conformance` durations in
+the table predate it and should be re-read from the first post-04 run.
 
 ## Decisions
 
