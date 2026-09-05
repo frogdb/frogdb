@@ -977,17 +977,6 @@ impl ConnectionHandler {
                 "Performing PSYNC handoff"
             );
 
-            // A handoff is only ever stashed after `ReplicationHandshake` passed the
-            // `primary_replication_handler.is_none()` gate, so the handler is
-            // present here by construction. The former no-handler `else` (a
-            // silent warn) is thus dead; this `expect` documents the invariant
-            // and would surface a dispatch-order regression loudly rather than
-            // silently dropping the replica.
-            let handler =
-                self.cluster.primary_replication_handler.as_ref().expect(
-                    "ReplicationHandshake gates handler presence before yielding a handoff",
-                );
-
             // Output-buffer accounting crosses the handoff with the socket
             // (`specs/replication.md` FM-REPLICATION-069). The account this
             // connection has been charging — its `Charge` on this core's
@@ -1001,7 +990,8 @@ impl ConnectionHandler {
             // The base breakdown is sampled before the move so the feed can
             // republish `omem` without blanking the fields it has no opinion
             // about; from here on the feed is the only writer of this
-            // connection's memory entry.
+            // connection's memory entry. It is sampled before `handler` is
+            // taken because sampling needs `&mut self`.
             let feed_memory_base = self.compute_client_memory();
             let feed_account: frogdb_replication::SharedFeedAccount =
                 std::sync::Arc::new(output_buffer::ReplicaFeedAccount::new(
@@ -1011,6 +1001,17 @@ impl ConnectionHandler {
                     feed_memory_base,
                     self.observability.metrics_recorder.clone(),
                 ));
+
+            // A handoff is only ever stashed after `ReplicationHandshake` passed the
+            // `primary_replication_handler.is_none()` gate, so the handler is
+            // present here by construction. The former no-handler `else` (a
+            // silent warn) is thus dead; this `expect` documents the invariant
+            // and would surface a dispatch-order regression loudly rather than
+            // silently dropping the replica.
+            let handler =
+                self.cluster.primary_replication_handler.as_ref().expect(
+                    "ReplicationHandshake gates handler presence before yielding a handoff",
+                );
 
             // Extract the ConnectionStream from the Framed codec and type-erase
             // it for the replication handler (`handle_psync` takes a

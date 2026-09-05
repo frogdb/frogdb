@@ -475,7 +475,7 @@ impl OutputBufferAccount {
 pub struct ReplicaFeedAccount {
     /// Behind a lock because the feed reports from two places at once: the
     /// session driver on the connection's task, and the spawned write task.
-    account: parking_lot::Mutex<OutputBufferAccount>,
+    account: std::sync::Mutex<OutputBufferAccount>,
     /// Where `CLIENT LIST` / `CLIENT INFO` read `omem` from. The connection
     /// stays registered across the handoff — that is what makes a replica
     /// visible as a client at all — so this keeps its entry honest instead of
@@ -493,7 +493,7 @@ impl std::fmt::Debug for ReplicaFeedAccount {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ReplicaFeedAccount")
             .field("conn_id", &self.conn_id)
-            .field("buffered", &self.account.lock().buffered_bytes())
+            .field("buffered", &self.lock().buffered_bytes())
             .finish()
     }
 }
@@ -514,12 +514,19 @@ impl ReplicaFeedAccount {
     ) -> Self {
         account.set_class(OutputBufferClass::Replica);
         Self {
-            account: parking_lot::Mutex::new(account),
+            account: std::sync::Mutex::new(account),
             registry,
             conn_id,
             base,
             metrics,
         }
+    }
+
+    /// The account, with a poisoned lock recovered rather than propagated: a
+    /// panic in one feed report must not turn every later report — including
+    /// the release on teardown — into a second panic that leaks the charge.
+    fn lock(&self) -> std::sync::MutexGuard<'_, OutputBufferAccount> {
+        self.account.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Republish this connection's `omem` from the figure the limit was taken
@@ -535,16 +542,16 @@ impl frogdb_replication::FeedOutputAccount for ReplicaFeedAccount {
     fn set_buffered(&self, total_bytes: u64) -> frogdb_replication::FeedVerdict {
         // The clock read and the lock are both held for one `judge`. Nothing
         // awaits inside, so the write task cannot park holding it.
-        let verdict = self
-            .account
-            .lock()
-            .set_buffered(total_bytes, frogdb_core::clock::now());
+        let (verdict, limit) = {
+            let mut account = self.lock();
+            let verdict = account.set_buffered(total_bytes, frogdb_core::clock::now());
+            (verdict, account.limit())
+        };
         self.publish_omem(total_bytes);
 
         match verdict {
             OutputVerdict::Keep => frogdb_replication::FeedVerdict::Keep,
             OutputVerdict::Shed(reason) => {
-                let limit = self.account.lock().limit();
                 tracing::warn!(
                     conn_id = self.conn_id,
                     class = OutputBufferClass::Replica.as_str(),
@@ -571,7 +578,7 @@ impl frogdb_replication::FeedOutputAccount for ReplicaFeedAccount {
     }
 
     fn release(&self) {
-        self.account.lock().release_all();
+        self.lock().release_all();
         self.publish_omem(0);
     }
 }

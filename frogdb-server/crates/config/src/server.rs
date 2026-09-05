@@ -88,13 +88,15 @@ pub struct ServerConfig {
     /// a subscriber's undelivered delivery queue as well as its socket buffers,
     /// which is what Redis's one `pubsub` class has always meant.
     ///
-    /// **The `replica` class is not enforced on the replication feed yet.** A
-    /// connection is judged against it only while it is still a client
-    /// connection — after `PSYNC` hands the socket to the replication feed, the
-    /// feed's buffering is outside this accounting entirely. Setting the
-    /// `replica` triple therefore bounds a replica's *pre-handoff* connection
-    /// and nothing after it. Use replication's own backlog settings to bound a
-    /// slow replica until this is closed.
+    /// The `replica` triple governs a replica for its whole life, not just
+    /// while it is still a client: the account crosses the `PSYNC` handoff with
+    /// the socket, so it also bounds what the primary stages for that replica
+    /// afterwards — the full-sync dataset held in memory before it is written,
+    /// the backlog tail replayed at the handoff, and frames held behind a
+    /// slot-handoff barrier. A replica over the hard limit is dropped and
+    /// resyncs; one over the soft limit is dropped when the window expires. The
+    /// figure the limit is taken on is the `omem` its connection reports in
+    /// `CLIENT LIST`.
     #[serde(default = "default_client_output_buffer_limit")]
     #[param(name = "client-output-buffer-limit")]
     pub client_output_buffer_limit: String,
