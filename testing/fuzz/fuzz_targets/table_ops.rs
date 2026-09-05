@@ -21,9 +21,12 @@
 //!    interleaved with the growth and churn above, and every key it hands back
 //!    must be present, inside the caller's candidate set, and distinct within
 //!    the call — the caller deletes what it is handed, so a repeat is a bug.
-//! 5. **A refusal is stable.** A walk that found nothing, repeated against an
-//!    unmutated table, finds nothing again — the property the store's negative
-//!    cache rests on.
+//! 5. **An inert refusal is stable.** A walk that found nothing *and* moved
+//!    nothing — no promotion, so the table's generation stands — finds nothing
+//!    again when repeated against an unmutated table. That is the property the
+//!    store's negative cache rests on, and the narrower one: a walk that
+//!    promoted a segment withheld it from nomination and may well produce on
+//!    the repeat, which is why the generation has to move when it does.
 //!
 //! Growth is real, not simulated: the op stream inserts enough keys to push the
 //! table through several directory doublings, so splits happen mid-scan rather
@@ -225,6 +228,7 @@ fuzz_target!(|input: Input| {
                 let accept = |v: &ValueWord| !*only_even || value_of(v) % 2 == 0;
 
                 let mut nominated: Vec<Vec<u8>> = Vec::new();
+                let generation_before = t.generation();
                 let produced =
                     t.cold_candidates(want, *epoch, accept, |k| nominated.push(k.to_vec()));
 
@@ -242,19 +246,23 @@ fuzz_target!(|input: Input| {
                     "one call nominated the same key twice: {nominated:?}"
                 );
 
-                if produced == 0 {
-                    // A refusal is stable while the table is not mutated, which
-                    // is what lets the store answer the *next* refusal from a
-                    // memo instead of re-walking the queues
+                if produced == 0 && t.generation() == generation_before {
+                    // A refusal by a walk that moved nothing is stable, which is
+                    // what lets the store answer the *next* refusal from a memo
+                    // instead of re-walking the queues
                     // (`TableKeyspace::fruitless_walk`). Nothing has changed
                     // since the call above — the nominee loop below is what
                     // mutates, and it has nothing to do — so asking again with
                     // the same epoch and the same candidate set must come back
                     // empty too.
+                    //
+                    // A walk that *did* move something promoted a segment past
+                    // nomination and is allowed to produce on a repeat, so it
+                    // reports the move through the generation and is not cached.
                     let again = t.cold_candidates(want, *epoch, accept, |k| {
-                        panic!("a repeated walk nominated {k:?} after finding nothing")
+                        panic!("a repeated walk nominated {k:?} after an inert refusal")
                     });
-                    assert_eq!(again, 0, "a refusal was not stable across a repeat");
+                    assert_eq!(again, 0, "an inert refusal was not stable across a repeat");
                 }
 
                 for k in &nominated {

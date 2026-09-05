@@ -42,6 +42,9 @@ pub(in crate::store) struct TableKeyspace {
     /// per rejected command, ~65 k of them per GiB. Nothing but a mutation can
     /// make a key eligible, so the same question at the same generation has the
     /// same answer and is not worth asking twice.
+    ///
+    /// Only a walk that moved nothing itself is remembered: see
+    /// [`Table::generation`], which a promotion during the walk also bumps.
     fruitless_walk: Option<(bool, u64)>,
 }
 
@@ -153,10 +156,14 @@ impl Keyspace for TableKeyspace {
             |entry| accept(entry),
             |key| keys.push(Bytes::copy_from_slice(key)),
         );
-        // Only a fruitless walk is worth remembering: a walk that produced
-        // something has already changed what the next one should see, because
-        // the caller deletes what it was handed.
-        self.fruitless_walk = keys.is_empty().then_some((volatile_only, generation));
+        // Two walks are not worth remembering. One that produced something has
+        // already changed what the next one should see, because the caller
+        // deletes what it was handed. One that promoted a segment withheld that
+        // segment from nomination, so repeating it can produce what it just
+        // refused — the table reports that by moving its generation, and a
+        // refusal is only stable when the walk left the generation alone.
+        let inert = self.data.generation() == generation;
+        self.fruitless_walk = (keys.is_empty() && inert).then_some((volatile_only, generation));
         Some(keys)
     }
 }

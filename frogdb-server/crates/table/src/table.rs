@@ -119,8 +119,8 @@ pub struct Table<V, const N: usize = SLOTS_PER_BUCKET> {
     /// The 2Q queue endpoints. The links themselves live in the segment
     /// headers; see [`crate::evict`].
     queues: Queues,
-    /// Bumped by every operation that can change what is in the table or what
-    /// an eviction policy would accept. See [`Table::generation`].
+    /// Bumped by every operation that can change what a victim walk would
+    /// nominate: the contents, and the queue order. See [`Table::generation`].
     generation: u64,
 }
 
@@ -180,18 +180,30 @@ impl<V, const N: usize> Table<V, N> {
         self.stats
     }
 
-    /// A counter that changes whenever the table's contents might have.
+    /// A counter that changes whenever a victim walk's answer might have.
     ///
-    /// The point is negative caching: a caller that walked the whole cold
-    /// ordering and found nothing it could take ([`Table::cold_candidates`]
-    /// returning zero) may remember this number and skip the next walk while it
-    /// is unchanged, because nothing has happened that could make a key
-    /// eligible. `insert`, `remove` and `clear` bump it, and so does `get_mut`
-    /// — that is how a TTL is added or dropped, and how a spilled value comes
-    /// back, each of which changes what a policy accepts.
+    /// The point is negative caching: a caller whose walk of the cold ordering
+    /// found nothing it could take ([`Table::cold_candidates`] returning zero)
+    /// may remember this number and skip the next walk while it is unchanged.
+    /// Two kinds of event move it, and the cache is sound only because it is
+    /// both:
+    ///
+    /// - **Contents.** `insert`, `remove` and `clear` bump it, and so does
+    ///   `get_mut` — that is how a TTL is added or dropped, and how a spilled
+    ///   value comes back, each of which changes what a policy accepts.
+    /// - **Queue order.** A walk promotes the segments it finds hot, and a
+    ///   promoted segment is not asked for victims in the same visit, so a walk
+    ///   that moved something can hand the *next* walk a victim it did not
+    ///   produce itself. Those moves bump it too, which is what makes "the walk
+    ///   changed nothing" observable to the caller. A walk that leaves this
+    ///   number alone genuinely refused, and refused stably.
     ///
     /// Deliberately *not* bumped by [`Table::get`]: a read cannot change
     /// eligibility, and the read path is the one place this must cost nothing.
+    /// A read does feed the hit counters a later walk reconciles on, but it can
+    /// only cause a promotion, and a promotion only *withholds* a segment from
+    /// nomination — it never turns a refusal into a nomination.
+    ///
     /// Bumped conservatively — handing out `&mut V` counts as a change whether
     /// or not the caller writes through it — so the counter can be trusted for
     /// invalidation and never for equality of content.
@@ -518,6 +530,11 @@ impl<V, const N: usize> Table<V, N> {
     /// the table has nothing in the candidate set — the caller's cue to report
     /// OOM rather than to ask again.
     ///
+    /// A zero is worth caching only if the walk left [`Table::generation`]
+    /// alone. A walk that promoted a segment withheld it from nomination, so
+    /// repeating it can produce what it refused; a walk that moved nothing
+    /// leaves state a later walk cannot read differently, and refuses again.
+    ///
     /// `accept` is the policy's candidate set: `volatile-*` passes only values
     /// that carry a TTL, `allkeys-*` passes everything. Confinement is applied
     /// per *slot*, not per segment, so a segment mixing TTL'd and persistent
@@ -606,6 +623,9 @@ impl<V, const N: usize> Table<V, N> {
         seg.reset_counters();
         self.queues
             .move_to_head(&mut self.segments, si, QueueId::Am);
+        // This visit withheld `si` from nomination, so the walk this belongs to
+        // may refuse where the next one succeeds. See [`Table::generation`].
+        self.generation = self.generation.wrapping_add(1);
         true
     }
 
@@ -662,6 +682,10 @@ impl<V, const N: usize> Table<V, N> {
         if self.segments[si as usize].is_empty() {
             self.queues
                 .move_to_head(&mut self.segments, si, QueueId::A1out);
+            // Retiring an empty segment cannot turn a refusal into a
+            // nomination, but the negative cache rests on "the walk moved
+            // nothing", not on an argument about which moves are harmless.
+            self.generation = self.generation.wrapping_add(1);
         }
     }
 
@@ -1514,6 +1538,57 @@ mod tests {
 
         t.clear();
         assert_ne!(t.generation(), after_remove, "clear changes contents");
+    }
+
+    /// The other half of the negative cache, and the one a fuzz run found
+    /// missing: a walk that promotes a segment withholds it from nomination, so
+    /// repeating the same walk can produce what it just refused. Caching that
+    /// refusal would report OOM against an evictable keyspace, so the walk has
+    /// to declare the move.
+    // FM-MEMORY-007
+    #[test]
+    fn a_walk_that_promotes_a_segment_moves_the_generation() {
+        let mut t = evict_table();
+        let keys = fill_evict(&mut t, 20_000);
+        let coldest = *t
+            .queues
+            .members(&t.segments, QueueId::A1in)
+            .last()
+            .expect("A1in is empty");
+        let hot_key = keys
+            .iter()
+            .find(|k| segment_of(&t, k) == coldest)
+            .expect("no key routes to the coldest segment")
+            .clone();
+
+        let inert = t.generation();
+        take(&mut t, 8, 1, |_| false);
+        assert_eq!(
+            t.generation(),
+            inert,
+            "a walk that took nothing and moved nothing must stay cacheable"
+        );
+
+        for _ in 0..PROMOTE_HITS {
+            assert!(t.get(hot_key.as_bytes()).is_some());
+        }
+        assert_eq!(
+            t.generation(),
+            inert,
+            "reads feed the hit counters without invalidating the cache"
+        );
+
+        take(&mut t, 8, 2, |_| false);
+        assert_eq!(
+            t.segments[coldest as usize].queue(),
+            Some(QueueId::Am),
+            "the walk did not promote, so this proves nothing"
+        );
+        assert_ne!(
+            t.generation(),
+            inert,
+            "a promotion during a walk left the refusal cacheable"
+        );
     }
 
     /// A constant epoch is legal — it freezes promotion, never nomination.
