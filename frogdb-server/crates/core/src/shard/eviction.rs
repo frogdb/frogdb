@@ -218,6 +218,19 @@ impl ShardWorker {
             // is "nothing in the candidate set", not "ask someone else":
             // falling through to sampling here would evict a key the ordering
             // deliberately withheld.
+            //
+            // The candidate counter is the same counter either way. It answers
+            // "how many keys did the policy consider to choose this victim",
+            // which a cold ordering answers too — it just answers it with a
+            // small number, because that is the point of keeping the ordering.
+            // Leaving it unemitted here would blank every eviction dashboard
+            // the moment a build switched keyspaces.
+            EvictionSamplesTotal::inc_by(
+                self.observability.metrics(),
+                nominated.len() as u64,
+                &self.shard_id().to_string(),
+                &self.eviction.policy_label(),
+            );
             return nominated.into_iter().next();
         }
 
