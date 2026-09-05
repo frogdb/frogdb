@@ -143,6 +143,13 @@ pub struct FeedSequencer {
     /// takes inside one barrier window, because the gate expires itself on the
     /// deadline the barrier armed it with.
     held: VecDeque<ReplicationFrame>,
+    /// The payload bytes in `held`, maintained incrementally.
+    ///
+    /// Kept as a running total rather than folded on demand because the driver
+    /// reads it after *every* step to report the feed's size, and `held` is
+    /// bounded by a deadline rather than a count — folding would make holding N
+    /// frames cost O(N²) inside the latency-critical barrier window.
+    held_bytes: u64,
     /// How the link ended, once something ended it. The buffer still drains
     /// before the departure is reported.
     ending: Option<ReplicaDeparture>,
@@ -163,6 +170,7 @@ impl FeedSequencer {
         Self {
             resume_offset: 0,
             held: VecDeque::new(),
+            held_bytes: 0,
             ending: None,
             stage: Stage::Handoff,
         }
@@ -187,8 +195,10 @@ impl FeedSequencer {
     /// headers are a fixed per-frame constant that `held_frames` already
     /// exposes, and counting the payload keeps this figure the same unit as the
     /// feed's other two buffers (staged dataset blobs, backlog handoff tail).
+    ///
+    /// O(1): the total is maintained as frames enter and leave `held`.
     pub fn buffered_bytes(&self) -> u64 {
-        self.held.iter().map(|f| f.payload.len() as u64).sum()
+        self.held_bytes
     }
 
     /// Feed one input and get back what the driver must do next.
@@ -263,6 +273,7 @@ impl FeedSequencer {
     /// Take a frame into the buffer unless the handoff replay already sent it.
     fn buffer(&mut self, frame: ReplicationFrame) {
         if frame.sequence > self.resume_offset {
+            self.held_bytes += frame.payload.len() as u64;
             self.held.push_back(frame);
         }
     }
@@ -272,6 +283,7 @@ impl FeedSequencer {
     /// waiting on the broadcast.
     fn flush(&mut self) -> FeedAction {
         if let Some(frame) = self.held.pop_front() {
+            self.held_bytes = self.held_bytes.saturating_sub(frame.payload.len() as u64);
             self.stage = Stage::Sending;
             return FeedAction::Send(frame);
         }
@@ -289,6 +301,7 @@ impl FeedSequencer {
     fn end(&mut self, departure: ReplicaDeparture) -> FeedAction {
         self.stage = Stage::Ended;
         self.held.clear();
+        self.held_bytes = 0;
         FeedAction::End(departure)
     }
 }
@@ -300,6 +313,12 @@ mod tests {
 
     fn frame(sequence: u64) -> ReplicationFrame {
         ReplicationFrame::new(sequence, Bytes::from_static(b"payload"))
+    }
+
+    /// A frame whose payload is `len` bytes, so a test can tell one frame's
+    /// contribution to the held figure from another's.
+    fn sized_frame(sequence: u64, len: usize) -> ReplicationFrame {
+        ReplicationFrame::new(sequence, Bytes::from(vec![b'x'; len]))
     }
 
     /// A sequencer past the handoff lane, resuming at `resume_offset`.
@@ -458,6 +477,88 @@ mod tests {
             0,
             "a flushed barrier holds nothing"
         );
+    }
+
+    // FM-REPLICATION-069
+    /// The held figure is maintained incrementally, so the only thing that can
+    /// go wrong is drift: a path that adds without subtracting, or subtracts
+    /// twice. This drives every path that touches `held` — a buffer, a buffer
+    /// the resume offset elides, a partial flush, more buffering on top of a
+    /// partly drained deque, and an end that abandons the rest — and checks the
+    /// running total against the fold it replaced after *every* step.
+    #[test]
+    fn the_held_figure_tracks_the_frames_actually_held() {
+        fn fold(sequencer: &FeedSequencer) -> u64 {
+            sequencer
+                .held
+                .iter()
+                .map(|f| f.payload.len() as u64)
+                .sum::<u64>()
+        }
+
+        // Resuming at 2: frames 1 and 2 were already replayed by the handoff.
+        let mut sequencer = streaming(2);
+        let check = |sequencer: &FeedSequencer, what: &str| {
+            assert_eq!(
+                sequencer.buffered_bytes(),
+                fold(sequencer),
+                "the running total drifted from what is held after {what}"
+            );
+        };
+
+        // A frame the resume offset elides: buffered_bytes must not move, or a
+        // feed would be charged for bytes it never took.
+        sequencer.step(FeedInput::Received(sized_frame(2, 4096)));
+        sequencer.step(FeedInput::GateHeld(true));
+        check(&sequencer, "an elided frame");
+        assert_eq!(sequencer.buffered_bytes(), 0);
+
+        // Three frames of different sizes held behind the barrier.
+        for (sequence, len) in [(3u64, 10usize), (4, 100), (5, 1000)] {
+            sequencer.step(FeedInput::Received(sized_frame(sequence, len)));
+            sequencer.step(FeedInput::GateHeld(true));
+            check(&sequencer, "a held frame");
+        }
+        assert_eq!(sequencer.buffered_bytes(), 1110);
+
+        // The barrier lifts and the deque drains a frame at a time. Each pop
+        // has to take exactly that frame's payload off the total.
+        sequencer.step(FeedInput::Released);
+        let mut action = sequencer.step(FeedInput::GateHeld(false));
+        for (sequence, left) in [(3u64, 1100u64), (4, 1000), (5, 0)] {
+            assert_eq!(sending(&action), Some(sequence));
+            check(&sequencer, "a partial flush");
+            assert_eq!(sequencer.buffered_bytes(), left);
+            action = sequencer.step(FeedInput::Sent {
+                lag_breached: false,
+            });
+        }
+        assert!(matches!(action, FeedAction::Receive));
+
+        // Frames arriving after that drain start from zero, not from what the
+        // deque used to hold: an add that never subtracted would show 1110 more
+        // than is really there and shed a feed holding almost nothing.
+        for (sequence, len, total) in [(6u64, 7usize, 7u64), (7, 70, 77)] {
+            sequencer.step(FeedInput::Received(sized_frame(sequence, len)));
+            sequencer.step(FeedInput::GateHeld(true));
+            check(&sequencer, "buffering after a drain");
+            assert_eq!(sequencer.buffered_bytes(), total);
+        }
+
+        // The link dies with a frame still held. `end` abandons it, so the
+        // figure has to go to zero — a stale total would leave the feed charged
+        // for bytes that are gone.
+        assert!(matches!(
+            sequencer.step(FeedInput::Released),
+            FeedAction::ConsultGate
+        ));
+        let action = sequencer.step(FeedInput::GateHeld(false));
+        assert_eq!(sending(&action), Some(6));
+        assert_eq!(sequencer.buffered_bytes(), 70);
+        let action = sequencer.step(FeedInput::SendFailed);
+        assert_eq!(ending(&action), Some(ReplicaDeparture::Lost));
+        check(&sequencer, "an end that abandons what is held");
+        assert_eq!(sequencer.buffered_bytes(), 0);
     }
 
     /// A release that another armed barrier outlives does not open the feed:
