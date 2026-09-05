@@ -2,8 +2,8 @@
 
 use bytes::Bytes;
 use frogdb_persistence::{RocksStore, deserialize, serialize};
-use griddle::HashMap;
-use rand::seq::IteratorRandom;
+use rand::RngExt;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{debug, warn};
@@ -14,6 +14,7 @@ use crate::noop::{ExpiryIndex, FieldExpiryIndex};
 use crate::shard::slot_for_key;
 use crate::types::{KeyMetadata, KeyType, SetCondition, SetOptions, SetResult, Value};
 
+use super::keyspace::{self, Keyspace};
 use super::timeseries_labels::TimeSeriesLabels;
 use super::warm_tier::WarmTier;
 use super::{ExpiryIndexAnomaly, ExpiryIndexAnomalyKind, Store};
@@ -27,22 +28,6 @@ enum ValueLocation {
     Warm,
 }
 
-/// Stable 48-bit content hash of a key, used to order the keyspace for SCAN.
-///
-/// SCAN's cursor is the hash of the resume point, not a table position, so the
-/// ordering does not shift when griddle rehashes on insert. The result is masked
-/// to 48 bits because it rides in the position field of the cross-shard SCAN
-/// cursor, and remapped away from 0 (which the cross-shard driver reserves for
-/// "shard exhausted").
-fn scan_cursor_hash(key: &[u8]) -> u64 {
-    use std::hash::{Hash, Hasher};
-    const CURSOR_MASK: u64 = (1u64 << 48) - 1;
-    let mut hasher = std::hash::DefaultHasher::new();
-    key.hash(&mut hasher);
-    let h = hasher.finish() & CURSOR_MASK;
-    if h == 0 { 1 } else { h }
-}
-
 /// Entry in the store with value location and metadata.
 ///
 /// Keys and metadata are ALWAYS in RAM. Only the value may be on disk.
@@ -52,9 +37,9 @@ fn scan_cursor_hash(key: &[u8]) -> u64 {
 /// - Writes with no readers: zero-copy (refcount == 1)
 /// - Writes with outstanding readers: clone-on-write via `Arc::make_mut()`
 #[derive(Debug)]
-struct Entry {
+pub(super) struct Entry {
     location: ValueLocation,
-    metadata: KeyMetadata,
+    pub(super) metadata: KeyMetadata,
     /// Cached key type so TYPE/SCAN work without unspilling.
     key_type: KeyType,
 }
@@ -143,9 +128,13 @@ pub struct ReEncodeResult {
     pub after_bytes: usize,
 }
 
-/// Default store implementation using griddle::HashMap.
+/// Default store implementation over the selected keyspace backend.
+///
+/// Which container holds the keys is [`keyspace::Selected`]; everything in this
+/// file is written against the [`Keyspace`] trait and is indifferent to the
+/// choice. See `store/keyspace.rs` for the backends and the swap.
 pub struct HashMapStore {
-    data: HashMap<Bytes, Entry>,
+    data: keyspace::Selected,
     expiry_index: ExpiryIndex,
     field_expiry_index: FieldExpiryIndex,
     /// TimeSeries label index plus its keyspace-reconciliation logic.
@@ -231,7 +220,7 @@ impl HashMapStore {
     /// Create a new empty store.
     pub fn new() -> Self {
         Self {
-            data: HashMap::new(),
+            data: keyspace::Selected::new(),
             expiry_index: ExpiryIndex::new(),
             field_expiry_index: FieldExpiryIndex::new(),
             ts_labels: TimeSeriesLabels::new(),
@@ -255,7 +244,7 @@ impl HashMapStore {
     /// Used during recovery when we have a pre-built expiry index.
     pub fn with_expiry_index(expiry_index: ExpiryIndex) -> Self {
         Self {
-            data: HashMap::new(),
+            data: keyspace::Selected::new(),
             expiry_index,
             field_expiry_index: FieldExpiryIndex::new(),
             ts_labels: TimeSeriesLabels::new(),
@@ -788,11 +777,14 @@ impl HashMapStore {
 
     /// Calculate total allocated memory for keys in a given slot.
     pub fn allocsize_in_slot(&self, slot: u16) -> usize {
-        self.data
-            .iter()
-            .filter(|(k, _)| slot_for_key(k) == slot)
-            .map(|(k, e)| e.memory_size(k))
-            .sum()
+        let mut total = 0;
+        self.data.visit(|key, entry| {
+            if slot_for_key(&key) == slot {
+                total += entry.memory_size(&key);
+            }
+            ControlFlow::Continue(())
+        });
+        total
     }
 }
 
@@ -958,7 +950,7 @@ impl HashMapStore {
         } else {
             KeysizeHistograms::new_without_memory()
         };
-        for (_key, entry) in self.data.iter() {
+        self.data.visit(|_key, entry| {
             if let Some(v) = entry.hot_value() {
                 if let (Some(t), Some(logical)) = (v.keysize_type(), v.logical_size()) {
                     ks.get_mut(t).increment(logical);
@@ -967,7 +959,8 @@ impl HashMapStore {
                     ks.key_memory.increment(entry.metadata.memory_size);
                 }
             }
-        }
+            ControlFlow::Continue(())
+        });
         ks
     }
 
@@ -1061,7 +1054,12 @@ impl Store for HashMapStore {
         // `Entry::memory_size` returns the live size (key + value + metadata +
         // Entry overhead; warm values contribute zero value bytes). Summing it
         // over every entry is the ground truth the running counter tracks.
-        self.data.iter().map(|(k, e)| e.memory_size(k)).sum()
+        let mut total = 0;
+        self.data.visit(|key, entry| {
+            total += entry.memory_size(&key);
+            ControlFlow::Continue(())
+        });
+        total
     }
 
     fn audit_expiry_index(&self) -> Vec<ExpiryIndexAnomaly> {
@@ -1092,14 +1090,15 @@ impl Store for HashMapStore {
         }
 
         // Direction 2: every entry with a deadline must be in the index.
-        for (key, entry) in self.data.iter() {
-            if entry.metadata.expires_at.is_some() && self.expiry_index.get(key).is_none() {
+        self.data.visit(|key, entry| {
+            if entry.metadata.expires_at.is_some() && self.expiry_index.get(&key).is_none() {
                 anomalies.push(ExpiryIndexAnomaly {
-                    key: String::from_utf8_lossy(key).into_owned(),
+                    key: String::from_utf8_lossy(&key).into_owned(),
                     kind: ExpiryIndexAnomalyKind::IndexMissing,
                 });
             }
-        }
+            ControlFlow::Continue(())
+        });
 
         anomalies
     }
@@ -1115,48 +1114,17 @@ impl Store for HashMapStore {
         pattern: Option<&[u8]>,
         key_type: Option<KeyType>,
     ) -> (u64, Vec<Bytes>) {
-        // Content-hash cursor: order the scannable keyspace by a stable hash of
-        // each key rather than by griddle's iteration position. The position
-        // order shifts whenever the table resizes (incremental rehash on
-        // insert), so a positional cursor could skip keys that were present for
-        // the whole scan. Hashing by key content makes the ordering independent
-        // of table layout, so a key present throughout the scan is always
-        // returned — the guarantee Redis provides via reverse-binary bucket
-        // iteration (not available over griddle's SwissTable). MATCH/TYPE are
-        // post-filters that never move the cursor, matching Redis.
-        //
-        // The per-shard cursor rides in the 48-bit position field of the
-        // cross-shard SCAN cursor (see `frogdb_commands::scan::cursor`), so the
-        // hash is masked to 48 bits. Collisions only ever cause a duplicate or a
-        // (vanishingly rare) skip, never corruption; SCAN already permits dups.
-        let mut ordered: Vec<(u64, &Bytes, &Entry)> = self
-            .data
-            .iter()
-            .filter(|(_, entry)| !entry.metadata.is_expired())
-            .map(|(key, entry)| (scan_cursor_hash(key), key, entry))
-            .collect();
-        ordered.sort_unstable_by_key(|(hash, _, _)| *hash);
-
-        // Resume at the first key whose hash is >= the cursor. Cursor 0 starts
-        // from the beginning; a returned cursor of 0 means the shard is done.
-        let start = if cursor == 0 {
-            0
-        } else {
-            ordered.partition_point(|(hash, _, _)| *hash < cursor)
-        };
-
+        // The keyspace owns the cursor: griddle orders by a stable content hash
+        // (its iteration order shifts under an incremental rehash, so a
+        // positional cursor could skip a key present throughout), the segmented
+        // table walks its directory in reverse-binary order at the scanned
+        // segment's local depth. Both give Redis's guarantee. MATCH and TYPE are
+        // post-filters that never move the cursor, matching Redis, so they are
+        // applied here and the backend is told only whether the key was kept.
         let mut results = Vec::with_capacity(count);
-        let mut next_cursor = 0u64;
-
-        for (hash, key, entry) in ordered.into_iter().skip(start) {
-            if results.len() >= count {
-                // Stop before emitting this key; resume here next call.
-                next_cursor = hash;
-                break;
-            }
-
+        let next_cursor = self.data.scan(cursor, count, |key, entry| {
             let pattern_matches = match pattern {
-                Some(p) => glob_match(p, key),
+                Some(p) => glob_match(p, &key),
                 None => true,
             };
             let type_matches = match key_type {
@@ -1164,9 +1132,12 @@ impl Store for HashMapStore {
                 None => true,
             };
             if pattern_matches && type_matches {
-                results.push(key.clone());
+                results.push(key.to_bytes());
+                true
+            } else {
+                false
             }
-        }
+        });
 
         (next_cursor, results)
     }
@@ -1196,7 +1167,12 @@ impl Store for HashMapStore {
     }
 
     fn all_keys(&self) -> Vec<Bytes> {
-        self.data.keys().cloned().collect()
+        let mut keys = Vec::with_capacity(self.data.len());
+        self.data.visit(|key, _| {
+            keys.push(key.to_bytes());
+            ControlFlow::Continue(())
+        });
+        keys
     }
 
     // ========================================================================
@@ -1581,14 +1557,23 @@ impl Store for HashMapStore {
             return None;
         }
 
+        // Reservoir sample of size 1 over the hot entries — the same algorithm
+        // `IteratorRandom::choose` runs, written out because the keyspace hands
+        // its keys to a visitor rather than an iterator. Warm entries are
+        // skipped: they are already spilled.
         let mut rng = rand::rng();
-        // Skip warm entries — they're already spilled
-        self.data
-            .iter()
-            .filter(|(_, e)| e.is_hot())
-            .map(|(k, _)| k)
-            .choose(&mut rng)
-            .cloned()
+        let mut seen = 0u64;
+        let mut chosen = None;
+        self.data.visit(|key, entry| {
+            if entry.is_hot() {
+                seen += 1;
+                if rng.random_range(0..seen) == 0 {
+                    chosen = Some(key.to_bytes());
+                }
+            }
+            ControlFlow::Continue(())
+        });
+        chosen
     }
 
     fn sample_keys(&self, count: usize) -> Vec<Bytes> {
@@ -1596,16 +1581,27 @@ impl Store for HashMapStore {
             return vec![];
         }
 
+        // Reservoir sample of size `count`, the algorithm `IteratorRandom::sample`
+        // runs, for the same reason `random_key` spells one out. Warm entries are
+        // skipped: they are already spilled.
         let mut rng = rand::rng();
-        // Skip warm entries — they're already spilled
-        self.data
-            .iter()
-            .filter(|(_, e)| e.is_hot())
-            .map(|(k, _)| k)
-            .sample(&mut rng, count)
-            .into_iter()
-            .cloned()
-            .collect()
+        let mut seen = 0usize;
+        let mut reservoir: Vec<Bytes> = Vec::with_capacity(count);
+        self.data.visit(|key, entry| {
+            if entry.is_hot() {
+                if reservoir.len() < count {
+                    reservoir.push(key.to_bytes());
+                } else {
+                    let i = rng.random_range(0..=seen);
+                    if i < count {
+                        reservoir[i] = key.to_bytes();
+                    }
+                }
+                seen += 1;
+            }
+            ControlFlow::Continue(())
+        });
+        reservoir
     }
 
     fn sample_volatile_keys(&self, count: usize) -> Vec<Bytes> {
@@ -1645,16 +1641,31 @@ impl Store for HashMapStore {
     // ========================================================================
 
     fn keys_in_slot(&self, slot: u16, count: usize) -> Vec<Bytes> {
-        self.data
-            .keys()
-            .filter(|k| slot_for_key(k) == slot)
-            .take(count)
-            .cloned()
-            .collect()
+        if count == 0 {
+            return Vec::new();
+        }
+        let mut keys = Vec::new();
+        self.data.visit(|key, _| {
+            if slot_for_key(&key) == slot {
+                keys.push(key.to_bytes());
+                if keys.len() >= count {
+                    return ControlFlow::Break(());
+                }
+            }
+            ControlFlow::Continue(())
+        });
+        keys
     }
 
     fn count_keys_in_slot(&self, slot: u16) -> usize {
-        self.data.keys().filter(|k| slot_for_key(k) == slot).count()
+        let mut n = 0;
+        self.data.visit(|key, _| {
+            if slot_for_key(&key) == slot {
+                n += 1;
+            }
+            ControlFlow::Continue(())
+        });
+        n
     }
 
     // ========================================================================

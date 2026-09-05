@@ -22,6 +22,11 @@ fake-wal = []
 # `DEBUG WAITQUEUE-LOG`. Enabled by the server's `turmoil` feature so simulation
 # tests can check exact FIFO wake order without sampling; never in production.
 wait-queue-log = []
+# Hold the keyspace in the segmented table (`frogdb-table`) instead of griddle.
+# Off by default: the swap is gated on the lookup measurement in the
+# memory-architecture issue-11 report, not on this building. See
+# `src/store/keyspace.rs`.
+table-keyspace = ["dep:frogdb-table"]
 # Test-only public seam surface for the frogdb-shard-harness crate's driver.
 # Feature-gates the public `drive*` wrapper methods on `ShardWorker` (and
 # `ShardReceiver::try_recv`) so an out-of-crate harness can pump a worker
@@ -39,6 +44,7 @@ frogdb-acl.workspace = true
 frogdb-scripting.workspace = true
 frogdb-search.workspace = true
 frogdb-memory.workspace = true
+frogdb-table = { workspace = true, optional = true }
 bytes.workspace = true
 # `FutureExt::catch_unwind` — the shard boundary's panic isolation
 # (`shard/panic_guard.rs`).

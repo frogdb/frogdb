@@ -18,6 +18,7 @@
 //! ```
 
 mod hashmap;
+mod keyspace;
 mod timeseries_labels;
 mod typed;
 mod warm_tier;
