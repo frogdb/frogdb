@@ -1,6 +1,6 @@
 # 24: cluster handoff/migration/finalization tests regressed on `main` after the output-buffer series
 
-Status: needs-triage
+Status: done
 Type: AFK
 Origin: build-toolchain issue 02 triage, 2026-09-04 — `main` CI red since `cdbd9c3ee`
 Area: frogdb-server (connection/, net) + frogdb-cluster / frogdb-cluster-runtime (LOCKED)
@@ -102,3 +102,12 @@ retry; (2) whether `.config/nextest.toml` `cluster.max-threads` should drop to 1
 deliberate ruling; (3) confirm on the aarch64 testbox whether the margin is laptop-specific.
 Incidental finding filed as issue 25 (jemalloc arenas created in test binaries that never make
 jemalloc the global allocator).
+
+## Resolution
+
+Investigation issue; closed 2026-09-04 with the findings above. The fix is carved as
+[issue 26](../open/26-slot-handoff-drain-budget-derived-from-heartbeat-interval.md) under
+build-toolchain D5 (derived budget `max(50 ms, k × heartbeat_interval)` inside an unchanged
+barrier; nextest `cluster.max-threads` stays 2; no testbox confirmation). The spec row drafted
+above as FM-CLUSTER-104 lands as **FM-CLUSTER-108** — 104 already names the barrier
+reconstruction row. Incidental finding → [issue 25](../open/25-jemalloc-arenas-created-when-jemalloc-is-not-the-global-allocator.md).

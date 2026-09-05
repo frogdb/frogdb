@@ -12,7 +12,7 @@ temp dir. Several files here are load-bearing — `scripts/coverage-depth.py` wr
 
 | directory | state | open | done | what |
 |---|---|--:|--:|---|
-| [memory-architecture](memory-architecture/) | active | 8 | 17 | 2026-08-31 memory-architecture PRD (R1–R15, all ruled) + phase-1 spike (GO); phases 1–2 landed (issues 01–09); phase 3–6 issues 10, 13–22 filed 2026-09-01; 11–12 drafted from the landed slot-layout spike report; 23 filed from issue 18's review (replica feed accounting, D4); 14, 15, 16, 17, 18, 20 landed 2026-09-02; 24 filed 2026-09-04 — cluster tests red on `main` after 18's output-buffer series, investigated same day (fixed 50 ms handoff budget, tipping point `e67002d6f`); 25 filed from that investigation (arenas + sampler run in test binaries where jemalloc is not the global allocator) |
+| [memory-architecture](memory-architecture/) | active | 8 | 18 | 2026-08-31 memory-architecture PRD (R1–R15, all ruled) + phase-1 spike (GO); phases 1–2 landed (issues 01–09); phase 3–6 issues 10, 13–22 filed 2026-09-01; 11–12 drafted from the landed slot-layout spike report; 23 filed from issue 18's review (replica feed accounting, D4); 14, 15, 16, 17, 18, 20 landed 2026-09-02; 24 filed 2026-09-04 — cluster tests red on `main` after 18's output-buffer series, investigated same day (fixed 50 ms handoff budget, tipping point `e67002d6f`); 25 filed from that investigation (arenas + sampler run in test binaries where jemalloc is not the global allocator); 24 closed and its fix carved as 26 (derived handoff budget, D5, after 23) |
 | [redis-feel](redis-feel/) | active | 4 | 14 | 2026-08-15 side-by-side feel test vs Redis 8.6.1; data path matched line-for-line, gaps are all introspection/metadata — rulings in `adr/0005-truthful-redis-86-surface.md` |
 | [testing-improvements-round2](testing-improvements-round2/) | active | 70 | 6 | round-2 testing-gap audit; 249 findings → 95 issues. Re-triaged 2026-08-06: **18 confirmed live defects** |
 | [arch-deepening](arch-deepening/) | active | 15 | 1 | architecture deepening rounds; proposals backlog empty, issues backlog is not |
@@ -26,7 +26,7 @@ temp dir. Several files here are load-bearing — `scripts/coverage-depth.py` wr
 | [build-toolchain](build-toolchain/) | active | 2 | 1 | build/CI-toolchain/release-path defects, where dev builds stay green but a shipping or gating path is broken; opened 2026-09-02 with `just cross-build` failing on usearch under zig; 02 filed 2026-09-04 for `main` CI red on seven jobs, landed same day on `build-toolchain/impl`; 03 filed 2026-09-04 when that branch's CI run showed the mise pin from 02 ineffective |
 | [roadmap](roadmap/) | active | — | — | roadmap + unfinished/follow-up items (migrated from the retired `todo/`); not an issue tracker |
 
-Totals: **109 open, 114 done**. `done/` holds only closed issues still referenced from
+Totals: **109 open, 115 done**. `done/` holds only closed issues still referenced from
 tracked files; unreferenced closed issues are pruned — git history is the archive.
 
 ## Conventions
