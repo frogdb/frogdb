@@ -92,7 +92,12 @@ from workflow_gen.helpers import (
 )
 from workflow_gen.schema import Job, ScheduleTrigger, Trigger, Workflow
 
-MISE_JUST_QUINT = "just npm:@informalsystems/quint"
+# mise >= 2026.8.11 checks a tool's declared install dependencies before
+# installing it (jdx/mise#12234); the npm: backend depends on node, so `node`
+# must be listed alongside the quint tool or mise refuses to install it
+# ("requires configured install dependency 'node@22', but its selected
+# version is not installed"). See .scratch/build-toolchain/issues/ issue 04.
+MISE_JUST_QUINT = "just node npm:@informalsystems/quint"
 
 # Free unmetered GitHub-hosted runner — same reasoning as the other nightlies
 # in this package (single-machine SMT solve, no need for anything heavier).

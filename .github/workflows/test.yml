@@ -164,7 +164,7 @@ jobs:
         MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
-        install_args: just npm:@informalsystems/quint
+        install_args: just node npm:@informalsystems/quint
         cache: 'true'
         experimental: 'true'
     - name: Typecheck Quint models
@@ -185,7 +185,7 @@ jobs:
         MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
-        install_args: just cargo:cargo-nextest npm:@informalsystems/quint
+        install_args: just node cargo:cargo-nextest npm:@informalsystems/quint
         cache: 'true'
         experimental: 'true'
     - name: Install Rust 1.92.0
