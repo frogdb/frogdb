@@ -1286,13 +1286,23 @@ mod tests {
         fill(&mut t, 100_000);
         assert!(!t.is_empty());
 
-        // The figure an operator is charged for the structure is a sum of three
-        // costs that can each be counted independently: the segments at their
-        // allocator size class, the directory's slots, and the segment vector's
-        // own pointers. Pin it against those three counts rather than against a
-        // bound — a bound passes for any arithmetic that trends the same way,
-        // and this is the number the store seam adds to a shard's accounted
-        // contents.
+        // What the name promises: segments are charged at the allocator's size
+        // class, not at the type's size. The two differ, so this is a real
+        // distinction rather than a restatement — a table of `n` segments
+        // charges more than `n * size_of::<Segment>()`.
+        let seg_size = std::mem::size_of::<Segment<ValueWord, SLOTS_PER_BUCKET>>();
+        assert!(
+            SEGMENT_CLASS_BYTES > seg_size,
+            "the size class {SEGMENT_CLASS_BYTES} must round the segment's {seg_size} up"
+        );
+        assert!(t.structural_bytes() > t.segment_count() * seg_size);
+
+        // And the figure is a sum of three costs that can each be counted
+        // independently: the segments at that class, the directory's slots, and
+        // the segment vector's own pointers. Pin it against those three counts
+        // rather than against a bound — a bound passes for any arithmetic that
+        // trends the same way, and this is the number the store seam adds to a
+        // shard's accounted contents.
         let segments = t.segment_count() * SEGMENT_CLASS_BYTES;
         let directory = t.directory.capacity() * 4;
         let segment_vec = t.segments.capacity() * std::mem::size_of::<usize>();
@@ -1309,11 +1319,25 @@ mod tests {
             t.structural_bytes_per_entry()
         );
 
-        // Occupancy is live entries over addressable slots, so a table well
-        // short of its slots is well short of 1.0.
+        // Occupancy is live entries over addressable slots — a ratio, so it is
+        // checked against the two counts it is made of rather than against a
+        // literal, and with a tolerance rather than by float equality.
         let slots = t.segment_count() * crate::layout::BUCKETS * crate::layout::SLOTS_PER_BUCKET;
-        assert_eq!(t.occupancy(), 100_000.0 / slots as f64);
-        assert!(t.occupancy() < 1.0);
+        assert!((t.occupancy() - t.len() as f64 / slots as f64).abs() < 1e-12);
+        assert!(
+            t.occupancy() < 1.0,
+            "a table short of its slots is under 1.0"
+        );
+        // And it is a live figure, not a high-water mark: emptying the table
+        // takes it back to zero over the same slots.
+        let keys: Vec<Vec<u8>> = t
+            .iter()
+            .map(|s| s.key.bytes(&mut [0u8; 16]).to_vec())
+            .collect();
+        for k in &keys {
+            t.remove(k);
+        }
+        assert_eq!(t.occupancy(), 0.0, "every entry removed occupies nothing");
     }
 
     // ----- 2Q eviction -------------------------------------------------------
@@ -1604,6 +1628,69 @@ mod tests {
             let v = *t.get(key).expect("nominated a key the table does not hold");
             assert!(eligible(&v), "nominated an ineligible key");
         }
+    }
+
+    /// The guard ahead of the walk, which is what makes "a walk that was never
+    /// made is not evidence" true: an empty table and a `want == 0` request are
+    /// both answered without walking, so neither disturbs the queues and
+    /// neither moves the generation the caller caches a refusal against. An
+    /// empty table walked anyway would retire its one segment into the ghost
+    /// queue and move the generation, which is exactly what this forbids.
+    // FM-MEMORY-007
+    #[test]
+    fn a_walk_that_is_never_made_leaves_the_table_untouched() {
+        let mut empty = evict_table();
+        let before = empty.generation();
+        assert_eq!(take(&mut empty, 8, 1, |_| true), Vec::<Vec<u8>>::new());
+        assert_eq!(
+            empty.generation(),
+            before,
+            "an empty table must be answered without a walk"
+        );
+        assert_eq!(
+            empty.queues.members(&empty.segments, QueueId::A1in).len(),
+            1,
+            "its one segment must still be where it started"
+        );
+
+        let mut t = evict_table();
+        fill_evict(&mut t, 100);
+        let before = t.generation();
+        let queues: Vec<Vec<u32>> = [QueueId::A1in, QueueId::A1out, QueueId::Am]
+            .iter()
+            .map(|q| t.queues.members(&t.segments, *q))
+            .collect();
+        assert_eq!(take(&mut t, 0, 1, |_| true), Vec::<Vec<u8>>::new());
+        assert_eq!(t.generation(), before, "want == 0 must not walk");
+        let after: Vec<Vec<u32>> = [QueueId::A1in, QueueId::A1out, QueueId::Am]
+            .iter()
+            .map(|q| t.queues.members(&t.segments, *q))
+            .collect();
+        assert_eq!(queues, after, "want == 0 must not reorder the queues");
+    }
+
+    /// The victim cursor is a ring and the lap is measured from where *this*
+    /// call started, not from slot zero. A call that resumes mid-ring and asks
+    /// for more than the segment holds must still offer every key exactly once:
+    /// measuring the distance from the wrong origin, or letting it grow past
+    /// the ring, stops the lap early and silently withholds candidates the
+    /// policy could have taken.
+    // FM-MEMORY-007
+    #[test]
+    fn a_walk_that_resumes_mid_ring_still_makes_exactly_one_lap() {
+        let mut t = evict_table();
+        let keys = fill_evict(&mut t, 100);
+        let first = take(&mut t, 1, 1, |_| true);
+        assert_eq!(first.len(), 1, "the first call moves the cursor off zero");
+
+        let lap = take(&mut t, 10_000, 1, |_| true);
+        let distinct: HashSet<&Vec<u8>> = lap.iter().collect();
+        assert_eq!(distinct.len(), lap.len(), "a key was nominated twice");
+        assert_eq!(
+            lap.len(),
+            keys.len(),
+            "one lap from the resumed cursor must offer every key"
+        );
     }
 
     /// The property the OOM verdict rests on: with nothing in the candidate set,

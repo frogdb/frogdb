@@ -575,11 +575,14 @@ mod tests {
         );
     }
 
-    /// `available` is the headroom a subsystem consults before deciding how
-    /// much to ask for, so it has to track the pool rather than being a
+    /// `available` is the headroom a subsystem would consult before deciding
+    /// how much to ask for, so it has to track the pool rather than being a
     /// constant — including at the two ends, where a full budget reports zero
     /// and an untouched one reports the whole limit.
-    // FM-MEMORY-002
+    ///
+    /// No spec row names this test: nothing in the server calls `available`
+    /// yet, so it contracts no observable behavior. It is a unit test of a
+    /// public helper, not a forcing test.
     #[test]
     fn available_counts_down_as_the_budget_fills() {
         let budget = Budget::new(Subsystem::WalChannel, Disposition::Backpressure, 100);
@@ -603,7 +606,7 @@ mod tests {
 
     /// Lowering the limit under the charge is the one case where headroom
     /// would go negative if it were a subtraction rather than a saturating one.
-    // FM-MEMORY-002
+    /// Untagged for the same reason as the test above.
     #[test]
     fn available_is_zero_rather_than_negative_when_the_limit_drops_below_the_charge() {
         let budget = Budget::new(Subsystem::FullsyncStaging, Disposition::Shed, 100);

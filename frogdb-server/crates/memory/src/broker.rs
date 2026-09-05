@@ -484,16 +484,28 @@ mod tests {
         assert_eq!(broker.drain_refusals(), vec![(Subsystem::Persistence, 1)]);
     }
 
-    /// The default limits are the ones an operator inherits when they configure
-    /// nothing, so they are pinned rather than left to arithmetic nobody reads.
-    // FM-MEMORY-002
+    /// `txn-buffer-limit`'s shipped size and its floor, which is what an
+    /// operator inherits when they configure nothing. Both numbers are the
+    /// contract of [txn.md FM-TXN-054] — the per-core 512 MiB default and the
+    /// floor a `CONFIG SET` is clamped to — so they are pinned here rather than
+    /// left to arithmetic nobody reads.
+    ///
+    /// [txn.md FM-TXN-054]: ../../../../specs/txn.md
+    // FM-TXN-054
     #[test]
-    fn the_default_limits_are_the_documented_sizes() {
-        assert_eq!(defaults::CLIENT_TRACKING_BYTES, 134_217_728, "128 MiB");
+    fn the_txn_buffer_defaults_are_the_documented_sizes() {
         assert_eq!(defaults::TXN_BUFFER_BYTES, 536_870_912, "512 MiB");
         assert_eq!(defaults::TXN_BUFFER_MIN_BYTES, 1_048_576, "1 MiB");
         // The floor a limit is clamped to must sit below the default.
         const { assert!(defaults::TXN_BUFFER_MIN_BYTES < defaults::TXN_BUFFER_BYTES) };
+    }
+
+    /// The client-tracking byte budget underneath Redis's key-count ceiling.
+    /// No spec row contracts it yet — nothing charges the budget — so this pins
+    /// the shipped size and nothing more.
+    #[test]
+    fn the_client_tracking_default_is_the_documented_size() {
+        assert_eq!(defaults::CLIENT_TRACKING_BYTES, 134_217_728, "128 MiB");
     }
 
     /// The wiring path the server takes: a broker built with the stub (because

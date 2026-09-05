@@ -231,14 +231,14 @@ impl<V, const N: usize> Segment<V, N> {
         // long before the other.
         //
         // Mutation note: `||` survives being narrowed to `&&`. The narrowed form
-        // gives up as soon as *either* candidate is full, where this one carries
-        // on while one still has room. Both are correct — giving the slot back is
-        // always a legal answer, and the caller's response is to split — so the
-        // difference is load factor and split rate, not behaviour. It is real
-        // enough to matter (the whole point of the balanced pair is to reach a
-        // high occupancy before splitting) but it is a benchmark result, not an
-        // assertion: no test can distinguish "split later" from "split sooner"
-        // without pinning a fill ratio this code is free to tune.
+        // skips this balanced fast path as soon as *either* candidate is full and
+        // falls through to the relocation and stash paths below, which place the
+        // entry anyway — so the key still lands and lookups still find it. What
+        // changes is how it gets there: relocations and stash entries where a
+        // simple insert into the emptier bucket would have done, so the segment
+        // fills less evenly and splits sooner. That is a load-factor result, not
+        // an observable: no test can distinguish "split later" from "split
+        // sooner" without pinning a fill ratio this code is free to tune.
         if !self.buckets[home].is_full() || !self.buckets[neighbour].is_full() {
             let (target, displaced) = if self.buckets[home].len() <= self.buckets[neighbour].len() {
                 (home, false)

@@ -1323,6 +1323,10 @@ mod eviction_tests {
         }
     }
 
+    /// The construction-time writer of the per-shard limit. Four shards, so the
+    /// division is not the identity: a `per_shard_limit` that forgot to divide
+    /// would let every shard defend the whole node's `maxmemory`.
+    // FM-MEMORY-004
     #[test]
     fn new_divides_maxmemory_across_shards() {
         let ev = ShardEviction::new(config(1000, EvictionPolicy::AllkeysLru), 4);
@@ -1331,6 +1335,10 @@ mod eviction_tests {
         assert!(!ev.is_no_eviction());
     }
 
+    /// `maxmemory 0` is "no limit", not "a limit of zero" — the short circuit
+    /// ahead of the division, which is also what keeps it from dividing by a
+    /// shard count it never reads.
+    // FM-MEMORY-004
     #[test]
     fn zero_maxmemory_is_unlimited() {
         let ev = ShardEviction::new(config(0, EvictionPolicy::NoEviction), 4);
@@ -1338,6 +1346,9 @@ mod eviction_tests {
         assert!(ev.is_no_eviction());
     }
 
+    /// The other writer, on a live `CONFIG SET`: eight shards, so this half of
+    /// the pair also forces the division rather than the identity.
+    // FM-MEMORY-004
     #[test]
     fn update_config_recomputes_limit_and_policy() {
         let mut ev = ShardEviction::new(config(0, EvictionPolicy::NoEviction), 8);
