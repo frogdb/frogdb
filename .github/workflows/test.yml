@@ -196,6 +196,8 @@ jobs:
       uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
       with:
         shared-key: stable
+    - name: Warm quint evaluator
+      run: quint run specs/quint/replication_feed_gate.qnt --max-steps 0 --max-samples 1
     - name: Run unit tests
       run: cargo nextest run --all
   cmd-full-build:
