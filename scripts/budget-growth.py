@@ -79,6 +79,11 @@ KEYSPACE_MODULES = (
     # The store itself and the eviction machinery that sizes it.
     "frogdb-server/crates/core/src/store/",
     "frogdb-server/crates/core/src/eviction/",
+    # The segmented keyspace table: the directory and the segment array are the
+    # keyspace's own storage, same scope as the store above. Its structural cost
+    # is reported at the allocator size class through `Table::structural_bytes`
+    # for the arena to read, which is the ADR-0006 §3 path, not a budget.
+    "frogdb-server/crates/table/src/",
     # The value representations a key holds: lists, sorted sets, streams, and
     # the probabilistic/time-series types. Their bytes are keyspace bytes.
     "frogdb-server/crates/types/src/types/",

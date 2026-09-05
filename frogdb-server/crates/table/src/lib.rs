@@ -28,17 +28,19 @@
 //!
 //! [`layout`] fixes the geometry, [`record`] and [`word`] the storage,
 //! [`hasher`] the placement inputs, [`bucket`] and [`segment`] the placement
-//! rules.
+//! rules, and [`table`] the directory and the cursor over it.
 
 pub mod bucket;
 pub mod hasher;
 pub mod layout;
 pub mod record;
 pub mod segment;
+pub mod table;
 pub mod word;
 
 pub use bucket::{Bucket, Slot};
 pub use hasher::{TableHasher, TableSeed};
 pub use record::Record;
 pub use segment::{Segment, SplitStats};
+pub use table::{Table, TableStats};
 pub use word::{Decoded, InlineBuf, KeyWord, ValueWord};
