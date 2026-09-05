@@ -7,10 +7,18 @@
 //! bytes:
 //!
 //! 1. **May they exist at all?** They are charged to this core's
-//!    [`Subsystem::NetworkOutput`] budget before they are buffered. The budget's
-//!    declared disposition is [`Disposition::Shed`] — a refused charge closes
-//!    the connection, because buffered output is exactly the work the server is
-//!    entitled to drop (`specs/memory.md`, "shed").
+//!    [`Subsystem::NetworkOutput`] budget. The charge is taken *after* the frame
+//!    is buffered, not before: `frame_io.rs::feed_wire_response` feeds the codec
+//!    (RESP2) or extends the encode buffer (RESP3) and only then calls
+//!    `account_buffered_output`, which re-reads the whole buffered figure and
+//!    hands it to [`OutputBufferAccount::set_buffered`]. So the refused frame is
+//!    briefly resident. What keeps that honest is that the refusal clears it
+//!    immediately — a [`OutputVerdict::Shed`] surfaces as an `io::Error`, and
+//!    the shed path releases the buffered bytes before the connection closes,
+//!    rather than pushing them at a socket that is about to go away. The
+//!    budget's declared disposition is [`Disposition::Shed`], because buffered
+//!    output is exactly the work the server is entitled to drop
+//!    (`specs/memory.md`, "shed").
 //! 2. **Has this client fallen too far behind?** Redis's
 //!    `client-output-buffer-limit <class> <hard> <soft> <soft-seconds>`, with
 //!    Redis's three classes and Redis's defaults.

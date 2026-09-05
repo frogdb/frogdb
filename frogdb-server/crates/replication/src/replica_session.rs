@@ -1560,10 +1560,18 @@ impl<'a> SessionDriver<'a> {
                 // the feed stops paying for it now rather than at the end of a
                 // link that may stream for hours (FM-REPLICATION-069).
                 drop(blobs);
-                // No `?`: a report of zero is `Keep` under every limit, so this
-                // is a release, not a shed path. Reading a verdict off it would
-                // suggest a way this line can end the link, and there is none.
-                let _ = report_feed(&self.feed, 0, "the written live dataset");
+                // No `?`: a report of zero is `Keep` under every limit
+                // (`set_buffered(0)` cannot breach a hard, soft or budget
+                // bound), so this is a release, not a shed path — propagating
+                // would suggest a way this line can end the link, and there is
+                // none. The call is bound rather than inlined into the assert
+                // because `debug_assert!` drops its argument in release builds,
+                // and the release of the feed's charge must still happen there.
+                let verdict = report_feed(&self.feed, 0, "the written live dataset");
+                debug_assert!(
+                    verdict.is_ok(),
+                    "reporting zero buffered bytes must be FeedVerdict::Keep, got {verdict:?}"
+                );
                 Ok(Next::Event(SessionEvent::PayloadSent))
             }
 

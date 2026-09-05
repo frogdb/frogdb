@@ -324,7 +324,12 @@ mod tests {
         }
     }
 
-    const OOM: &str = "OOM command not allowed when used memory > 'maxmemory'.";
+    /// The refusal text, taken from its one definition rather than copied.
+    /// `frogdb_types::error` owns the string (`OutOfMemory`); a literal here
+    /// would let the assertion keep passing after the real reply changed.
+    fn oom() -> String {
+        CommandError::OutOfMemory.to_string()
+    }
 
     fn compat(over_limit: bool, write_dirty: bool) -> ExecOrigin {
         ExecOrigin::FromScript(ScriptOomState {
@@ -358,7 +363,7 @@ mod tests {
                 CommandFlags::WRITE | CommandFlags::DENYOOM,
                 compat(true, false)
             ),
-            Err(OOM.to_string())
+            Err(oom())
         );
     }
 
