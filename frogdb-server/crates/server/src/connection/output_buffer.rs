@@ -1085,8 +1085,14 @@ mod tests {
         );
 
         tokio::time::sleep(Duration::from_secs(2)).await;
+        // Bounded, so a re-judge that never happens fails here rather than
+        // hanging the test until the runner's own timeout.
+        let reason = tokio::time::timeout(Duration::from_secs(5), shed)
+            .await
+            .expect("the window expired: nothing further will move this feed")
+            .expect("the account is still alive and owns the signal");
         assert_eq!(
-            shed.await.unwrap(),
+            reason,
             ShedReason::SoftLimit.as_str(),
             "the window expiring drops the link, naming the limit it breached"
         );
