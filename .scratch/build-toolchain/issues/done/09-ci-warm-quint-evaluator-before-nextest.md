@@ -1,6 +1,6 @@
 # 09 — CI: warm quint's Rust evaluator once before `cargo nextest run` in the unit-tests job
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Size: S
 Origin: carved from issue 06 part A (CI runs 33941010778, 33942554391)
@@ -65,3 +65,12 @@ None.
 ## Decisions
 
 D6
+
+## Resolution
+
+Landed on `build-toolchain/impl` at merge `6a31b6026` (2026-09-05). One commit, `2a3f4b758`: the
+`unit-tests` job gains a `Warm quint evaluator` step (`quint run specs/quint/replication_feed_gate.qnt
+--max-steps 0 --max-samples 1`) immediately before `Run unit tests`, with the rationale comment in
+`test.py`; `test.yml` regenerated. Cold-cache proof in the implementer report (fresh `HOME`, one
+evaluator fetch, `~/.quint/rust-evaluator-v0.6.0/` populated, second run fetch-free);
+`quint_conformance` 25/25 locally; reviewer (sonnet) approved with no findings. Closes issue 06 part A.
