@@ -1,6 +1,6 @@
 # 06 — CI: unit tests killed at the 15 s nextest limit on the ubuntu runner — a quint download race plus a few heavy tests
 
-Status: needs-triage
+Status: done
 Type: AFK
 Size: S
 Origin: Test run on `build-toolchain/impl` @ c66fc0fb5 (https://github.com/nathanjordan/frogdb/actions/runs/33937564779); re-read against run 33941010778 (b6cd9276a, after 04 landed) on 2026-09-04
@@ -107,3 +107,13 @@ None — 04 landed 2026-09-04; the A rows above are read from the first post-04 
 ## Decisions
 
 D6 (A → issue 09), D7 (B1 → issue 10), D8 (C → decided by the post-10 `workflow_dispatch` run: recurrence carves issue 11, otherwise 06 closes).
+
+## Resolution
+
+Closed 2026-09-05 per D8. A → issue 09 (quint install race; landed), B → issue 10
+(nextest 30 s × 3 overrides for the six heavy tests; landed `109736bb9`). C recorded as a
+one-off: the post-10 `workflow_dispatch` probe
+(https://github.com/nathanjordan/frogdb/actions/runs/33984698301) ran both C rows green —
+`test_broadcast_lag_disconnect_and_resync` 25.1 s / 38.4 s against the 45 s budget (thin
+margin: a recurrence carves issue 11 as an investigation), `regression_gap4_second_watcher_aborts`
+0.05 s. The prior red was run 33983916818 (`60e8e1696`).
