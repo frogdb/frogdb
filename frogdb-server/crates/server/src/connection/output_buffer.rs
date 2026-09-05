@@ -456,6 +456,126 @@ impl OutputBufferAccount {
     }
 }
 
+/// The same account, after `PSYNC` has turned the connection into a
+/// replication feed.
+///
+/// A replica does not stop costing the primary output memory when it stops
+/// being a client — it starts costing more. What changes is only *who
+/// measures*: the connection's write path is gone, and the feed's own buffers
+/// (staged dataset blobs, the backlog handoff tail, frames held behind a
+/// slot-handoff barrier) take its place. So the account moves rather than being
+/// released and reopened: the same [`Charge`] on the same core's budget, the
+/// same class limits, the same [`OutputBufferAccount::judge`], and no instant
+/// in between in which a replica's bytes are charged to nothing.
+///
+/// This is the server half of `frogdb_replication`'s [`FeedOutputAccount`] seam
+/// (`specs/replication.md` FM-REPLICATION-069). The replication crate reports
+/// one figure and acts on the verdict; everything the figure *means* — budget,
+/// class, clock, `omem`, the metric and the log line — is here.
+pub struct ReplicaFeedAccount {
+    /// Behind a lock because the feed reports from two places at once: the
+    /// session driver on the connection's task, and the spawned write task.
+    account: parking_lot::Mutex<OutputBufferAccount>,
+    /// Where `CLIENT LIST` / `CLIENT INFO` read `omem` from. The connection
+    /// stays registered across the handoff — that is what makes a replica
+    /// visible as a client at all — so this keeps its entry honest instead of
+    /// freezing at whatever it held when `PSYNC` arrived.
+    registry: std::sync::Arc<frogdb_core::ClientRegistry>,
+    conn_id: u64,
+    /// The rest of the connection's memory breakdown as it stood at the
+    /// handoff, so republishing `omem` does not blank the fields the feed has
+    /// no opinion about (notably `rbp`, a lifetime high-water mark).
+    base: frogdb_core::ClientMemoryUsage,
+    metrics: std::sync::Arc<dyn frogdb_core::MetricsRecorder>,
+}
+
+impl std::fmt::Debug for ReplicaFeedAccount {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReplicaFeedAccount")
+            .field("conn_id", &self.conn_id)
+            .field("buffered", &self.account.lock().buffered_bytes())
+            .finish()
+    }
+}
+
+impl ReplicaFeedAccount {
+    /// Take over `account` for the feed of connection `conn_id`.
+    ///
+    /// The class is forced to [`OutputBufferClass::Replica`] here: whatever the
+    /// connection was judged as while it was still speaking `REPLCONF`, what it
+    /// is now is a replica link, and `client-output-buffer-limit replica` is the
+    /// line that governs it.
+    pub fn new(
+        mut account: OutputBufferAccount,
+        registry: std::sync::Arc<frogdb_core::ClientRegistry>,
+        conn_id: u64,
+        base: frogdb_core::ClientMemoryUsage,
+        metrics: std::sync::Arc<dyn frogdb_core::MetricsRecorder>,
+    ) -> Self {
+        account.set_class(OutputBufferClass::Replica);
+        Self {
+            account: parking_lot::Mutex::new(account),
+            registry,
+            conn_id,
+            base,
+            metrics,
+        }
+    }
+
+    /// Republish this connection's `omem` from the figure the limit was taken
+    /// on, so the two can never disagree.
+    fn publish_omem(&self, buffered: u64) {
+        let mut mem = self.base.clone();
+        mem.output_list_mem = buffered as usize;
+        self.registry.update_memory(self.conn_id, mem);
+    }
+}
+
+impl frogdb_replication::FeedOutputAccount for ReplicaFeedAccount {
+    fn set_buffered(&self, total_bytes: u64) -> frogdb_replication::FeedVerdict {
+        // The clock read and the lock are both held for one `judge`. Nothing
+        // awaits inside, so the write task cannot park holding it.
+        let verdict = self
+            .account
+            .lock()
+            .set_buffered(total_bytes, frogdb_core::clock::now());
+        self.publish_omem(total_bytes);
+
+        match verdict {
+            OutputVerdict::Keep => frogdb_replication::FeedVerdict::Keep,
+            OutputVerdict::Shed(reason) => {
+                let limit = self.account.lock().limit();
+                tracing::warn!(
+                    conn_id = self.conn_id,
+                    class = OutputBufferClass::Replica.as_str(),
+                    reason = reason.as_str(),
+                    buffered = total_bytes,
+                    hard_limit = limit.hard_bytes,
+                    soft_limit = limit.soft_bytes,
+                    "replica feed output buffer limit exceeded; disconnecting"
+                );
+                // The same counter the connection-side seam moves, with the
+                // same labels: an operator asking "how many clients did the
+                // output-buffer limit kill, and which class" gets one answer,
+                // whichever side of the handoff the kill happened on.
+                frogdb_telemetry::definitions::ClientOutputBufferDisconnects::inc(
+                    &*self.metrics,
+                    OutputBufferClass::Replica.as_str(),
+                    reason.as_str(),
+                );
+                frogdb_replication::FeedVerdict::Shed {
+                    reason: reason.as_str(),
+                }
+            }
+        }
+    }
+
+    fn release(&self) {
+        self.account.lock().release_all();
+        self.publish_omem(0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use frogdb_memory::{Disposition, Subsystem};

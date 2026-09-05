@@ -179,6 +179,18 @@ impl FeedSequencer {
         self.held.len()
     }
 
+    /// How many replica-bound payload bytes the barrier is currently holding.
+    ///
+    /// This is the sequencer's contribution to the figure the feed reports to
+    /// its [`FeedOutputAccount`](crate::FeedOutputAccount) — see
+    /// `specs/replication.md` FM-REPLICATION-069. Payload bytes only: the frame
+    /// headers are a fixed per-frame constant that `held_frames` already
+    /// exposes, and counting the payload keeps this figure the same unit as the
+    /// feed's other two buffers (staged dataset blobs, backlog handoff tail).
+    pub fn buffered_bytes(&self) -> u64 {
+        self.held.iter().map(|f| f.payload.len() as u64).sum()
+    }
+
     /// Feed one input and get back what the driver must do next.
     ///
     /// Pure over `(state, input)`. The table is total: a pair the driver cannot
@@ -406,6 +418,46 @@ mod tests {
             });
         }
         assert!(matches!(action, FeedAction::Receive));
+    }
+
+    // FM-REPLICATION-069
+    /// What the barrier holds costs the primary memory, so the sequencer has to
+    /// be able to say how much — an absolute figure that rises as frames are
+    /// held and returns to zero when they are flushed.
+    #[test]
+    fn sequencer_reports_the_bytes_it_holds() {
+        let mut sequencer = streaming(0);
+        assert_eq!(
+            sequencer.buffered_bytes(),
+            0,
+            "an open feed holds nothing: every frame goes straight out"
+        );
+
+        let payload = frame(1).payload.len() as u64;
+        for (n, sequence) in [1u64, 2, 3].into_iter().enumerate() {
+            sequencer.step(FeedInput::Received(frame(sequence)));
+            sequencer.step(FeedInput::GateHeld(true));
+            assert_eq!(
+                sequencer.buffered_bytes(),
+                payload * (n as u64 + 1),
+                "each held frame adds its payload to the figure"
+            );
+        }
+
+        // Flushing is what makes the figure honest: a charge that only ever
+        // grew would condemn a feed that has already let go of the bytes.
+        sequencer.step(FeedInput::Released);
+        let mut action = sequencer.step(FeedInput::GateHeld(false));
+        while sending(&action).is_some() {
+            action = sequencer.step(FeedInput::Sent {
+                lag_breached: false,
+            });
+        }
+        assert_eq!(
+            sequencer.buffered_bytes(),
+            0,
+            "a flushed barrier holds nothing"
+        );
     }
 
     /// A release that another armed barrier outlives does not open the feed:

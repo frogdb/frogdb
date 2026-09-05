@@ -988,18 +988,30 @@ impl ConnectionHandler {
                     "ReplicationHandshake gates handler presence before yielding a handoff",
                 );
 
-            // ACCOUNTING GAP: the socket leaves output-buffer accounting here.
-            // `OutputBufferAccount`'s `Charge` is dropped with `self` at the end
-            // of this branch, which correctly releases the bytes this connection
-            // still held, but nothing takes over: from this point the
-            // replication feed's buffering is charged to no `NetworkOutput`
-            // budget and judged against no `client-output-buffer-limit` class,
-            // so the `replica` class governs only the pre-handoff connection.
-            // Closing this means charging inside the replication crates, which
-            // is spec-first work under `specs/replication.md`; it is filed
-            // separately and recorded in `specs/memory.md` FM-MEMORY-001's
-            // "NOT observable" and in the `client-output-buffer-limit` docs.
+            // Output-buffer accounting crosses the handoff with the socket
+            // (`specs/replication.md` FM-REPLICATION-069). The account this
+            // connection has been charging — its `Charge` on this core's
+            // `NetworkOutput` budget, and the `client-output-buffer-limit`
+            // class it is judged against — is *moved* into the feed rather than
+            // dropped here, so the `replica` class governs the replica for as
+            // long as the primary is holding bytes for it, and there is no
+            // instant between the handoff and the first feed write in which
+            // those bytes are charged to nothing.
             //
+            // The base breakdown is sampled before the move so the feed can
+            // republish `omem` without blanking the fields it has no opinion
+            // about; from here on the feed is the only writer of this
+            // connection's memory entry.
+            let feed_memory_base = self.compute_client_memory();
+            let feed_account: frogdb_replication::SharedFeedAccount =
+                std::sync::Arc::new(output_buffer::ReplicaFeedAccount::new(
+                    self.output_buffer,
+                    self.admin.client_registry.clone(),
+                    self.state.id,
+                    feed_memory_base,
+                    self.observability.metrics_recorder.clone(),
+                ));
+
             // Extract the ConnectionStream from the Framed codec and type-erase
             // it for the replication handler (`handle_psync` takes a
             // `BoxedStream`). Non-turmoil: `into_boxed` preserves TLS if
@@ -1019,6 +1031,7 @@ impl ConnectionHandler {
                     &replication_id,
                     offset,
                     self.replica_announcement,
+                    feed_account,
                 )
                 .await
             {
