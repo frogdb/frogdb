@@ -84,6 +84,19 @@ profiling = ["dep:tracing-flame"]
 # server's end-to-end suite can be run against the other backend
 # (`just test frogdb-server --features table-keyspace <pattern>`), which
 # recompiles frogdb-core upward: a gate-time run, not an iteration loop.
+#
+# KNOWN GAP — this feature does not build today, and the failure is in the
+# shard's async shape rather than in either backend. `ShardExecutor::launch`
+# takes a `Send` future, and the shard body holds `&ShardWorker` across an
+# await (`shard::persistence::handle_new_connection` and ~20 sibling `&self`
+# async fns), which makes the future `Send` only if `ShardWorker` is `Sync`.
+# `Table` is deliberately `Send`-and-not-`Sync` — its slots hold raw key words
+# and its segment headers hold `Cell` counters so the read path can stay on
+# `&self` — so the whole store becomes `!Sync` and the launch fails to compile.
+# Closing it means reshaping those `&self` async fns, which is its own piece of
+# work: see the issue-12 report. Until then the segmented backend is exercised
+# by `frogdb-table`'s own suite and by `frogdb-core` under this feature, and
+# `tests/integration_eviction_2q.rs` is written against the day it compiles.
 table-keyspace = ["frogdb-core/table-keyspace"]
 
 # Command-family mirrors of `frogdb-commands`' feature set (see that crate's

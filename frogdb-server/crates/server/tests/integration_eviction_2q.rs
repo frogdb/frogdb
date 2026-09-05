@@ -1,6 +1,13 @@
 //! End-to-end eviction against the segmented keyspace backend (2Q over
 //! segments), compiled only under `--features table-keyspace`.
 //!
+//! That feature does not build yet: the shard body holds `&ShardWorker` across
+//! an await, so `ShardExecutor::launch`'s `Send` future needs `ShardWorker:
+//! Sync`, and the segmented table is deliberately `Send`-only. The blocker is
+//! recorded at the feature's declaration in `Cargo.toml`; these two tests are
+//! the coverage waiting on it, and they are what should be run first once the
+//! shard's `&self` async fns are reshaped.
+//!
 //! The rest of the maxmemory suite runs against whichever backend is compiled
 //! in and is the real parity net — the point of this file is the pair of
 //! promises that are *about* the backend swap rather than about a command:
