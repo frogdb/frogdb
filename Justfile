@@ -1232,12 +1232,23 @@ cross-install:
 
 # Cross-compile for Linux x86_64 using zig (ships with the full command surface — ADR-0005
 # ruling 1: every distributable artifact builds `cmd-full`, not the `core-profile` dev default)
+#
+# CXXFLAGS fixes two zig quirks in `usearch`'s build.rs: `-x c++` (its C unit is compiled with
+# `-std=c++17`) and `-mevex512` (zig's clang strips the AVX-512 feature simsimd probes for). It is
+# target-scoped to keep it out of native builds and the Docker builder, but still reaches every
+# C++ unit cc-rs compiles for this target (rocksdb, aws-lc, mlua, ...). `AR` is plain because
+# jemalloc's autoconf reads only that name and the host `ar` is Mach-O-only. Why, in full:
+# `.scratch/build-toolchain/issues/open/01-cross-build-usearch-zig.md`. `docker-cross-build`
+# depends on this recipe and inherits both.
 cross-build:
-    cargo zigbuild --release --target x86_64-unknown-linux-gnu --bin frogdb-server --features cmd-full
+    CXXFLAGS_x86_64_unknown_linux_gnu="-x c++ -mevex512" AR="zig ar" cargo zigbuild --release --target x86_64-unknown-linux-gnu --bin frogdb-server --features cmd-full
 
 # Cross-compile for Linux ARM64 using zig (for benchmarks on Apple Silicon; cmd-full — see cross-build)
+#
+# Same `-x c++` and `AR` fixes as cross-build; no `-mevex512` — aarch64's simsimd targets are
+# NEON/SVE, not AVX-512. `docker-build-bench` depends on this recipe and inherits both.
 cross-build-arm:
-    cargo zigbuild --release --target aarch64-unknown-linux-gnu --bin frogdb-server --features cmd-full
+    CXXFLAGS_aarch64_unknown_linux_gnu="-x c++" AR="zig ar" cargo zigbuild --release --target aarch64-unknown-linux-gnu --bin frogdb-server --features cmd-full
 
 # Verify binary is valid Linux ELF
 cross-verify:
