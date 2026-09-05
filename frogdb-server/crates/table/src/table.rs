@@ -564,6 +564,10 @@ impl<V, const N: usize> Table<V, N> {
 
     /// Takes up to `want` candidates out of segment `si`, resuming at its
     /// victim cursor and leaving the cursor past the last one.
+    ///
+    /// Stops at one lap of the segment. The cursor is a ring, so without that
+    /// a `want` larger than the segment's acceptable population would hand the
+    /// caller the same key twice — and the caller deletes what it is handed.
     fn nominate_from(
         &mut self,
         si: u32,
@@ -571,13 +575,25 @@ impl<V, const N: usize> Table<V, N> {
         accept: &impl Fn(&V) -> bool,
         out: &mut impl FnMut(&[u8]),
     ) -> usize {
+        let total = Segment::<V, N>::victim_slots();
         let seg = &mut self.segments[si as usize];
-        let mut cursor = seg.victim_cursor();
+        let origin = seg.victim_cursor();
+        let mut cursor = origin;
+        // Distance travelled from `origin`, which rises with every nominee and
+        // can only fall by wrapping past the slot the lap started on.
+        let mut lap = 0u16;
         let mut produced = 0usize;
         while produced < want {
             let Some((b, i, next)) = seg.next_evictable(cursor, accept) else {
                 break;
             };
+            // In `1..=total`, so a nominee that lands the cursor exactly back on
+            // `origin` reads as a full lap rather than as no distance at all.
+            let travelled = (next + total - origin - 1) % total + 1;
+            if travelled <= lap {
+                break;
+            }
+            lap = travelled;
             let mut buf = [0u8; 16];
             out(seg.key_at(b, i, &mut buf));
             cursor = next;
@@ -1112,6 +1128,387 @@ mod tests {
             "structural cost {:.1} B/entry",
             t.structural_bytes_per_entry()
         );
+    }
+
+    // ----- 2Q eviction -------------------------------------------------------
+
+    /// A value carrying the test's stand-in for "has a TTL": the store's
+    /// `volatile-*` confinement is a predicate over the entry, and here it is a
+    /// predicate over an integer.
+    type E = Table<u64>;
+
+    fn evict_table() -> E {
+        Table::with_seed(TableSeed::from_u64(7))
+    }
+
+    fn fill_evict(t: &mut E, n: usize) -> Vec<String> {
+        let keys: Vec<String> = (0..n).map(|i| format!("k:{i}")).collect();
+        for (i, k) in keys.iter().enumerate() {
+            t.insert(k.as_bytes(), i as u64);
+        }
+        keys
+    }
+
+    fn segment_of(t: &E, key: &str) -> u32 {
+        let hash = t.hasher.hash(key.as_bytes());
+        t.directory[t.dir_index(hash)]
+    }
+
+    /// A key the table does not hold that routes to `si`, for forcing misses.
+    fn absent_key_in(t: &E, si: u32) -> String {
+        (0..200_000)
+            .map(|i| format!("absent:{i}"))
+            .find(|k| segment_of(t, k) == si && !t.contains_key(k.as_bytes()))
+            .expect("no absent key routes to that segment")
+    }
+
+    fn take(t: &mut E, want: usize, epoch: u16, accept: impl Fn(&u64) -> bool) -> Vec<Vec<u8>> {
+        let mut got = Vec::new();
+        let n = t.cold_candidates(want, epoch, accept, |k| got.push(k.to_vec()));
+        assert_eq!(n, got.len(), "the count and the callback disagree");
+        got
+    }
+
+    /// Every segment is in exactly one queue or none, and the two link
+    /// directions describe the same list.
+    fn assert_queue_invariants(t: &E) {
+        let mut seen: HashSet<u32> = HashSet::new();
+        for q in [QueueId::A1in, QueueId::A1out, QueueId::Am] {
+            let forward = t.queues.members(&t.segments, q);
+            let mut backward = t.queues.members_reversed(&t.segments, q);
+            backward.reverse();
+            assert_eq!(
+                forward, backward,
+                "{q:?} disagrees head-first vs tail-first"
+            );
+            for si in forward {
+                assert!(
+                    (si as usize) < t.segments.len(),
+                    "{q:?} links segment {si}, which does not exist"
+                );
+                assert_eq!(t.segments[si as usize].queue(), Some(q));
+                assert!(seen.insert(si), "segment {si} is linked into two queues");
+            }
+        }
+        for (i, seg) in t.segments.iter().enumerate() {
+            if !seen.contains(&(i as u32)) {
+                assert_eq!(
+                    seg.queue(),
+                    None,
+                    "segment {i} claims a queue that does not hold it"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_fresh_table_admits_its_only_segment_to_a1in() {
+        let t = evict_table();
+        assert_eq!(t.queues.members(&t.segments, QueueId::A1in), vec![0]);
+        assert!(t.queues.members(&t.segments, QueueId::Am).is_empty());
+        assert!(t.queues.members(&t.segments, QueueId::A1out).is_empty());
+        assert_queue_invariants(&t);
+    }
+
+    /// The new half of a split holds half the parent's entries and no history of
+    /// its own, so it is filed immediately behind the parent rather than at the
+    /// head (which would claim it is hot) or the tail (which would claim it is
+    /// colder than everything the parent outranks).
+    #[test]
+    fn a_split_files_the_new_half_behind_its_parent() {
+        let mut t = evict_table();
+        let mut i = 0u64;
+        while t.segment_count() == 1 {
+            t.insert(format!("k:{i}").as_bytes(), i);
+            i += 1;
+        }
+        assert_eq!(t.segment_count(), 2);
+        assert_eq!(t.queues.members(&t.segments, QueueId::A1in), vec![0, 1]);
+
+        fill_evict(&mut t, 20_000);
+        assert!(t.segment_count() > 8, "expected several splits");
+        assert_eq!(
+            t.queues.members(&t.segments, QueueId::A1in).len(),
+            t.segment_count(),
+            "a split left a segment in no queue"
+        );
+        assert_queue_invariants(&t);
+    }
+
+    /// 2Q's promotion rule: the *second* reference is what proves re-use.
+    #[test]
+    fn a_second_hit_promotes_the_coldest_segment_into_am() {
+        let mut t = evict_table();
+        let keys = fill_evict(&mut t, 20_000);
+        let coldest = *t
+            .queues
+            .members(&t.segments, QueueId::A1in)
+            .last()
+            .expect("A1in is empty");
+        let hot_key = keys
+            .iter()
+            .find(|k| segment_of(&t, k) == coldest)
+            .expect("no key routes to the coldest segment")
+            .clone();
+
+        assert!(t.get(hot_key.as_bytes()).is_some());
+        assert_eq!(t.segments[coldest as usize].hits(), 1);
+        take(&mut t, 1, 1, |_| true);
+        assert_eq!(
+            t.segments[coldest as usize].queue(),
+            Some(QueueId::A1in),
+            "one hit is not re-use"
+        );
+
+        assert!(t.get(hot_key.as_bytes()).is_some());
+        let nominated = take(&mut t, 1, 2, |_| true);
+        assert_eq!(
+            t.segments[coldest as usize].queue(),
+            Some(QueueId::Am),
+            "a second hit did not promote"
+        );
+        assert_eq!(nominated.len(), 1);
+        assert_ne!(
+            segment_of(&t, std::str::from_utf8(&nominated[0]).unwrap()),
+            coldest,
+            "the promoted segment was evicted from anyway"
+        );
+        assert_queue_invariants(&t);
+    }
+
+    /// A segment every lookup routes *through* and few land in is a routing
+    /// target, not hot data, so the hit floor alone must not promote it.
+    #[test]
+    fn a_segment_that_deflects_more_than_it_answers_is_not_promoted() {
+        let mut t = evict_table();
+        let keys = fill_evict(&mut t, 20_000);
+        let coldest = *t
+            .queues
+            .members(&t.segments, QueueId::A1in)
+            .last()
+            .expect("A1in is empty");
+        let hit_key = keys
+            .iter()
+            .find(|k| segment_of(&t, k) == coldest)
+            .expect("no key routes to the coldest segment")
+            .clone();
+        let miss_key = absent_key_in(&t, coldest);
+        // Finding that key was itself a lookup on the segment, so the counters
+        // start from where the search left them rather than from zero.
+        let base_misses = t.segments[coldest as usize].misses();
+
+        for _ in 0..3 {
+            assert!(t.get(hit_key.as_bytes()).is_some());
+        }
+        for _ in 0..4 {
+            assert!(t.get(miss_key.as_bytes()).is_none());
+        }
+        assert_eq!(t.segments[coldest as usize].hits(), 3);
+        assert_eq!(t.segments[coldest as usize].misses(), base_misses + 4);
+
+        let nominated = take(&mut t, 1, 1, |_| true);
+        assert_eq!(t.segments[coldest as usize].queue(), Some(QueueId::A1in));
+        assert_eq!(
+            segment_of(&t, std::str::from_utf8(&nominated[0]).unwrap()),
+            coldest,
+            "the deflecting segment should still have been the victim"
+        );
+        assert_queue_invariants(&t);
+    }
+
+    /// Eviction empties a segment; it becomes a ghost so later walks skip it in
+    /// O(1), and an insert is the reference that re-admits it.
+    #[test]
+    fn an_emptied_segment_becomes_a_ghost_and_an_insert_readmits_it() {
+        let mut t = evict_table();
+        let keys = fill_evict(&mut t, 20_000);
+        let coldest = *t
+            .queues
+            .members(&t.segments, QueueId::A1in)
+            .last()
+            .expect("A1in is empty");
+        let drained: Vec<String> = keys
+            .iter()
+            .filter(|k| segment_of(&t, k) == coldest)
+            .cloned()
+            .collect();
+        assert!(!drained.is_empty());
+        for k in &drained {
+            t.remove(k.as_bytes());
+        }
+        assert!(t.segments[coldest as usize].is_empty());
+        assert_eq!(
+            t.segments[coldest as usize].queue(),
+            Some(QueueId::A1in),
+            "removal itself must not move a segment"
+        );
+
+        let nominated = take(&mut t, 1, 1, |_| true);
+        assert_eq!(nominated.len(), 1, "a drained tail must not stop the walk");
+        assert_eq!(
+            t.segments[coldest as usize].queue(),
+            Some(QueueId::A1out),
+            "the drained segment was not parked as a ghost"
+        );
+        assert_queue_invariants(&t);
+
+        t.insert(drained[0].as_bytes(), 1);
+        assert_eq!(
+            t.segments[coldest as usize].queue(),
+            Some(QueueId::A1in),
+            "an insert did not re-admit the ghost"
+        );
+        assert_queue_invariants(&t);
+    }
+
+    /// The cursor is what makes resuming O(1) instead of a rescan from slot
+    /// zero: consecutive nominations walk the segment's live slots in order and
+    /// only repeat once the lap is over.
+    #[test]
+    fn the_victim_cursor_resumes_where_the_last_nomination_stopped() {
+        let mut t = evict_table();
+        let keys = fill_evict(&mut t, 100);
+        assert_eq!(t.segment_count(), 1, "this test wants one segment");
+
+        let mut seen = Vec::new();
+        for _ in 0..keys.len() {
+            let got = take(&mut t, 1, 1, |_| true);
+            assert_eq!(got.len(), 1);
+            seen.push(got.into_iter().next().unwrap());
+        }
+        let distinct: HashSet<&Vec<u8>> = seen.iter().collect();
+        assert_eq!(
+            distinct.len(),
+            keys.len(),
+            "the cursor repeated a key before finishing its lap"
+        );
+        assert_eq!(
+            take(&mut t, 1, 1, |_| true)[0],
+            seen[0],
+            "the lap did not wrap"
+        );
+    }
+
+    /// One call must not hand the caller the same key twice: the caller deletes
+    /// what it is handed.
+    #[test]
+    fn a_single_call_never_nominates_a_key_twice() {
+        let mut t = evict_table();
+        let keys = fill_evict(&mut t, 100);
+        let got = take(&mut t, 10_000, 1, |_| true);
+        let distinct: HashSet<&Vec<u8>> = got.iter().collect();
+        assert_eq!(got.len(), distinct.len(), "a key was nominated twice");
+        assert_eq!(got.len(), keys.len());
+    }
+
+    /// `volatile-*` confinement, applied per slot rather than per segment: a
+    /// segment mixing eligible and ineligible keys yields only the eligible
+    /// ones, and never nominates a key the policy may not take.
+    #[test]
+    fn confinement_nominates_only_what_the_policy_may_take() {
+        let mut t = evict_table();
+        fill_evict(&mut t, 20_000);
+        let eligible = |v: &u64| v % 10 == 0;
+
+        let got = take(&mut t, 64, 1, eligible);
+        assert!(!got.is_empty(), "one key in ten was eligible");
+        for key in &got {
+            let v = *t.get(key).expect("nominated a key the table does not hold");
+            assert!(eligible(&v), "nominated an ineligible key");
+        }
+    }
+
+    /// The property the OOM verdict rests on: with nothing in the candidate set,
+    /// the walk reports that it cannot make progress instead of spinning.
+    #[test]
+    fn a_walk_with_nothing_to_take_reports_zero_rather_than_spinning() {
+        let mut t = evict_table();
+        fill_evict(&mut t, 20_000);
+        let before = t.len();
+        for epoch in 0..10u16 {
+            assert_eq!(take(&mut t, 8, epoch, |_| false), Vec::<Vec<u8>>::new());
+        }
+        assert_eq!(t.len(), before, "a refused walk must not disturb the table");
+        assert_queue_invariants(&t);
+    }
+
+    /// A constant epoch is legal — it freezes promotion, never nomination.
+    #[test]
+    fn a_frozen_epoch_still_makes_progress() {
+        let mut t = evict_table();
+        fill_evict(&mut t, 5_000);
+        for _ in 0..500 {
+            let got = take(&mut t, 1, 0, |_| true);
+            assert_eq!(got.len(), 1, "a frozen epoch stalled the walk");
+            t.remove(&got[0]);
+        }
+        assert_queue_invariants(&t);
+    }
+
+    #[test]
+    fn clear_rebuilds_the_queues_around_the_one_segment_that_is_left() {
+        let mut t = evict_table();
+        fill_evict(&mut t, 20_000);
+        take(&mut t, 4, 1, |_| true);
+        t.clear();
+        assert_eq!(t.segment_count(), 1);
+        assert_eq!(t.queues.members(&t.segments, QueueId::A1in), vec![0]);
+        assert!(t.queues.members(&t.segments, QueueId::Am).is_empty());
+        assert!(t.queues.members(&t.segments, QueueId::A1out).is_empty());
+        assert_queue_invariants(&t);
+    }
+
+    /// The queues are mutated by five unrelated paths — insert, split, the
+    /// re-admission branch, reconciliation and retirement — so the invariant
+    /// worth testing is that no *sequence* of them can corrupt the links.
+    #[test]
+    fn random_reference_and_growth_sequences_keep_the_queues_consistent() {
+        // A deterministic generator, spelled out so a failure replays: the
+        // sequence is the test.
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+
+        let mut t = evict_table();
+        let mut live: HashSet<Vec<u8>> = HashSet::new();
+        for step in 0..20_000u64 {
+            let key = format!("k:{}", next() % 4_000).into_bytes();
+            match next() % 10 {
+                0..=5 => {
+                    t.insert(&key, next());
+                    live.insert(key);
+                }
+                6 => {
+                    if t.remove(&key).is_some() {
+                        live.remove(&key);
+                    }
+                }
+                7..=8 => {
+                    t.get(&key);
+                }
+                _ => {
+                    let epoch = (next() % 3) as u16;
+                    let odd_only = next() % 2 == 0;
+                    for k in take(&mut t, 2, epoch, move |v| !odd_only || v % 2 == 1) {
+                        t.remove(&k);
+                        live.remove(&k);
+                    }
+                }
+            }
+            // Rare, but the queues have to survive it: `clear` drops every
+            // segment the links point at.
+            if step % 7_000 == 6_999 {
+                t.clear();
+                live.clear();
+            }
+            assert_eq!(t.len(), live.len(), "diverged at step {step}");
+            assert_queue_invariants(&t);
+        }
+        assert!(t.segment_count() > 1, "the sequence never grew the table");
     }
 
     #[test]
