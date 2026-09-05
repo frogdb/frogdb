@@ -1,6 +1,6 @@
 # 10 — CI: nextest `30s × 3` overrides for the six heavy tests killed at the default `3 × 5 s`
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Size: S
 Origin: carved from issue 06 part B (CI runs 33941010778, 33942554391; main run 33936207419)
@@ -65,3 +65,13 @@ None.
 ## Decisions
 
 D7
+
+## Resolution
+
+Landed on `build-toolchain/impl` at merge `109736bb9` (2026-09-05). One commit, `b92304470`: five
+`[[profile.default.overrides]]` entries at `30s × 3` covering the six tests, appended after
+`tcl_sdiff_fuzzing` with a shared intro comment naming runs 33941010778 / 33942554391 /
+33936207419 and issue 06/10, plus a per-entry heaviness rationale checked against each test body.
+`cargo nextest list -E` matched exactly the six; solo durations 6.8–11.9 s; no earlier override
+shadows them. Reviewer (sonnet) approved, 1 Minor (comment consolidation) accepted. Closes issue 06
+part B; the `workflow_dispatch` run of `test.yml` that follows this landing is the D8 probe for 06 C.
