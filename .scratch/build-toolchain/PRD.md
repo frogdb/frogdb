@@ -39,3 +39,8 @@ filed as issue 08 once 01 landed.
 - D6: the `quint_conformance` CI failures are a cold-cache download race on quint's Rust
   evaluator, fixed by a serial warm-up step in the `unit-tests` job before `cargo nextest run`
   (issue 09), not by a `~/.quint` cache or timeout bumps.
+- D7: the six genuinely heavy unit tests from issue 06 part B (hash_tcl fuzz ×2, scan_tcl
+  write-load, bf_false_positive_rate, telemetry metrics_usage, core scan_stress) get per-test
+  nextest overrides at `30s × 3` in `.config/nextest.toml`, in the existing "legitimately heavy,
+  not flaky" style — not smaller test inputs (changes what the tests prove) and not a lower CI
+  `test-threads` (slows every job). Carved as issue 10.

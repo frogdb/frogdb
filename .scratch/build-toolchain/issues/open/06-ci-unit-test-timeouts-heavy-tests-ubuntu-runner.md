@@ -20,7 +20,7 @@ issue 09 (D6): the first `quint run` on a runner fetches quint's Rust evaluator 
 and parallel nextest races it (`EEXIST` on the tarball, 15 s timeouts queued behind). Fix is a
 serial warm-up step in the `unit-tests` job.
 
-**B. Genuinely heavy tests at the default `3 × 5 s`** (`.config/nextest.toml:7`):
+**B. Genuinely heavy tests at the default `3 × 5 s`** (`.config/nextest.toml:7`) — D7, carved as issue 10 (B1, overrides at `30s × 3`):
 
 | test | note |
 |---|---|
@@ -106,4 +106,4 @@ None — 04 landed 2026-09-04; the A rows above are read from the first post-04 
 
 ## Decisions
 
-D6 (A → issue 09). Pending: B1/B2/B3, whether C becomes its own issue.
+D6 (A → issue 09), D7 (B1 → issue 10). Pending: whether C becomes its own issue.
