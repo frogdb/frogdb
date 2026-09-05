@@ -268,6 +268,18 @@ def test_workflow() -> Workflow:
                 rust_toolchain_step(),
                 libclang_step(),
                 cargo_cache_step(shared_key="stable"),
+                # The first `quint run` on a runner downloads quint's Rust evaluator
+                # into `~/.quint/rust-evaluator-<version>/`. Without this warm-up,
+                # `frogdb-replication::quint_conformance`'s tests each shell out to
+                # `quint run` in parallel under nextest, racing that download
+                # (`Error: EEXIST: file already exists, open
+                # '/home/runner/.quint/rust-evaluator-v0.6.0/quint_evaluator-x86_64-unknown-linux-gnu.tar.gz'`
+                # plus 15s timeouts queued behind it — build-toolchain issue 06/09).
+                # One serial run warms the cache; the tests then find it.
+                run_step(
+                    name="Warm quint evaluator",
+                    run="quint run specs/quint/replication_feed_gate.qnt --max-steps 0 --max-samples 1",
+                ),
                 run_step(name="Run unit tests", run="cargo nextest run --all"),
             ],
         ),
