@@ -1233,33 +1233,20 @@ cross-install:
 # Cross-compile for Linux x86_64 using zig (ships with the full command surface — ADR-0005
 # ruling 1: every distributable artifact builds `cmd-full`, not the `core-profile` dev default)
 #
-# The CXXFLAGS_<target> prefix works around two zig-only quirks in `usearch`'s build.rs
-# (build-toolchain issue 01). `-x c++`: zig's c++ driver wrapper rejects the `-std=c++17` that
-# build.rs puts on every unit when it reaches the C file `simsimd/c/lib.c`, so the unit is
-# forced to C++. `-mevex512`: zig 0.15.2's clang passes an explicit `-evex512`, and simsimd's
-# AVX-512 `target` attributes never add it back, so every AVX-512 probe fails. Either one
-# missing sends build.rs into its six-pass SIMSIMD_TARGET_* peeling loop, which then panics.
-# The env is target-scoped (cc only applies it to this target) rather than living in
-# `.cargo/config.toml`, so native builds, `just check`, and the Docker builder — whose older
-# clang has no `-mevex512` — never see it. `docker-cross-build` depends on this recipe and
-# inherits the flags with it.
-#
-# `AR` is jemalloc's. tikv-jemalloc-sys builds jemalloc with autoconf, and its configure reads
-# plain `AR` — not the `AR_<target>` that cargo-zigbuild sets for cc-rs consumers like rocksdb.
-# So it found the host's Mach-O-only `ar`, which archived nothing from the ELF objects
-# ("ranlib: warning: archive member 'jemalloc.pic.o' not a mach-o file") and left a 96-byte
-# empty `libjemalloc_pic.a`; the link then failed on undefined `mallctl`/`mallocx`/`rallocx`/
-# `sdallocx`. `zig ar` is llvm-ar and handles both object formats, so the plain name is safe
-# for any host-side cc-rs build that also falls through to it.
+# CXXFLAGS fixes two zig quirks in `usearch`'s build.rs: `-x c++` (its C unit is compiled with
+# `-std=c++17`) and `-mevex512` (zig's clang strips the AVX-512 feature simsimd probes for). It is
+# target-scoped to keep it out of native builds and the Docker builder, but still reaches every
+# C++ unit cc-rs compiles for this target (rocksdb, aws-lc, mlua, ...). `AR` is plain because
+# jemalloc's autoconf reads only that name and the host `ar` is Mach-O-only. Why, in full:
+# `.scratch/build-toolchain/issues/open/01-cross-build-usearch-zig.md`. `docker-cross-build`
+# depends on this recipe and inherits both.
 cross-build:
     CXXFLAGS_x86_64_unknown_linux_gnu="-x c++ -mevex512" AR="zig ar" cargo zigbuild --release --target x86_64-unknown-linux-gnu --bin frogdb-server --features cmd-full
 
 # Cross-compile for Linux ARM64 using zig (for benchmarks on Apple Silicon; cmd-full — see cross-build)
 #
-# Same `-x c++` driver fix as cross-build; no `-mevex512` because aarch64's SIMD targets are
-# NEON/SVE, not AVX-512. Target-scoped for the same reason. `AR` is the same jemalloc autoconf
-# fix, and is not target-scoped because autoconf only reads the plain name. `docker-build-bench`
-# depends on this recipe and inherits both with it.
+# Same `-x c++` and `AR` fixes as cross-build; no `-mevex512` — aarch64's simsimd targets are
+# NEON/SVE, not AVX-512. `docker-build-bench` depends on this recipe and inherits both.
 cross-build-arm:
     CXXFLAGS_aarch64_unknown_linux_gnu="-x c++" AR="zig ar" cargo zigbuild --release --target aarch64-unknown-linux-gnu --bin frogdb-server --features cmd-full
 
