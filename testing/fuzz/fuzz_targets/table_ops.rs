@@ -246,7 +246,11 @@ fuzz_target!(|input: Input| {
                     "one call nominated the same key twice: {nominated:?}"
                 );
 
-                if produced == 0 && t.generation() == generation_before {
+                // `want == 0` is refused without a walk, so it proves nothing
+                // about the table and the store must not cache it either
+                // (`TableKeyspace::cold_candidates`). The guard mirrors the
+                // store's rule exactly, which is the point of the assertion.
+                if want > 0 && produced == 0 && t.generation() == generation_before {
                     // A refusal by a walk that moved nothing is stable, which is
                     // what lets the store answer the *next* refusal from a memo
                     // instead of re-walking the queues

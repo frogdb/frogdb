@@ -45,6 +45,13 @@ pub(in crate::store) struct TableKeyspace {
     ///
     /// Only a walk that moved nothing itself is remembered: see
     /// [`Table::generation`], which a promotion during the walk also bumps.
+    ///
+    /// The saving is over *consecutive* refusals with no mutation between them.
+    /// A command-path read is a mutation here — `HashMapStore::
+    /// get_with_expiry_check` touches the entry's LRU clock and LFU counter
+    /// through `get_mut` — so a read interleaved between two refused writes
+    /// costs the second one a full walk. That is the honest bound: the flood
+    /// this exists for is refused writes, and reads pay for what they change.
     fruitless_walk: Option<(bool, u64)>,
 }
 
@@ -156,14 +163,19 @@ impl Keyspace for TableKeyspace {
             |entry| accept(entry),
             |key| keys.push(Bytes::copy_from_slice(key)),
         );
-        // Two walks are not worth remembering. One that produced something has
+        // Three walks are not worth remembering. One that produced something has
         // already changed what the next one should see, because the caller
         // deletes what it was handed. One that promoted a segment withheld that
         // segment from nomination, so repeating it can produce what it just
         // refused — the table reports that by moving its generation, and a
-        // refusal is only stable when the walk left the generation alone.
+        // refusal is only stable when the walk left the generation alone. And
+        // `want == 0` never walks at all (`Table::cold_candidates` returns
+        // early), so its empty answer is evidence about nothing; caching it
+        // would refuse the next real request out of hand.
+        let walked = want > 0;
         let inert = self.data.generation() == generation;
-        self.fruitless_walk = (keys.is_empty() && inert).then_some((volatile_only, generation));
+        self.fruitless_walk =
+            (walked && keys.is_empty() && inert).then_some((volatile_only, generation));
         Some(keys)
     }
 }
@@ -238,5 +250,21 @@ mod tests {
             ask(&mut ks, false) > 0,
             "a different confinement is a different question"
         );
+    }
+
+    /// A caller asking for nothing is answered without a walk, so its empty
+    /// answer is not evidence that there is nothing to take. Caching it would
+    /// refuse the next real request — an `-OOM` against an evictable keyspace.
+    // FM-MEMORY-007
+    #[test]
+    fn asking_for_no_candidates_does_not_cache_a_refusal() {
+        let mut ks = keyspace_of(4_000);
+
+        assert_eq!(ks.cold_candidates(0, 0, false, |_| true), Some(Vec::new()));
+
+        let taken = ks
+            .cold_candidates(1, 0, false, |_| true)
+            .expect("the segmented backend always answers with a list");
+        assert_eq!(taken.len(), 1, "the keyspace is full of evictable keys");
     }
 }
