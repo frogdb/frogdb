@@ -1,8 +1,8 @@
 # 08 — CI: nothing exercises `just cross-build`; the zig path can re-break silently
 
-Status: needs-triage
+Status: ready-for-agent
 Type: AFK
-Size: S
+Size: M
 Origin: Whole-branch review of `build-toolchain/impl` (76b2a6dae..b6cd9276a, 2026-09-04); the PRD's "Detection gap" follow-up, owed since issue 01 closed
 
 ## Parent
@@ -22,43 +22,75 @@ plus `AR="zig ar"`), but the failure class it belonged to is still undetected:
   0.15.2 (older clangs reject the flag; a newer zig may change what it strips). The next
   `mise install` on a fresh machine can move zig and break the recipe with no signal until
   the next manual run.
-- `cross-verify` checks only the x86-64 artifact (01's Resolution).
+- `cross-verify` only prints `file` output for the x86-64 artifact; it never fails.
 
-Both 01's Resolution and the PRD point here for the detector.
+## What to build
 
-## Options (decision needed)
+Three pieces, all through existing recipes — no new raw `cargo zigbuild` line anywhere
+(`scripts/ship-cmd-full.py` pins the count of ship-shaped lines per file; `Justfile` stays at 3).
 
-1. **Recommended:** a `cross-build` job in `test.yml`, `if:` gated on the same
-   path-filter the `docker` job uses (Justfile, `Cargo.lock`, `frogdb-server/**`,
-   `.mise.toml`), running `just cross-build` + `just cross-verify` on `ubuntu-latest` (zig and
-   `cargo-zigbuild` come from `.mise.toml` via the mise step), plus `just cross-build-arm`
-   with an aarch64 `cross-verify`. Cache `target/` on a sticky disk like `unit-tests`. Adds
-   one ~4–6 min job per qualifying push.
-2. Same job, nightly only (`build.yml` or a new `cross-build-nightly.yml`): no per-push
-   cost, a day of latency on the detector.
-3. Pin `zig` in `.mise.toml` (`"0.15.2"`) without a job: removes the drift vector, leaves
-   the usearch/jemalloc class undetected.
+### 1. `.mise.toml`: pin zig
 
-Option 3 pairs with 1 or 2 — pinning is cheap and independent of the job.
+Replace `zig      = "latest"` with `zig      = "0.15.2"` (the version `just cross-build` is green
+on locally and the clang whose `-mevex512` handling D3 relies on). Comment on the line, in the
+file's existing style, naming build-toolchain issue 08 and the `-mevex512` sensitivity.
+`cargo:cargo-zigbuild` stays at `0.22.1`.
 
-## Acceptance criteria (for option 1 + pin)
+### 2. `Justfile`: `cross-verify` asserts, and gets an aarch64 sibling
 
-- [ ] `.mise.toml` pins `zig` to the version the recipe is known green on, with a comment
-      naming this issue and the `-mevex512` sensitivity
-- [ ] a generated `cross-build` job (generator under `.github/workflows/workflow_gen/`,
-      `just workflow-gen-check` green) runs `just cross-build && just cross-verify` and
-      `just cross-build-arm` with an aarch64 ELF check
-- [ ] `cross-verify` (or a sibling recipe) checks the aarch64 artifact too
-- [ ] a `workflow_dispatch` run of `test.yml` on the integration branch shows the job green
-- [ ] `just lint-gates` ship count unchanged (the job builds `cmd-full` through the existing
-      recipes; no new raw `zigbuild` invocation)
+- `cross-verify` runs `file target/x86_64-unknown-linux-gnu/release/frogdb-server`, prints it,
+  and fails unless the output contains `ELF 64-bit` and `x86-64`.
+- New `cross-verify-arm`, same shape, on
+  `target/aarch64-unknown-linux-gnu/release/frogdb-server`, requiring `ELF 64-bit` and
+  `aarch64`.
+- Keep recipe comments in the surrounding style (one-line `#` above each). `docker-cross-build`
+  / `docker-build-bench` dependencies unchanged.
+
+### 3. `test.yml` (generated): a `cross-build` job
+
+In `.github/workflows/workflow_gen/src/workflow_gen/workflows/test.py`, add a job after
+`cmd-full-build`:
+
+- id `cross-build`, `name="Cross Build (zig)"`, `runs_on=RUNS_ON`, `needs="changes"`,
+  `if_="needs.changes.outputs.rust == 'true' || needs.changes.outputs.workflow_gen == 'true'"`
+  (`rust` covers `frogdb-server/**`, `Cargo.lock`, `.mise.toml`; `workflow_gen` covers
+  `Justfile` — the recipe lives there). No new filter output.
+- Steps: `checkout_step()`, `mise_setup_step(install_args=MISE_JUST_ZIGBUILD)` with a new
+  constant `MISE_JUST_ZIGBUILD = "just zig cargo:cargo-zigbuild"` beside the other `MISE_*`
+  constants, `rust_toolchain_step(targets="x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu")`,
+  `libclang_step()` (bindgen for librocksdb-sys runs on the host),
+  `cargo_cache_step(shared_key="cross")`, then two `run_step`s:
+  `Cross-build x86_64` → `just cross-build && just cross-verify`, and
+  `Cross-build aarch64` → `just cross-build-arm && just cross-verify-arm`.
+- A comment above the job (module style, like the `cmd-full-build` comment) saying why it
+  exists: nothing else in CI runs the zig path; `release.yml` uses `Dockerfile.builder`;
+  build-toolchain issues 01 and 08; D9.
+- Regenerate with `just workflow-gen`; `just workflow-gen --check` green.
+
+Expect the job to take a while cold (RocksDB from source under zig, twice); the cargo cache
+covers subsequent runs. Do not add a sticky disk or sccache.
+
+## Acceptance criteria
+
+- [ ] `.mise.toml` pins `zig = "0.15.2"` with a comment naming issue 08 and `-mevex512`
+- [ ] `just cross-verify` fails on a missing or wrong-arch artifact and passes on the x86-64
+      one; `just cross-verify-arm` likewise for aarch64 (show both directions in the report —
+      e.g. point one at the other's artifact)
+- [ ] `just cross-build && just cross-verify` and `just cross-build-arm && just cross-verify-arm`
+      green locally (macOS, zig 0.15.2)
+- [ ] `test.py` gains the `cross-build` job exactly as specified; `test.yml` regenerated;
+      `just workflow-gen --check` green
+- [ ] `just lint-gates` green — `ship-cmd-full` count unchanged (`Justfile: 3`, no new
+      ship-shaped line in `test.py`)
+- [ ] Controller verification after landing: a `workflow_dispatch` run of `test.yml` on
+      `build-toolchain/impl` shows `Cross Build (zig)` green
 
 ## Files likely touched
 
-- `.github/workflows/workflow_gen/src/workflow_gen/workflows/test.py` (or a new nightly generator)
+- `.github/workflows/workflow_gen/src/workflow_gen/workflows/test.py`
 - `.github/workflows/test.yml` (regenerated)
 - `.mise.toml`
-- `Justfile` (`cross-verify`)
+- `Justfile` (`cross-verify`, new `cross-verify-arm`)
 
 ## Affects
 
@@ -71,4 +103,4 @@ None (01 landed).
 
 ## Decisions
 
-Pending: job placement (per-push vs nightly), zig pin.
+D3 (the recipe flags this job protects), D9.

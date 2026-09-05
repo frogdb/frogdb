@@ -49,3 +49,10 @@ filed as issue 08 once 01 landed.
   now: the `workflow_dispatch` run of `test.yml` that verifies issue 10 doubles as the probe. A
   recurrence carves an investigation issue (11); no recurrence closes 06 with C recorded as a
   one-off. Local mode has no Linux box, so a speculative investigation issue would only block.
+- D9: the zig cross path gets a per-push detector, not a nightly one: a `cross-build` job in
+  `test.yml` (generated) running `just cross-build && just cross-verify` and
+  `just cross-build-arm && just cross-verify-arm` on `ubuntu-latest`, gated on the existing
+  `rust`/`workflow_gen` change filters, with the cargo cache like `unit-tests`; and `.mise.toml`
+  pins `zig = "0.15.2"` (the clang whose `-mevex512` D3 depends on) instead of `latest`.
+  `cross-verify` asserts the ELF machine type rather than printing `file` output. Carved as
+  issue 08 (rewritten from needs-triage to ready-for-agent).
