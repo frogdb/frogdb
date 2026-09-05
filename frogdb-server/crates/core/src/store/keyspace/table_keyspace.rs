@@ -118,7 +118,9 @@ impl Keyspace for TableKeyspace {
         self.data.cold_candidates(
             want,
             epoch,
-            |entry: &Box<Entry>| accept(entry),
+            // The table stores `Box<Entry>`, so the predicate it hands us takes
+            // a `&Box<Entry>`; the deref coercion is what reaches `accept`.
+            |entry| accept(entry),
             |key| keys.push(Bytes::copy_from_slice(key)),
         );
         Some(keys)
