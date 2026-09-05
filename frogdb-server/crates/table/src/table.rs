@@ -149,7 +149,10 @@ impl<V, const N: usize> Table<V, N> {
 
     /// Live entries as a fraction of the slots the segments address.
     pub fn occupancy(&self) -> f64 {
-        let slots = self.segments.len() * crate::layout::SEGMENT_SLOTS;
+        // `BUCKETS * N`, not `layout::SEGMENT_SLOTS`: that constant is the count
+        // at the production slot width, and this has to be right for whatever
+        // width `N` names or the layout comparison measures nothing.
+        let slots = self.segments.len() * crate::layout::BUCKETS * N;
         if slots == 0 {
             return 0.0;
         }
