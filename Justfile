@@ -1232,12 +1232,27 @@ cross-install:
 
 # Cross-compile for Linux x86_64 using zig (ships with the full command surface — ADR-0005
 # ruling 1: every distributable artifact builds `cmd-full`, not the `core-profile` dev default)
+#
+# The CXXFLAGS_<target> prefix works around two zig-only quirks in `usearch`'s build.rs
+# (build-toolchain issue 01). `-x c++`: zig's c++ driver wrapper rejects the `-std=c++17` that
+# build.rs puts on every unit when it reaches the C file `simsimd/c/lib.c`, so the unit is
+# forced to C++. `-mevex512`: zig 0.15.2's clang passes an explicit `-evex512`, and simsimd's
+# AVX-512 `target` attributes never add it back, so every AVX-512 probe fails. Either one
+# missing sends build.rs into its six-pass SIMSIMD_TARGET_* peeling loop, which then panics.
+# The env is target-scoped (cc only applies it to this target) rather than living in
+# `.cargo/config.toml`, so native builds, `just check`, and the Docker builder — whose older
+# clang has no `-mevex512` — never see it. `docker-cross-build` depends on this recipe and
+# inherits the flags with it.
 cross-build:
-    cargo zigbuild --release --target x86_64-unknown-linux-gnu --bin frogdb-server --features cmd-full
+    CXXFLAGS_x86_64_unknown_linux_gnu="-x c++ -mevex512" cargo zigbuild --release --target x86_64-unknown-linux-gnu --bin frogdb-server --features cmd-full
 
 # Cross-compile for Linux ARM64 using zig (for benchmarks on Apple Silicon; cmd-full — see cross-build)
+#
+# Same `-x c++` driver fix as cross-build; no `-mevex512` because aarch64's SIMD targets are
+# NEON/SVE, not AVX-512. Target-scoped for the same reason. `docker-build-bench` depends on
+# this recipe and inherits the flag with it.
 cross-build-arm:
-    cargo zigbuild --release --target aarch64-unknown-linux-gnu --bin frogdb-server --features cmd-full
+    CXXFLAGS_aarch64_unknown_linux_gnu="-x c++" cargo zigbuild --release --target aarch64-unknown-linux-gnu --bin frogdb-server --features cmd-full
 
 # Verify binary is valid Linux ELF
 cross-verify:
