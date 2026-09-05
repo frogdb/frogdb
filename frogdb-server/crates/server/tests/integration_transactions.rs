@@ -1731,3 +1731,124 @@ async fn test_discard_and_reset_release_the_txn_buffer_charge() {
 
     server.shutdown().await;
 }
+
+// FM-TXN-054
+/// On a single-shard node the connection's queue-time charge and the shard's
+/// pre-apply charge land on the *same* budget. A `MULTI` holding more than
+/// half the limit must still `EXEC`: the connection releases its charge before
+/// the shard round trip, so the bytes are counted once, never twice (the
+/// four-shard harness hides this by routing the batch off the home shard).
+/// And a connection that dies mid-`MULTI` gives its bytes back — the next
+/// connection gets the whole limit.
+#[tokio::test]
+async fn test_single_shard_multi_execs_under_the_limit_and_a_dropped_connection_releases() {
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+
+    let response = client
+        .command(&["CONFIG", "SET", "txn-buffer-limit", "1048576"])
+        .await;
+    assert_eq!(response, Response::ok());
+    // More than half the limit: charged twice it would not fit.
+    let value = "v".repeat(600 * 1024);
+
+    assert_eq!(client.command(&["MULTI"]).await, Response::ok());
+    assert_eq!(
+        client.command(&["SET", "txnbudget:k", &value]).await,
+        Response::queued()
+    );
+    let response = client.command(&["EXEC"]).await;
+    assert!(
+        matches!(&response, Response::Array(r) if r.len() == 1 && r[0] == Response::ok()),
+        "a transaction that fits the limit must commit on a single shard, got {response:?}"
+    );
+    assert!(
+        matches!(client.command(&["GET", "txnbudget:k"]).await, Response::Bulk(Some(v)) if v.len() == value.len())
+    );
+
+    // A connection dropped mid-MULTI releases its charge.
+    assert_eq!(client.command(&["MULTI"]).await, Response::ok());
+    assert_eq!(
+        client.command(&["SET", "txnbudget:dropped", &value]).await,
+        Response::queued()
+    );
+    drop(client);
+
+    // The server tears the dead connection down asynchronously; until it has,
+    // the budget is legitimately full. Retry (DISCARDing the poisoned MULTI
+    // each time) until the bytes come back, bounded so a real leak fails.
+    let mut other = server.connect().await;
+    let mut queued = false;
+    for _ in 0..100 {
+        assert_eq!(other.command(&["MULTI"]).await, Response::ok());
+        let response = other.command(&["SET", "txnbudget:k2", &value]).await;
+        if response == Response::queued() {
+            queued = true;
+            break;
+        }
+        assert!(
+            matches!(&response, Response::Error(e) if e.as_ref() == b"OOM transaction buffer limit exceeded"),
+            "got {response:?}"
+        );
+        assert_eq!(other.command(&["DISCARD"]).await, Response::ok());
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        queued,
+        "the dropped connection's transaction bytes were never released"
+    );
+    let response = other.command(&["EXEC"]).await;
+    assert!(
+        matches!(&response, Response::Array(r) if r.len() == 1),
+        "got {response:?}"
+    );
+    assert_eq!(
+        other.command(&["GET", "txnbudget:dropped"]).await,
+        Response::Bulk(None),
+        "the dropped connection's MULTI must not have run"
+    );
+
+    server.shutdown().await;
+}
+
+// FM-PERSISTENCE-062
+/// The `TxnBuffering` budget is a shard budget like every other: its limit row
+/// is published per shard, and it reports the configured `txn-buffer-limit`.
+/// The gauge is sampled on the memory-metrics tick, so this pins the boot-time
+/// value rather than a `CONFIG SET` (whose effect on the budget itself is
+/// pinned by the refusal tests above).
+#[tokio::test]
+async fn test_txn_buffering_budget_row_is_published_per_shard() {
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+    let response = client.command(&["CONFIG", "GET", "txn-buffer-limit"]).await;
+    let configured = match response {
+        Response::Array(ref pair) if pair.len() == 2 => match &pair[1] {
+            Response::Bulk(Some(v)) => std::str::from_utf8(v).unwrap().parse::<f64>().unwrap(),
+            other => panic!("CONFIG GET txn-buffer-limit value, got {other:?}"),
+        },
+        other => panic!("CONFIG GET txn-buffer-limit, got {other:?}"),
+    };
+    assert_eq!(configured, frogdb_memory::defaults::TXN_BUFFER_BYTES as f64);
+
+    let metrics = server.fetch_metrics().await;
+    let limit = frogdb_telemetry::testing::get_gauge(
+        &metrics,
+        "frogdb_memory_budget_limit_bytes",
+        &[("shard", "0"), ("subsystem", "txn_buffering")],
+    );
+    assert_eq!(
+        limit, configured,
+        "the shard broker must publish the TxnBuffering budget at the configured limit"
+    );
+
+    server.shutdown().await;
+}

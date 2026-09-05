@@ -160,7 +160,8 @@ pub struct TxnSummary {
     /// When MULTI was issued, for duration metrics.
     pub start_time: Option<std::time::Instant>,
     /// The queued commands' bytes, held against the home core's
-    /// `TxnBuffering` budget until EXEC has its reply (released on drop).
+    /// `TxnBuffering` budget until EXEC hands the batch to its shard, which
+    /// charges it itself from there (released on drop).
     pub charge: Option<Charge>,
 }
 
@@ -487,6 +488,40 @@ mod tests {
         assert_eq!(budget.charged(), 0);
         assert_eq!(budget.refusals(), 0);
         assert!(budget.peak() >= expected);
+    }
+
+    // FM-TXN-054
+    #[test]
+    fn an_open_multi_shows_its_queued_bytes_in_the_brokers_breakdown() {
+        use frogdb_memory::MemoryBroker;
+
+        // The budget the connection charges is the shard's own, adopted by
+        // the shard's broker — so the queued bytes are visible wherever the
+        // broker is read (MEMORY STATS, the budget gauges).
+        let mut broker = MemoryBroker::detached(0);
+        let budget = roomy();
+        broker.adopt(budget.clone());
+        let a = sized(b"SET", 300);
+        let b = sized(b"SET", 500);
+        let expected = a.retained_bytes() + b.retained_bytes();
+
+        let mut t = TransactionState::default();
+        t.begin(&budget).unwrap();
+        t.push_queued_command(a).unwrap();
+        t.push_queued_command(b).unwrap();
+        let row = broker.breakdown();
+        let row = row.get(Subsystem::TxnBuffering);
+        assert_eq!(row.charged_bytes, expected);
+        assert_eq!(broker.total_charged_bytes(), expected);
+
+        t.discard().expect("open");
+        assert_eq!(
+            broker
+                .breakdown()
+                .get(Subsystem::TxnBuffering)
+                .charged_bytes,
+            0
+        );
     }
 
     // FM-TXN-001

@@ -148,11 +148,15 @@ pub async fn execute_transaction<H: TxnHost + ?Sized>(
     } = summary;
     let queued_count = queue.len();
     // The queued bytes stay charged against the home core's `TxnBuffering`
-    // budget for as long as this frame holds the queue: every return below
-    // drops the guard, so the release is exactly "EXEC has its reply"
+    // budget while this frame is still deciding whether the batch reaches a
+    // shard at all: every early return below drops the guard. It is released
+    // explicitly just before the target shard's round trip — the shard charges
+    // the batch itself (FM-PERSISTENCE-062), and both charges land on the same
+    // budget when the connection is pinned to its home core, so holding the
+    // queue-time guard across the round trip would count the same bytes twice
     // (FM-TXN-054). Bound to a local rather than left inside `summary` so the
     // destructure above cannot silently drop it early.
-    let _charge = charge;
+    let charge = charge;
 
     // Check if we should abort due to queuing errors
     if exec_abort {
@@ -369,6 +373,12 @@ pub async fn execute_transaction<H: TxnHost + ?Sized>(
             Err((outcome, reply)) => return (outcome, vec![reply]),
         }
     }
+
+    // Hand the bytes over to the shard's accounting: from here the batch is
+    // the shard's to hold, and it charges its own `TxnBuffering` budget before
+    // staging (FM-PERSISTENCE-062). Same reasoning as the replica's release
+    // before `apply_group`.
+    drop(charge);
 
     // Execute shard commands (may be empty if all commands are connection-level)
     let shard_results = if shard_commands.is_empty() {
