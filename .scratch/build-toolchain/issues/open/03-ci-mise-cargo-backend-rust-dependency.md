@@ -1,6 +1,6 @@
 # 03 — CI mise step still red: `cargo:` backend demands a mise-managed `rust`; the 2026.8.16 pin from 02 does not help
 
-Status: needs-triage
+Status: ready-for-agent
 
 ## Summary
 
@@ -59,6 +59,40 @@ exercise the check, so it cannot be used as the probe.
    + rustup only) and `just sync-toolchain-check` loses its second operand.
 4. **Add `rust` to `install_args`.** Rejected already by the `RUST_TOOLCHAIN` rationale
    (mise's rust + `Swatinem/rust-cache` on self-hosted runners).
+
+## Decision (D4)
+
+Option 1. `MISE_DISABLE_TOOLS=rust` on every CI mise step; drop the `MISE_VERSION` pin.
+
+## What to build
+
+- `.github/workflows/workflow_gen/src/workflow_gen/helpers.py`:
+  - `mise_setup_step()` emits `env: {MISE_DISABLE_TOOLS: rust}` on the `jdx/mise-action` step
+    (`Step.env`), for every caller — jobs that install no `cargo:` tool are unaffected by it.
+  - Remove `MISE_VERSION` and the `version:` key from the step's `with:`. Replace the pin
+    comment with a short one explaining the env var: mise ≥ 2026.8.11 refuses to install a
+    `cargo:` tool while `.mise.toml` declares a `rust` that mise did not install; CI installs
+    Rust with `dtolnay/rust-toolchain` after this step (see `RUST_TOOLCHAIN`), so `rust` is
+    hidden from mise here and the `cargo:` backend uses the runner's PATH cargo. Point at
+    this issue.
+- `just workflow-gen` to regenerate every workflow; `just workflow-gen-check` clean.
+- `.github/workflows/test-unit-tests-testbox.yml` (hand-written, `MANUAL_WORKFLOWS` in
+  `render.py`): same env on its mise step, `version:` line and its pin comment removed.
+- Nothing in `.mise.toml`, `Justfile`, or the rust-toolchain steps changes.
+
+## Acceptance criteria
+
+- [ ] every generated workflow's `Set up mise toolchain` step carries `env: MISE_DISABLE_TOOLS: rust` and no `version:` key (`grep -c "MISE_DISABLE_TOOLS" .github/workflows/*.yml` matches the count of mise steps; `grep -L` finds none without it)
+- [ ] `test-unit-tests-testbox.yml` matches by hand
+- [ ] `just workflow-gen-check`, `just generate-check`, `just lint-gates` green
+- [ ] `MISE_VERSION` no longer exists in the generator; `grep -rn "2026.8.16" .github/` is empty
+- [ ] local proof in the report: with a mise ≥ 2026.8.11 binary, an empty `MISE_DATA_DIR`, and this repo's `.mise.toml`, `MISE_DISABLE_TOOLS=rust mise install just cargo:cargo-deny --dry-run` lists both tools and `mise install` without the env fails with the dependency error (the real install is not required — it compiles cargo-deny)
+
+## Files likely touched
+
+- `.github/workflows/workflow_gen/src/workflow_gen/helpers.py`
+- `.github/workflows/*.yml` (regenerated)
+- `.github/workflows/test-unit-tests-testbox.yml`
 
 ## Affects
 

@@ -1,6 +1,6 @@
 # 01 — `just cross-build` is broken: usearch/simsimd rejects zig's C++ driver
 
-Status: needs-triage
+Status: ready-for-agent
 
 ## Summary
 
@@ -78,3 +78,60 @@ Observed 2026-09-02 on darwin 25.5.0 (Apple Silicon), cargo-zigbuild 0.22.1, tar
 No CI job or lint catches this. `lint-ship-cmd-full` checks that shipping recipes *ask for*
 `cmd-full`; it does not check that the resulting build succeeds. A smoke job that runs
 `just cross-build` would have caught it at the commit that introduced it.
+
+## Investigation 2026-09-04 (experiments on `cargo zigbuild -p usearch --target x86_64-unknown-linux-gnu`)
+
+Two independent zig quirks, both absent under the Docker builder's native clang:
+
+1. zig's `c++` driver wrapper rejects `-std=c++17` for the C unit `simsimd/c/lib.c`
+   (`invalid argument '-std=c++17' not allowed with 'C'`). `CXXFLAGS="-x c++"` makes the
+   driver treat the unit as C++ and the error goes away.
+2. With that fixed, zig 0.15.2 (clang 20) passes an explicit `-evex512` target feature, and
+   simsimd 6.5's AVX-512 `target` attributes (`SKYLAKE`/`ICE`/`GENOA`/`SAPPHIRE`) do not add
+   it back, so every AVX-512 probe fails and `build.rs` peels targets until it panics.
+   `-mevex512` restores the feature.
+
+Results:
+
+| usearch | flags | outcome |
+|---|---|---|
+| 2.24.0 | none | `-std=c++17` error, six retries, panic (the report above) |
+| 2.24.0 | `CXXFLAGS="-x c++"` | past the driver error; `evex512` attribute errors |
+| 2.24.0 | `CXXFLAGS="-x c++ -mevex512"` | **builds**, 2m02s, no SIMD targets peeled |
+| 2.26.2 (numkong 7.8.2) | none | numkong probes fail `evex512`, `sapphireamx.h` hard-fails |
+| 2.26.2 | `-mevex512` in CXXFLAGS and CFLAGS | still fails (`popcnt` attribute, diamond probe) |
+
+So options 1–3 above are dead ends (upstream 2.26 is worse under zig; no `cc` bump is
+involved — the driver selection is zig's) and option 4 leaves the shipping recipes broken.
+
+## Decision (D3)
+
+Fix at the recipe: target-scoped env on the two `cargo zigbuild` invocations so nothing else
+(the Docker builder, native builds, `just check`) sees the flags. Not `.cargo/config.toml`
+(the Docker builder's older clang has no `-mevex512`).
+
+## What to build
+
+- `Justfile` `cross-build`: prefix the existing zigbuild line (unchanged otherwise) with
+  `CXXFLAGS_x86_64_unknown_linux_gnu="-x c++ -mevex512"`.
+- `Justfile` `cross-build-arm`: prefix the existing zigbuild line with
+  `CXXFLAGS_aarch64_unknown_linux_gnu="-x c++"`.
+  (aarch64 has no AVX-512; verify whether the `-x c++` half alone suffices there, and if the
+  aarch64 build needs anything further, report it rather than guessing.)
+- A recipe comment of one or two lines above each naming the two zig quirks and why the env
+  is target-scoped; point at this issue.
+- Any doc that shows the raw `cargo zigbuild` line (grep `zigbuild` under `website/` and
+  `docs/`) updated to match if it would otherwise mislead.
+
+## Acceptance criteria
+
+- [ ] `just cross-build` succeeds on a macOS Apple Silicon host with cargo-zigbuild 0.22.1 / zig from `.mise.toml`, and `just cross-verify` reports a Linux x86-64 ELF
+- [ ] `just cross-build-arm` succeeds on the same host (aarch64 ELF under `target/aarch64-unknown-linux-gnu/release/`)
+- [ ] `usearch`'s build log shows no `SIMSIMD_TARGET_*` peeling (the six-retry loop does not run)
+- [ ] no change to `.cargo/config.toml`, `Cargo.toml`, or the Docker builder
+- [ ] `just lint-gates` green (`lint-ship-cmd-full` still sees `cmd-full` on both recipes)
+
+## Files likely touched
+
+- `Justfile` (`cross-build`, `cross-build-arm`)
+- docs mentioning the raw zigbuild invocation, if any
