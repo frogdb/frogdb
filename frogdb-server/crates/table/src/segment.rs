@@ -55,6 +55,9 @@ struct SegmentHeader {
     last_touch: u16,
     /// Intrusive 2Q links, as *indices* into `Table::segments` and never
     /// pointers — that vector reallocates as the table grows.
+    ///
+    /// A queue runs head (hottest) to tail (coldest), so `q_prev` points at the
+    /// warmer neighbour and `q_next` at the colder one.
     q_prev: u32,
     q_next: u32,
     /// Lookups that found their key in this segment, and lookups that routed

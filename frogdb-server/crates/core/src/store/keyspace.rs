@@ -156,10 +156,17 @@ pub(super) trait Keyspace {
     /// `epoch` is a coarse tick from the clock seam. Backends that age their
     /// ordering use it; ones that do not ignore it. It is a parameter rather
     /// than a clock read so the container never has a clock of its own.
+    ///
+    /// `volatile_only` is the one axis `accept` varies on that a backend may
+    /// need to *remember* — a closure is opaque, so a backend caching "this
+    /// walk found nothing" cannot otherwise tell whether the next caller is
+    /// asking the same question. It is a hint for that cache and nothing else:
+    /// confinement is still applied by `accept`, per entry.
     fn cold_candidates(
         &mut self,
         want: usize,
         epoch: u16,
+        volatile_only: bool,
         accept: impl Fn(&Entry) -> bool,
     ) -> Option<Vec<Bytes>>;
 }

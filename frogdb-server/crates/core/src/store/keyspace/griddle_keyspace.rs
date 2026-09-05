@@ -135,6 +135,7 @@ impl Keyspace for GriddleKeyspace {
         &mut self,
         _want: usize,
         _epoch: u16,
+        _volatile_only: bool,
         _accept: impl Fn(&Entry) -> bool,
     ) -> Option<Vec<Bytes>> {
         None

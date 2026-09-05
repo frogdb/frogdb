@@ -119,6 +119,9 @@ pub struct Table<V, const N: usize = SLOTS_PER_BUCKET> {
     /// The 2Q queue endpoints. The links themselves live in the segment
     /// headers; see [`crate::evict`].
     queues: Queues,
+    /// Bumped by every operation that can change what is in the table or what
+    /// an eviction policy would accept. See [`Table::generation`].
+    generation: u64,
 }
 
 impl<V, const N: usize> Table<V, N> {
@@ -138,6 +141,7 @@ impl<V, const N: usize> Table<V, N> {
             hasher: TableHasher::new(seed),
             stats: TableStats::default(),
             queues: Queues::new(),
+            generation: 0,
         };
         table
             .queues
@@ -174,6 +178,25 @@ impl<V, const N: usize> Table<V, N> {
     /// Split and directory counters.
     pub fn stats(&self) -> TableStats {
         self.stats
+    }
+
+    /// A counter that changes whenever the table's contents might have.
+    ///
+    /// The point is negative caching: a caller that walked the whole cold
+    /// ordering and found nothing it could take ([`Table::cold_candidates`]
+    /// returning zero) may remember this number and skip the next walk while it
+    /// is unchanged, because nothing has happened that could make a key
+    /// eligible. `insert`, `remove` and `clear` bump it, and so does `get_mut`
+    /// — that is how a TTL is added or dropped, and how a spilled value comes
+    /// back, each of which changes what a policy accepts.
+    ///
+    /// Deliberately *not* bumped by [`Table::get`]: a read cannot change
+    /// eligibility, and the read path is the one place this must cost nothing.
+    /// Bumped conservatively — handing out `&mut V` counts as a change whether
+    /// or not the caller writes through it — so the counter can be trusted for
+    /// invalidation and never for equality of content.
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// Bytes the structure itself costs: segments at their allocator size class
@@ -238,6 +261,11 @@ impl<V, const N: usize> Table<V, N> {
     /// [`Table::get`] does.
     #[inline]
     pub fn get_mut(&mut self, key: &[u8]) -> Option<&mut V> {
+        // Handing out `&mut V` is a possible change of eviction eligibility —
+        // a TTL set or cleared, a value rehydrated from the warm tier — and the
+        // table cannot see through the reference to tell. See
+        // [`Table::generation`].
+        self.generation = self.generation.wrapping_add(1);
         let hash = self.hasher.hash(key);
         let si = self.directory[self.dir_index(hash)] as usize;
         let seg = &mut self.segments[si];
@@ -261,6 +289,7 @@ impl<V, const N: usize> Table<V, N> {
 
     /// Inserts or replaces, returning the value that was there.
     pub fn insert(&mut self, key: &[u8], value: V) -> Option<V> {
+        self.generation = self.generation.wrapping_add(1);
         let hash = self.hasher.hash(key);
         let (fp, r) = (fingerprint(hash), route(hash));
 
@@ -306,6 +335,7 @@ impl<V, const N: usize> Table<V, N> {
 
     /// Removes `key`, returning the value it held.
     pub fn remove(&mut self, key: &[u8]) -> Option<V> {
+        self.generation = self.generation.wrapping_add(1);
         let hash = self.hasher.hash(key);
         let si = self.directory[self.dir_index(hash)] as usize;
         let slot = self.segments[si].remove(fingerprint(hash), route(hash), key)?;
@@ -315,6 +345,7 @@ impl<V, const N: usize> Table<V, N> {
 
     /// Drops every entry, keeping the seed so behaviour stays reproducible.
     pub fn clear(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
         self.directory = vec![0];
         self.segments = vec![Segment::alloc(0)];
         self.global_depth = 0;
@@ -464,7 +495,13 @@ impl<V, const N: usize> Table<V, N> {
 
     // ----- 2Q eviction (see [`crate::evict`]) --------------------------------
 
-    /// Nominates up to `want` eviction candidates, coldest segment first.
+    /// Nominates up to `want` eviction candidates from the coldest segment that
+    /// has any.
+    ///
+    /// The walk stops at the first segment that yields something rather than
+    /// gathering `want` across segments: one segment holds ~819 slots, so a
+    /// caller asking for a handful is served from one of them, and stopping
+    /// early keeps a refused write from touching every header.
     ///
     /// Feeds each nominee's key to `out` and returns how many it produced.
     /// **Nothing is removed**: the caller owns removal, because in the server
@@ -510,9 +547,11 @@ impl<V, const N: usize> Table<V, N> {
                 }
                 budget -= 1;
                 // Read the link before touching the segment: reconciling or
-                // retiring it can unlink it, and the colder neighbour stays in
-                // this queue either way.
-                let colder = self.segments[si as usize].q_prev();
+                // retiring it can unlink it, and the warmer neighbour stays in
+                // this queue either way. The walk runs tail (coldest) toward
+                // head (hottest), which is `q_prev` — `q_next` points at the
+                // colder side (see [`crate::evict::Queues`]).
+                let warmer = self.segments[si as usize].q_prev();
                 if !self.reconcile(si, queue, epoch) {
                     let produced = self.nominate_from(si, want, &accept, &mut out);
                     if produced > 0 {
@@ -520,7 +559,7 @@ impl<V, const N: usize> Table<V, N> {
                     }
                     self.retire_victim(si);
                 }
-                match colder {
+                match warmer {
                     NIL => break,
                     next => si = next,
                 }
@@ -1433,6 +1472,40 @@ mod tests {
         }
         assert_eq!(t.len(), before, "a refused walk must not disturb the table");
         assert_queue_invariants(&t);
+    }
+
+    /// The negative cache the keyspace builds on: reads leave the generation
+    /// alone, everything that can change what a policy accepts moves it.
+    // FM-MEMORY-007
+    #[test]
+    fn only_a_possible_change_of_contents_moves_the_generation() {
+        let mut t = evict_table();
+        fill_evict(&mut t, 100);
+
+        let after_fill = t.generation();
+        assert!(t.get(b"k:1").is_some());
+        assert!(t.get(b"absent").is_none());
+        assert!(!t.contains_key(b"absent"));
+        assert_eq!(
+            t.generation(),
+            after_fill,
+            "a read cannot change eligibility and must not invalidate the cache"
+        );
+
+        assert!(t.get_mut(b"k:1").is_some());
+        let after_get_mut = t.generation();
+        assert_ne!(after_get_mut, after_fill, "get_mut hands out a change");
+
+        t.insert(b"k:1", 9);
+        let after_insert = t.generation();
+        assert_ne!(after_insert, after_get_mut, "insert changes contents");
+
+        t.remove(b"k:1");
+        let after_remove = t.generation();
+        assert_ne!(after_remove, after_insert, "remove changes contents");
+
+        t.clear();
+        assert_ne!(t.generation(), after_remove, "clear changes contents");
     }
 
     /// A constant epoch is legal — it freezes promotion, never nomination.

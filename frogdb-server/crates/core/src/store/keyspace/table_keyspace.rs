@@ -34,11 +34,23 @@ use super::{Entry, KeyRef, Keyspace};
 
 pub(in crate::store) struct TableKeyspace {
     data: Table<Box<Entry>>,
+    /// The last victim walk that came back empty, as the question it answered:
+    /// `(volatile_only, Table::generation)`.
+    ///
+    /// A shard over its limit with nothing evictable refuses every write, and
+    /// each refusal would otherwise re-walk every segment header — O(segments)
+    /// per rejected command, ~65 k of them per GiB. Nothing but a mutation can
+    /// make a key eligible, so the same question at the same generation has the
+    /// same answer and is not worth asking twice.
+    fruitless_walk: Option<(bool, u64)>,
 }
 
 impl Keyspace for TableKeyspace {
     fn new() -> Self {
-        TableKeyspace { data: Table::new() }
+        TableKeyspace {
+            data: Table::new(),
+            fruitless_walk: None,
+        }
     }
 
     fn len(&self) -> usize {
@@ -108,21 +120,116 @@ impl Keyspace for TableKeyspace {
     ///
     /// The keys come back copied, as everything that leaves this backend does:
     /// a table slot holds a packed word, not a `Bytes`.
+    ///
+    /// A walk that finds nothing is remembered (see `fruitless_walk`) so that a
+    /// shard refusing write after write against an unevictable keyspace pays
+    /// the queue walk once, not once per refusal. `Some(vec![])` — never `None`
+    /// — is the answer either way: `None` at this seam means "no cold ordering,
+    /// go and sample", and a cache hit must not silently change backend.
     fn cold_candidates(
         &mut self,
         want: usize,
         epoch: u16,
+        volatile_only: bool,
         accept: impl Fn(&Entry) -> bool,
     ) -> Option<Vec<Bytes>> {
+        let generation = self.data.generation();
+        if self.fruitless_walk == Some((volatile_only, generation)) {
+            return Some(Vec::new());
+        }
         let mut keys = Vec::with_capacity(want.min(self.data.len()));
         self.data.cold_candidates(
             want,
             epoch,
             // The table stores `Box<Entry>`, so the predicate it hands us takes
             // a `&Box<Entry>`; the deref coercion is what reaches `accept`.
+            //
+            // Expired-but-present entries are *not* filtered here, unlike in
+            // `scan`: nominating one reports it as `evicted` rather than
+            // `expired`, a small observability divergence, but skipping it
+            // would leave keys the expiry cycle has not reached yet
+            // unreclaimable while the shard is under pressure. Lazy expiry
+            // frees the same bytes either way.
             |entry| accept(entry),
             |key| keys.push(Bytes::copy_from_slice(key)),
         );
+        // Only a fruitless walk is worth remembering: a walk that produced
+        // something has already changed what the next one should see, because
+        // the caller deletes what it was handed.
+        self.fruitless_walk = keys.is_empty().then_some((volatile_only, generation));
         Some(keys)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use super::*;
+
+    fn keyspace_of(keys: usize) -> TableKeyspace {
+        let mut ks = TableKeyspace::new();
+        for i in 0..keys {
+            ks.insert(Bytes::from(format!("k:{i}")), Entry::hot_for_test());
+        }
+        ks
+    }
+
+    /// A walk that returns nothing costs a queue walk; repeating the same
+    /// question must not.
+    // FM-MEMORY-007
+    #[test]
+    fn a_second_refusal_at_an_unchanged_keyspace_does_not_walk_again() {
+        let mut ks = keyspace_of(4_000);
+        let asked = Cell::new(0usize);
+        // Nothing is acceptable, which is what a shard over its limit under
+        // `volatile-*` with no TTL'd keys looks like.
+        let refuse_everything = |ks: &mut TableKeyspace| {
+            asked.set(0);
+            let taken = ks.cold_candidates(8, 0, false, |_| {
+                asked.set(asked.get() + 1);
+                false
+            });
+            assert_eq!(taken, Some(Vec::new()), "nothing is acceptable");
+            asked.get()
+        };
+
+        let first = refuse_everything(&mut ks);
+        assert!(first > 0, "the first refusal has to look at the keyspace");
+        assert_eq!(
+            refuse_everything(&mut ks),
+            0,
+            "the same question at the same generation is answered from the memo"
+        );
+
+        // A mutation can make a key eligible, so the memo has to lapse.
+        assert!(ks.get_mut(b"k:1").is_some());
+        assert!(
+            refuse_everything(&mut ks) > 0,
+            "a mutation reopens the question"
+        );
+    }
+
+    /// The memo answers one question, not any question: `volatile_only` picks
+    /// which entries `accept` will take, so the two variants cannot share it.
+    // FM-MEMORY-007
+    #[test]
+    fn a_refusal_under_one_confinement_does_not_answer_the_other() {
+        let mut ks = keyspace_of(4_000);
+        let asked = Cell::new(0usize);
+        let ask = |ks: &mut TableKeyspace, volatile_only: bool| {
+            asked.set(0);
+            ks.cold_candidates(8, 0, volatile_only, |_| {
+                asked.set(asked.get() + 1);
+                false
+            });
+            asked.get()
+        };
+
+        assert!(ask(&mut ks, true) > 0);
+        assert!(
+            ask(&mut ks, false) > 0,
+            "a different confinement is a different question"
+        );
     }
 }

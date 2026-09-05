@@ -58,6 +58,21 @@ impl Entry {
         matches!(self.location, ValueLocation::Hot(_))
     }
 
+    /// A hot, persistent, empty-string entry.
+    ///
+    /// For tests of the keyspace *container* — which key the backend nominates
+    /// as coldest, how many times it asks — where the value inside the entry is
+    /// beside the point. `Entry`'s fields are private to this module, so a
+    /// backend test in a sibling module cannot spell one out.
+    #[cfg(test)]
+    pub(in crate::store) fn hot_for_test() -> Entry {
+        Entry {
+            location: ValueLocation::Hot(Arc::new(Value::string(Bytes::new()))),
+            metadata: KeyMetadata::new(0),
+            key_type: KeyType::String,
+        }
+    }
+
     /// Memory size of this entry for accounting purposes.
     /// Warm entries contribute zero value bytes (value is on disk).
     fn memory_size(&self, key: &[u8]) -> usize {
@@ -1617,13 +1632,14 @@ impl Store for HashMapStore {
         let epoch = crate::clock::system_now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |since| since.as_secs() as u16);
-        self.data.cold_candidates(count, epoch, |entry| {
-            // Warm entries are already spilled, so evicting one frees nothing.
-            // A `volatile-*` policy additionally takes only TTL'd keys, applied
-            // per entry rather than per segment: a segment mixing TTL'd and
-            // persistent keys yields the TTL'd ones and keeps the rest.
-            entry.is_hot() && (!volatile_only || entry.metadata.expires_at.is_some())
-        })
+        self.data
+            .cold_candidates(count, epoch, volatile_only, |entry| {
+                // Warm entries are already spilled, so evicting one frees nothing.
+                // A `volatile-*` policy additionally takes only TTL'd keys, applied
+                // per entry rather than per segment: a segment mixing TTL'd and
+                // persistent keys yields the TTL'd ones and keeps the rest.
+                entry.is_hot() && (!volatile_only || entry.metadata.expires_at.is_some())
+            })
     }
 
     fn get_metadata(&self, key: &[u8]) -> Option<KeyMetadata> {

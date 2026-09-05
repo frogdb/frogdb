@@ -21,6 +21,9 @@
 //!    interleaved with the growth and churn above, and every key it hands back
 //!    must be present, inside the caller's candidate set, and distinct within
 //!    the call — the caller deletes what it is handed, so a repeat is a bug.
+//! 5. **A refusal is stable.** A walk that found nothing, repeated against an
+//!    unmutated table, finds nothing again — the property the store's negative
+//!    cache rests on.
 //!
 //! Growth is real, not simulated: the op stream inserts enough keys to push the
 //! table through several directory doublings, so splits happen mid-scan rather
@@ -238,6 +241,21 @@ fuzz_target!(|input: Input| {
                     nominated.len(),
                     "one call nominated the same key twice: {nominated:?}"
                 );
+
+                if produced == 0 {
+                    // A refusal is stable while the table is not mutated, which
+                    // is what lets the store answer the *next* refusal from a
+                    // memo instead of re-walking the queues
+                    // (`TableKeyspace::fruitless_walk`). Nothing has changed
+                    // since the call above — the nominee loop below is what
+                    // mutates, and it has nothing to do — so asking again with
+                    // the same epoch and the same candidate set must come back
+                    // empty too.
+                    let again = t.cold_candidates(want, *epoch, accept, |k| {
+                        panic!("a repeated walk nominated {k:?} after finding nothing")
+                    });
+                    assert_eq!(again, 0, "a refusal was not stable across a repeat");
+                }
 
                 for k in &nominated {
                     let expected = model.get(k).copied().unwrap_or_else(|| {
