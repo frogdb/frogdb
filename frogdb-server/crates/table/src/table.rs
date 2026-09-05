@@ -1410,7 +1410,7 @@ mod tests {
     fn confinement_nominates_only_what_the_policy_may_take() {
         let mut t = evict_table();
         fill_evict(&mut t, 20_000);
-        let eligible = |v: &u64| v % 10 == 0;
+        let eligible = |v: &u64| v.is_multiple_of(10);
 
         let got = take(&mut t, 64, 1, eligible);
         assert!(!got.is_empty(), "one key in ten was eligible");
