@@ -976,6 +976,64 @@ mod eviction_effect_tests {
         );
     }
 
+    /// What the verdict is measured against, pinned at its boundary.
+    ///
+    /// `is_over_memory_limit` compares this shard's per-shard limit against
+    /// `Store::memory_used()` — the running sum of `Entry::memory_size()`, the
+    /// keyspace's own accounted contents — and not against RSS, not against the
+    /// process's allocator figures, and not against the per-shard arena sample
+    /// the broker publishes (FM-MEMORY-008). Because that figure is exact with
+    /// respect to what the store accounts for, the boundary is exact too: the
+    /// comparison is `>`, so sitting exactly at the limit is inside it. And a
+    /// `maxmemory` of 0 is "no limit" however much the shard holds, which is
+    /// the short-circuit ahead of the read.
+    // FM-MEMORY-004
+    #[tokio::test]
+    async fn the_verdict_binds_to_the_accounted_contents_at_an_exact_boundary() {
+        let metrics = Arc::new(RecordingRecorder::default());
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut w = worker_with_metrics(bc as SharedBroadcaster, metrics.clone());
+
+        fill(&mut w, 8);
+        let used = w.store.memory_used() as u64;
+        assert!(used > 0, "the store must account for the keys it holds");
+
+        // Exactly at the limit is *inside* it.
+        w.eviction.update_config(
+            crate::eviction::EvictionConfig::new(used, EvictionPolicy::NoEviction),
+            1,
+        );
+        assert!(
+            w.check_memory_for_write().await.is_ok(),
+            "a shard holding exactly `maxmemory` bytes is not over its limit"
+        );
+        assert_eq!(present(&w, 8), 8);
+        assert_eq!(metrics.counter_value(EvictionOomTotal::NAME), None);
+
+        // One byte below what it holds is over.
+        w.eviction.update_config(
+            crate::eviction::EvictionConfig::new(used - 1, EvictionPolicy::NoEviction),
+            1,
+        );
+        assert!(
+            matches!(
+                w.check_memory_for_write().await,
+                Err(CommandError::OutOfMemory)
+            ),
+            "one accounted byte past the limit is over it"
+        );
+
+        // `maxmemory 0` is no limit at all, not a limit of zero.
+        w.eviction.update_config(
+            crate::eviction::EvictionConfig::new(0, EvictionPolicy::NoEviction),
+            1,
+        );
+        assert!(
+            w.check_memory_for_write().await.is_ok(),
+            "an unconfigured `maxmemory` never refuses, whatever the shard holds"
+        );
+    }
+
     /// Confinement, at the driver: a `volatile-*` policy against a keyspace of
     /// persistent keys frees nothing and refuses the write, rather than
     /// reaching outside its candidate set.

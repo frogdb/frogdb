@@ -378,6 +378,13 @@ impl Charge {
 
     /// Release the whole allowance now. Identical to dropping it; spelled out
     /// where the release is the point of the statement.
+    ///
+    /// Every mutation of this body is an equivalent mutant, and deliberately
+    /// so: the method takes `self` by value, so the allowance is returned by
+    /// the drop at the end of the scope whether or not the body names it. The
+    /// explicit `drop` is documentation at the call site — "the release is the
+    /// point of this statement" — not the mechanism. `Drop for Charge` below
+    /// is the mechanism, and it is forced by `explicit_release_matches_drop`.
     pub fn release(self) {
         drop(self);
     }
@@ -385,6 +392,13 @@ impl Charge {
 
 impl Drop for Charge {
     fn drop(&mut self) {
+        // Relaxing this `>` to `>=` is an equivalent mutant: `bytes` is a
+        // `u64`, so the added case is exactly `bytes == 0`, and `give_back(0)`
+        // is a `saturating_sub(0)` that moves no counter. The guard is here to
+        // skip the atomic on the common zero-byte drop, not to protect
+        // correctness. The *strictness* that does matter — that a nonzero
+        // charge is always returned — is forced by
+        // `charge_succeeds_under_limit_and_is_refused_over_it`.
         if self.bytes > 0 {
             self.budget.give_back(self.bytes);
         }
@@ -507,5 +521,94 @@ mod tests {
             assert_eq!(Subsystem::ALL[s.index()], s, "index() disagrees with ALL");
         }
         assert_eq!(seen.len(), Subsystem::ALL.len());
+    }
+
+    /// The label set is an operator-visible contract — these strings appear in
+    /// `frogdb_memory_budget_*` metric labels, `INFO` fields and log lines — so
+    /// the exact spellings are pinned here rather than left to whatever
+    /// `as_str` happens to return. `Display` is asserted alongside `as_str`
+    /// because the log lines and the `Refused` message go through it, and a
+    /// `Display` that stopped agreeing with `as_str` would rename a label in
+    /// half the places it appears.
+    // FM-MEMORY-002
+    #[test]
+    fn subsystem_and_disposition_labels_are_the_operator_facing_names() {
+        let expected = [
+            (Subsystem::NetworkOutput, "network_output"),
+            (Subsystem::ReplicationBacklog, "replication_backlog"),
+            (Subsystem::ClientTracking, "client_tracking"),
+            (Subsystem::WalChannel, "wal_channel"),
+            (Subsystem::FullsyncStaging, "fullsync_staging"),
+            (Subsystem::TxnBuffering, "txn_buffering"),
+            (Subsystem::Persistence, "persistence"),
+        ];
+        assert_eq!(
+            expected.len(),
+            Subsystem::ALL.len(),
+            "a new subsystem needs its stable label pinned here too"
+        );
+        for (subsystem, label) in expected {
+            assert_eq!(subsystem.as_str(), label);
+            assert_eq!(subsystem.to_string(), label, "Display must match as_str");
+        }
+
+        assert_eq!(Disposition::Shed.as_str(), "shed");
+        assert_eq!(Disposition::Shed.to_string(), "shed");
+        assert_eq!(Disposition::Backpressure.as_str(), "backpressure");
+        assert_eq!(Disposition::Backpressure.to_string(), "backpressure");
+    }
+
+    /// A refusal is the thing an operator reads when a subsystem stops growing,
+    /// so its message has to name all four of the numbers that explain the
+    /// decision — who asked, for how much, against what, and what happens next.
+    // FM-MEMORY-002
+    #[test]
+    fn a_refusal_message_names_the_subsystem_the_bytes_and_the_disposition() {
+        let budget = Budget::new(Subsystem::TxnBuffering, Disposition::Backpressure, 100);
+        let _held = budget.charge(60).unwrap();
+        let refused = budget.charge(50).expect_err("60 + 50 > 100");
+
+        assert_eq!(
+            refused.to_string(),
+            "txn_buffering budget refused 50 bytes (60 of 100 charged); \
+             disposition: backpressure"
+        );
+    }
+
+    /// `available` is the headroom a subsystem consults before deciding how
+    /// much to ask for, so it has to track the pool rather than being a
+    /// constant — including at the two ends, where a full budget reports zero
+    /// and an untouched one reports the whole limit.
+    // FM-MEMORY-002
+    #[test]
+    fn available_counts_down_as_the_budget_fills() {
+        let budget = Budget::new(Subsystem::WalChannel, Disposition::Backpressure, 100);
+        assert_eq!(
+            budget.available(),
+            100,
+            "an untouched budget is all headroom"
+        );
+
+        let held = budget.charge(30).unwrap();
+        assert_eq!(budget.available(), 70);
+
+        let more = budget.charge(70).unwrap();
+        assert_eq!(budget.available(), 0, "a full budget has no headroom left");
+
+        drop(more);
+        assert_eq!(budget.available(), 70, "releasing gives the headroom back");
+        drop(held);
+        assert_eq!(budget.available(), 100);
+    }
+
+    /// Lowering the limit under the charge is the one case where headroom
+    /// would go negative if it were a subtraction rather than a saturating one.
+    // FM-MEMORY-002
+    #[test]
+    fn available_is_zero_rather_than_negative_when_the_limit_drops_below_the_charge() {
+        let budget = Budget::new(Subsystem::FullsyncStaging, Disposition::Shed, 100);
+        let _held = budget.charge(80).unwrap();
+        budget.set_limit(50);
+        assert_eq!(budget.available(), 0);
     }
 }
