@@ -324,7 +324,8 @@ pub(crate) mod testing {
         fn set_buffered(&self, total_bytes: u64) -> FeedVerdict {
             let mut state = self.state.lock().unwrap();
             state.reports.push(total_bytes);
-            if total_bytes < self.shed_at {
+            // A zero report is a release, never a shed, matching the production account.
+            if total_bytes == 0 || total_bytes < self.shed_at {
                 return FeedVerdict::Keep;
             }
             state.over_limit_reports += 1;
@@ -531,5 +532,30 @@ mod tests {
                 "the wrapper must answer for the stream it wraps, not for itself"
             );
         }
+    }
+
+    /// A zero report is always a release, never a shed — even from a double
+    /// built with `shed_at == 0`. This is what protects the
+    /// `debug_assert!(verdict.is_ok(), ...)` in `replica_session.rs` right
+    /// after `report_feed(&self.feed, 0, "the written live dataset")`: that
+    /// assert only holds if the account it is judging behaves like the real
+    /// `FeedOutputAccount`, which shrinks the charge on a smaller report so
+    /// `set_buffered(0)` can never breach a limit.
+    #[test]
+    fn a_zero_report_is_always_kept_even_at_a_zero_limit() {
+        let account = super::testing::RecordingFeedAccount::shedding_at(0, "hard_limit");
+
+        assert_eq!(
+            account.set_buffered(0),
+            FeedVerdict::Keep,
+            "a zero report must be Keep even when shed_at is 0"
+        );
+        assert_eq!(
+            account.set_buffered(1),
+            FeedVerdict::Shed {
+                reason: "hard_limit"
+            },
+            "a genuinely over-limit report must still shed"
+        );
     }
 }
