@@ -64,6 +64,22 @@ pub struct TableStats {
 /// per-entry cost of the layout depends on how wide a slot is, and the only
 /// honest way to compare two slot widths is to build the table both ways and
 /// measure — see `tests/layout_cost.rs`.
+///
+/// A table may move to its shard thread but may never be *shared*: it is `Send`
+/// (for `V: Send`) and never `Sync`, because two threads holding `&Table` could
+/// clone the same non-atomically refcounted record at once.
+///
+/// ```compile_fail
+/// fn needs_sync<T: Sync>(_: &T) {}
+/// let t: frogdb_table::Table<Box<u64>> = frogdb_table::Table::new();
+/// needs_sync(&t);
+/// ```
+///
+/// ```compile_fail
+/// fn needs_send<T: Send>(_: T) {}
+/// let t: frogdb_table::Table<frogdb_table::ValueWord> = frogdb_table::Table::new();
+/// needs_send(t);
+/// ```
 pub struct Table<V, const N: usize = SLOTS_PER_BUCKET> {
     /// `2^global_depth` entries, each the index of the segment serving it.
     directory: Vec<u32>,
@@ -364,6 +380,19 @@ impl<V, const N: usize> Table<V, N> {
     }
 }
 
+// SAFETY: the table and every record it owns move together — no handle is left
+// behind. Its keys are `KeyWord`s, which are `!Send` so that a *single* word can
+// never cross a thread while the table keeps a co-owned record on the old one;
+// but a whole table carries every one of its words with it, so after the move
+// exactly one thread can reach any of its refcounts, which is what the plain
+// `u32` count needs. `V: Send` for the same reason at the value end: it is the
+// only part of a slot a caller can take out by value (`remove`, and the previous
+// value from `insert`), and a `Table<ValueWord>` is therefore deliberately not
+// `Send`. The one way to defeat this is to clone a `KeyWord` out of `&Slot` and
+// keep it on the sending thread; nothing in the store backend does, and no
+// `Sync` impl exists, so `&Table` still cannot be shared.
+unsafe impl<V: Send, const N: usize> Send for Table<V, N> {}
+
 impl<V, const N: usize> Default for Table<V, N> {
     fn default() -> Table<V, N> {
         Table::new()
@@ -420,6 +449,29 @@ mod tests {
             t.insert(k.as_bytes(), ValueWord::from_int(i as i64));
         }
         keys
+    }
+
+    /// The other half of the threading rule the `compile_fail` doctests pin:
+    /// a *whole* table, records and all, may move to its shard thread.
+    #[test]
+    fn a_whole_table_moves_to_its_shard_thread() {
+        fn assert_send<T: Send>() {}
+        assert_send::<Table<Box<u64>>>();
+
+        let mut t: Table<Box<u64>> = Table::new();
+        let key = b"a key far too long to inline, so it owns a record";
+        t.insert(key, Box::new(7));
+
+        // The move takes the key's record with it, so the far thread is the only
+        // one that can touch its refcount — including when the table drops there.
+        let seen = std::thread::spawn(move || {
+            let v = t.get(key).map(|b| **b);
+            drop(t);
+            v
+        })
+        .join()
+        .expect("the shard thread panicked");
+        assert_eq!(seen, Some(7));
     }
 
     #[test]

@@ -25,6 +25,7 @@
 //! own their record and free it on drop, so a slot is dropped by dropping its
 //! fields — there is no manual free path to get wrong.
 
+use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 use std::ptr::NonNull;
 
@@ -60,17 +61,37 @@ pub const fn int_fits_inline(v: i64) -> bool {
 
 /// An owning 8-byte word holding a byte string: inline when short, otherwise a
 /// pointer to a [`Record`].
+///
+/// Not `Send` and not `Sync`, because a word may own a [`Record`] whose
+/// refcount is a plain `u32`: sharing or moving a word would let two threads
+/// touch that count. The bound is on the word rather than on the record it
+/// points at, because the word holds an *address*, and an address is `Send`
+/// however the thing it points at is declared. That makes every containing
+/// type — [`crate::Slot`], [`crate::Bucket`], [`crate::Segment`],
+/// [`crate::Table`] — thread-bound too, which is the point.
+///
+/// ```compile_fail
+/// fn needs_send<T: Send>(_: T) {}
+/// needs_send(frogdb_table::KeyWord::new(b"a key long enough to allocate"));
+/// ```
 #[repr(transparent)]
-pub struct KeyWord(u64);
+pub struct KeyWord(u64, PhantomData<*mut u8>);
 
 impl KeyWord {
+    /// Wraps raw word bits. Private: outside this module a word is only ever
+    /// built from a key.
+    #[inline]
+    fn from_bits(bits: u64) -> KeyWord {
+        KeyWord(bits, PhantomData)
+    }
+
     /// Encodes `key`, allocating a record when it does not inline.
     #[inline]
     pub fn new(key: &[u8]) -> KeyWord {
         if key.len() <= INLINE_STR_MAX {
-            KeyWord(pack_inline_str(key))
+            KeyWord::from_bits(pack_inline_str(key))
         } else {
-            KeyWord(pack_record(Record::new(key)))
+            KeyWord::from_bits(pack_record(Record::new(key)))
         }
     }
 
@@ -129,11 +150,11 @@ impl Clone for KeyWord {
     /// Shares the record (an `rc` bump) rather than copying its bytes.
     fn clone(&self) -> KeyWord {
         if self.is_inline() {
-            KeyWord(self.0)
+            KeyWord::from_bits(self.0)
         } else {
             // SAFETY: as `bytes`.
             let record = unsafe { record_handle(self.0) };
-            KeyWord(pack_record(Record::clone(&record)))
+            KeyWord::from_bits(pack_record(Record::clone(&record)))
         }
     }
 }
@@ -153,17 +174,30 @@ impl std::fmt::Debug for KeyWord {
 ///
 /// This is the word R6's "inline small values" ruling is about: 59 % of
 /// `redis-feel` values and 100 % of counter values never leave it.
+///
+/// Thread-bound for the same reason as [`KeyWord`], and by the same mechanism.
+///
+/// ```compile_fail
+/// fn needs_send<T: Send>(_: T) {}
+/// needs_send(frogdb_table::ValueWord::from_bytes(b"a value long enough to allocate"));
+/// ```
 #[repr(transparent)]
-pub struct ValueWord(u64);
+pub struct ValueWord(u64, PhantomData<*mut u8>);
 
 impl ValueWord {
+    /// Wraps raw word bits. Private, as [`KeyWord::from_bits`].
+    #[inline]
+    fn from_bits(bits: u64) -> ValueWord {
+        ValueWord(bits, PhantomData)
+    }
+
     /// Encodes a byte string, inlining when it fits.
     #[inline]
     pub fn from_bytes(bytes: &[u8]) -> ValueWord {
         if bytes.len() <= INLINE_STR_MAX {
-            ValueWord(pack_inline_str(bytes))
+            ValueWord::from_bits(pack_inline_str(bytes))
         } else {
-            ValueWord(pack_record(Record::new(bytes)))
+            ValueWord::from_bits(pack_record(Record::new(bytes)))
         }
     }
 
@@ -172,9 +206,9 @@ impl ValueWord {
     #[inline]
     pub fn from_int(v: i64) -> ValueWord {
         if int_fits_inline(v) {
-            ValueWord(((v << 3) as u64) | TAG_INT)
+            ValueWord::from_bits(((v << 3) as u64) | TAG_INT)
         } else {
-            ValueWord(pack_record(Record::new(&v.to_le_bytes())))
+            ValueWord::from_bits(pack_record(Record::new(&v.to_le_bytes())))
         }
     }
 
@@ -250,11 +284,11 @@ impl Clone for ValueWord {
     /// half of COW.
     fn clone(&self) -> ValueWord {
         if self.is_inline() {
-            ValueWord(self.0)
+            ValueWord::from_bits(self.0)
         } else {
             // SAFETY: as `decode`.
             let record = unsafe { record_handle(self.0) };
-            ValueWord(pack_record(Record::clone(&record)))
+            ValueWord::from_bits(pack_record(Record::clone(&record)))
         }
     }
 }
