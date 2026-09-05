@@ -41,6 +41,7 @@
 //! addresses.
 
 use crate::bucket::Slot;
+use crate::evict::{NIL, PROMOTE_HITS, QueueId, Queues};
 use crate::hasher::{TableHasher, TableSeed, fingerprint, route};
 use crate::layout::{SEGMENT_CLASS_BYTES, SLOTS_PER_BUCKET};
 use crate::segment::{Displaced, Segment};
@@ -115,6 +116,9 @@ pub struct Table<V, const N: usize = SLOTS_PER_BUCKET> {
     len: usize,
     hasher: TableHasher,
     stats: TableStats,
+    /// The 2Q queue endpoints. The links themselves live in the segment
+    /// headers; see [`crate::evict`].
+    queues: Queues,
 }
 
 impl<V, const N: usize> Table<V, N> {
@@ -126,14 +130,19 @@ impl<V, const N: usize> Table<V, N> {
     /// An empty table with a caller-chosen seed, so a sim or a fuzz replay puts
     /// the same key in the same bucket on every run.
     pub fn with_seed(seed: TableSeed) -> Table<V, N> {
-        Table {
+        let mut table = Table {
             directory: vec![0],
             segments: vec![Segment::alloc(0)],
             global_depth: 0,
             len: 0,
             hasher: TableHasher::new(seed),
             stats: TableStats::default(),
-        }
+            queues: Queues::new(),
+        };
+        table
+            .queues
+            .push_head(&mut table.segments, 0, QueueId::A1in);
+        table
     }
 
     /// The seed this table hashes with.
@@ -206,19 +215,42 @@ impl<V, const N: usize> Table<V, N> {
     }
 
     /// The value stored under `key`.
+    ///
+    /// Also the 2Q reference the eviction policy runs on: the segment the
+    /// lookup routed to counts it, hit or miss. That is the entire cost of
+    /// eviction accounting on the read path — one non-atomic increment on a
+    /// cache line the lookup already touched, and no per-key field at all
+    /// (PRD R9).
     #[inline]
     pub fn get(&self, key: &[u8]) -> Option<&V> {
         let hash = self.hasher.hash(key);
         let seg = &self.segments[self.directory[self.dir_index(hash)] as usize];
-        seg.get(fingerprint(hash), route(hash), key)
+        let found = seg.get(fingerprint(hash), route(hash), key);
+        if found.is_some() {
+            seg.note_hit();
+        } else {
+            seg.note_miss();
+        }
+        found
     }
 
-    /// The value stored under `key`, mutably.
+    /// The value stored under `key`, mutably. Counts as a 2Q reference, as
+    /// [`Table::get`] does.
     #[inline]
     pub fn get_mut(&mut self, key: &[u8]) -> Option<&mut V> {
         let hash = self.hasher.hash(key);
         let si = self.directory[self.dir_index(hash)] as usize;
-        self.segments[si].get_mut(fingerprint(hash), route(hash), key)
+        let seg = &mut self.segments[si];
+        match seg.find(fingerprint(hash), route(hash), key) {
+            Some((b, i)) => {
+                seg.note_hit();
+                Some(seg.value_at_mut(b, i))
+            }
+            None => {
+                seg.note_miss();
+                None
+            }
+        }
     }
 
     /// Whether `key` is present.
@@ -247,6 +279,7 @@ impl<V, const N: usize> Table<V, N> {
             match self.segments[si].insert(fp, r, slot) {
                 Ok(()) => {
                     self.len += 1;
+                    self.readmit(si as u32);
                     return None;
                 }
                 Err(given_back) => {
@@ -254,6 +287,20 @@ impl<V, const N: usize> Table<V, N> {
                     self.split(di);
                 }
             }
+        }
+    }
+
+    /// Brings a ghost segment back into A1in.
+    ///
+    /// A segment in A1out is one eviction emptied. An insert is the reference
+    /// that re-admits it — 2Q's rule for a ghost, and the thing that stops a
+    /// drained segment being excluded from eviction for the rest of the table's
+    /// life. A branch on a byte the insert already wrote to.
+    #[inline]
+    fn readmit(&mut self, si: u32) {
+        if self.segments[si as usize].queue() == Some(QueueId::A1out) {
+            self.queues
+                .move_to_head(&mut self.segments, si, QueueId::A1in);
         }
     }
 
@@ -272,6 +319,11 @@ impl<V, const N: usize> Table<V, N> {
         self.segments = vec![Segment::alloc(0)];
         self.global_depth = 0;
         self.len = 0;
+        // The old segments are gone, so every link into them is too: rebuild
+        // the queues around the one segment that is left rather than trying to
+        // unlink the vector that was just dropped.
+        self.queues = Queues::new();
+        self.queues.push_head(&mut self.segments, 0, QueueId::A1in);
     }
 
     /// Splits the segment serving directory entry `di`.
@@ -301,6 +353,13 @@ impl<V, const N: usize> Table<V, N> {
 
         let high_index = u32::try_from(self.segments.len()).expect("more than 4 G segments");
         self.segments.push(high);
+
+        // The new half joins its parent's queue, one place colder. It holds
+        // half the parent's entries, so inheriting the parent's queue keeps hot
+        // data hot across a split; sitting behind rather than ahead of the
+        // parent reflects that it has no reference history of its own yet.
+        self.queues
+            .insert_after(&mut self.segments, si as u32, high_index);
 
         // Every directory entry that agrees with `di` in the low `depth` bits and
         // has bit `depth` set now belongs to the new half. They are strided, not
@@ -403,6 +462,146 @@ impl<V, const N: usize> Table<V, N> {
         self.iter().map(|s| s.key.heap_bytes()).sum()
     }
 
+    // ----- 2Q eviction (see [`crate::evict`]) --------------------------------
+
+    /// Nominates up to `want` eviction candidates, coldest segment first.
+    ///
+    /// Feeds each nominee's key to `out` and returns how many it produced.
+    /// **Nothing is removed**: the caller owns removal, because in the server
+    /// deleting a key means a keyspace notification, a metric, a WAL tombstone
+    /// and a replicated `DEL`, none of which belong to a hash table. Zero means
+    /// the table has nothing in the candidate set — the caller's cue to report
+    /// OOM rather than to ask again.
+    ///
+    /// `accept` is the policy's candidate set: `volatile-*` passes only values
+    /// that carry a TTL, `allkeys-*` passes everything. Confinement is applied
+    /// per *slot*, not per segment, so a segment mixing TTL'd and persistent
+    /// keys yields only its TTL'd ones and a segment holding none is skipped.
+    ///
+    /// `epoch` is a coarse clock tick supplied by the caller — the table never
+    /// reads a clock. It is what bounds the queue walk (see
+    /// [`crate::evict`]'s termination note); passing a constant is legal and
+    /// costs only second chances, never progress.
+    pub fn cold_candidates(
+        &mut self,
+        want: usize,
+        epoch: u16,
+        accept: impl Fn(&V) -> bool,
+        mut out: impl FnMut(&[u8]),
+    ) -> usize {
+        if want == 0 || self.len == 0 {
+            return 0;
+        }
+        // One pass per queue, tail (coldest) toward head, plus the moves the
+        // pass itself makes. A segment can be moved at most once per epoch
+        // (`reconcile` stamps `last_touch`), and only a move can put a segment
+        // back in front of the walk, so `2n` steps is the proven bound rather
+        // than a guess — spelled out here so "makes progress or reports it
+        // cannot" is a property of the code and not of an argument about it.
+        let mut budget = 2 * self.segments.len() + 2;
+        for queue in [QueueId::A1in, QueueId::Am] {
+            let Some(mut si) = self.queues.tail(queue) else {
+                continue;
+            };
+            loop {
+                if budget == 0 {
+                    debug_assert!(false, "2Q walk exceeded its step bound");
+                    return 0;
+                }
+                budget -= 1;
+                // Read the link before touching the segment: reconciling or
+                // retiring it can unlink it, and the colder neighbour stays in
+                // this queue either way.
+                let colder = self.segments[si as usize].q_prev();
+                if !self.reconcile(si, queue, epoch) {
+                    let produced = self.nominate_from(si, want, &accept, &mut out);
+                    if produced > 0 {
+                        return produced;
+                    }
+                    self.retire_victim(si);
+                }
+                match colder {
+                    NIL => break,
+                    next => si = next,
+                }
+            }
+        }
+        0
+    }
+
+    /// Acts on `si`'s reference counters, returning whether it moved.
+    ///
+    /// A1in promotes to Am on 2Q's second reference; an Am segment still being
+    /// referenced gets a second chance at the head. Both require the segment to
+    /// be answering more lookups than it deflects — a segment that is probed
+    /// constantly and answers rarely is a routing target, not hot data.
+    ///
+    /// A segment already moved in this epoch is left alone. That is what bounds
+    /// [`Table::cold_candidates`]'s walk, and it is also why passing a constant
+    /// epoch is safe: it freezes promotion, never nomination.
+    fn reconcile(&mut self, si: u32, queue: QueueId, epoch: u16) -> bool {
+        let seg = &self.segments[si as usize];
+        if seg.last_touch() == epoch {
+            return false;
+        }
+        let (hits, misses) = (seg.hits(), seg.misses());
+        let referenced = match queue {
+            QueueId::A1in => hits >= PROMOTE_HITS,
+            QueueId::Am => hits > 0,
+            // Ghosts are never selection candidates, so never reconciled.
+            QueueId::A1out => return false,
+        };
+        if !referenced || hits <= misses {
+            return false;
+        }
+        let seg = &mut self.segments[si as usize];
+        seg.set_last_touch(epoch);
+        seg.reset_counters();
+        self.queues
+            .move_to_head(&mut self.segments, si, QueueId::Am);
+        true
+    }
+
+    /// Takes up to `want` candidates out of segment `si`, resuming at its
+    /// victim cursor and leaving the cursor past the last one.
+    fn nominate_from(
+        &mut self,
+        si: u32,
+        want: usize,
+        accept: &impl Fn(&V) -> bool,
+        out: &mut impl FnMut(&[u8]),
+    ) -> usize {
+        let seg = &mut self.segments[si as usize];
+        let mut cursor = seg.victim_cursor();
+        let mut produced = 0usize;
+        while produced < want {
+            let Some((b, i, next)) = seg.next_evictable(cursor, accept) else {
+                break;
+            };
+            let mut buf = [0u8; 16];
+            out(seg.key_at(b, i, &mut buf));
+            cursor = next;
+            produced += 1;
+        }
+        seg.set_victim_cursor(cursor);
+        produced
+    }
+
+    /// Files a segment that yielded nothing.
+    ///
+    /// Empty means eviction has drained it: it becomes a ghost, so the next
+    /// walk skips it in O(1) instead of scanning 819 empty slots, and an insert
+    /// re-admits it ([`Table::readmit`]). A segment that still holds entries but
+    /// none this policy may take is left exactly where it is — its position is a
+    /// statement about how hot it is, and "holds no TTL'd key today" is not a
+    /// reason to reorder the queue.
+    fn retire_victim(&mut self, si: u32) {
+        if self.segments[si as usize].is_empty() {
+            self.queues
+                .move_to_head(&mut self.segments, si, QueueId::A1out);
+        }
+    }
+
     /// One SCAN step. Feeds `visit` every entry of at least one whole segment and
     /// returns the next cursor, `0` when the walk is complete.
     ///
@@ -449,6 +648,11 @@ impl<V, const N: usize> Table<V, N> {
 //    reachable from a table at all. `Segment`/`Bucket` do expose owning
 //    accessors (`take`, `remove`), and they need a `&mut Segment`, which no
 //    public `Table` method hands out.
+//  - `cold_candidates` calls back with `&V` and with `&[u8]`. The first is the
+//    same borrow `get` already hands out, under the same `V: Send` bound; the
+//    second is decoded key bytes, borrowed from the slot or from a caller-owned
+//    buffer, never a `KeyWord`. So neither closure can retain anything the move
+//    leaves behind.
 //  - There is no `Sync` impl, so none of the above can be reached through a
 //    shared `&Table` from a second thread either.
 //

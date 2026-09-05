@@ -20,28 +20,55 @@
 //! supplies a hash function for the fallback.
 
 use std::alloc::{Layout, alloc_zeroed, handle_alloc_error};
+use std::cell::Cell;
 
 use crate::bucket::{Bucket, STASH_FANOUT, Slot};
+use crate::evict::{NIL, QueueId};
 use crate::hasher;
 use crate::layout::{BUCKETS, REGULAR_BUCKETS};
 
-/// A segment's header. Exactly one cache line, and it stays that way: issue 12's
-/// eviction state has to fit the space reserved here rather than grow the line
-/// and cost a bucket.
+/// A segment's header. Exactly one cache line, and it stays that way: the 2Q
+/// eviction state fits the space reserved here rather than growing the line and
+/// costing a bucket. 28 bytes are in use and 36 stay reserved, against R9's
+/// floor of 24 — `tests::segment_capacity_and_r9_reservation` is the assertion.
 #[derive(Debug)]
 #[repr(C)]
 struct SegmentHeader {
     /// Directory bits this segment owns. A directory entry at global depth `g`
     /// points here iff its low `local_depth` bits match the segment's.
     local_depth: u8,
-    _pad: [u8; 3],
+    /// Which 2Q queue holds this segment ([`QueueId`]), or [`crate::evict::QUEUE_NONE`]. A
+    /// zeroed allocation therefore reads as "in no queue", which is what a
+    /// freshly allocated segment is until the table links it.
+    q_state: u8,
+    _pad: [u8; 2],
     /// Live entries, so occupancy is O(1) rather than a walk.
     len: u32,
-    /// Reserved for issue 12: the clock hand an eviction sweep resumes from.
-    evict_hand: u16,
-    /// Reserved for issue 12: the coarse epoch a sweep last touched.
-    evict_epoch: u16,
-    _reserved: [u8; 52],
+    /// The slot ordinal an eviction sweep resumes from, so draining a segment
+    /// costs O(1) per victim instead of rescanning it from the top.
+    victim_cursor: u16,
+    /// The coarse epoch the last 2Q reconcile examined this segment in.
+    ///
+    /// Load-bearing, not diagnostic: a segment already moved in the current
+    /// epoch gets no second chance in that same epoch, which is what bounds
+    /// victim selection's walk and makes it terminate.
+    last_touch: u16,
+    /// Intrusive 2Q links, as *indices* into `Table::segments` and never
+    /// pointers — that vector reallocates as the table grows.
+    q_prev: u32,
+    q_next: u32,
+    /// Lookups that found their key in this segment, and lookups that routed
+    /// here and did not.
+    ///
+    /// `Cell` because the lookup path holds `&self` ([`crate::Table::get`]) and
+    /// 2Q's promotion rule is driven by these counters. That is sound rather
+    /// than a race waiting to happen because a table is `!Sync` — the
+    /// `unsafe impl Send for Table` carries the argument — so exactly one
+    /// thread can ever reach a segment, and a non-atomic interior mutation
+    /// under `&self` has no second observer.
+    hits: Cell<u32>,
+    misses: Cell<u32>,
+    _reserved: [u8; 36],
 }
 
 /// One directory-addressable segment.
@@ -78,6 +105,11 @@ impl<V, const N: usize> Segment<V, N> {
     /// `Box::new(Segment { .. })` would construct that on the stack first. All
     /// zeroes is a valid empty segment — every bitmap and counter is zero, and no
     /// uninitialised slot is readable while `occupied` is zero.
+    ///
+    /// The 2Q links are the one field zero does not describe: `0` is a real
+    /// segment index, so they are set to [`NIL`] before the box is handed back.
+    /// `q_state` needs no such fixup — [`crate::evict::QUEUE_NONE`] *is* zero, and a segment
+    /// nobody has linked yet is in no queue.
     pub fn alloc(local_depth: u8) -> Box<Segment<V, N>> {
         crate::bucket::assert_bucket_layout::<V, N>();
         let layout = Layout::new::<Segment<V, N>>();
@@ -92,6 +124,8 @@ impl<V, const N: usize> Segment<V, N> {
         // initialised and `Box` may take ownership of it.
         let mut seg = unsafe { Box::from_raw(raw) };
         seg.header.local_depth = local_depth;
+        seg.header.q_prev = NIL;
+        seg.header.q_next = NIL;
         seg
     }
 
@@ -322,6 +356,149 @@ impl<V, const N: usize> Segment<V, N> {
         slot
     }
 
+    // ----- 2Q eviction state (see [`crate::evict`]) --------------------------
+
+    /// Which queue holds this segment, as the raw `q_state` byte.
+    #[inline]
+    pub(crate) fn q_state(&self) -> u8 {
+        self.header.q_state
+    }
+
+    #[inline]
+    pub(crate) fn set_q_state(&mut self, state: u8) {
+        self.header.q_state = state;
+    }
+
+    /// The queue this segment is linked into, if any.
+    #[inline]
+    pub(crate) fn queue(&self) -> Option<QueueId> {
+        QueueId::from_state(self.header.q_state)
+    }
+
+    #[inline]
+    pub(crate) fn q_prev(&self) -> u32 {
+        self.header.q_prev
+    }
+
+    #[inline]
+    pub(crate) fn q_next(&self) -> u32 {
+        self.header.q_next
+    }
+
+    #[inline]
+    pub(crate) fn set_q_prev(&mut self, i: u32) {
+        self.header.q_prev = i;
+    }
+
+    #[inline]
+    pub(crate) fn set_q_next(&mut self, i: u32) {
+        self.header.q_next = i;
+    }
+
+    #[inline]
+    pub(crate) fn set_links(&mut self, prev: u32, next: u32) {
+        self.header.q_prev = prev;
+        self.header.q_next = next;
+    }
+
+    /// Records a lookup that found its key here. Takes `&self` because the
+    /// lookup path has nothing else — see the `Cell` note on the header.
+    #[inline]
+    pub(crate) fn note_hit(&self) {
+        self.header
+            .hits
+            .set(self.header.hits.get().saturating_add(1));
+    }
+
+    /// Records a lookup that routed here and found nothing.
+    #[inline]
+    pub(crate) fn note_miss(&self) {
+        self.header
+            .misses
+            .set(self.header.misses.get().saturating_add(1));
+    }
+
+    #[inline]
+    pub(crate) fn hits(&self) -> u32 {
+        self.header.hits.get()
+    }
+
+    #[inline]
+    pub(crate) fn misses(&self) -> u32 {
+        self.header.misses.get()
+    }
+
+    /// Starts a fresh accounting window. Called when 2Q acts on what the
+    /// counters said, so the next decision is made on new evidence.
+    #[inline]
+    pub(crate) fn reset_counters(&mut self) {
+        self.header.hits.set(0);
+        self.header.misses.set(0);
+    }
+
+    #[inline]
+    pub(crate) fn last_touch(&self) -> u16 {
+        self.header.last_touch
+    }
+
+    #[inline]
+    pub(crate) fn set_last_touch(&mut self, epoch: u16) {
+        self.header.last_touch = epoch;
+    }
+
+    #[inline]
+    pub(crate) fn victim_cursor(&self) -> u16 {
+        self.header.victim_cursor
+    }
+
+    #[inline]
+    pub(crate) fn set_victim_cursor(&mut self, cursor: u16) {
+        self.header.victim_cursor = cursor;
+    }
+
+    /// Slots a victim scan rotates over. Ordinal `o` is bucket `o / N`, slot
+    /// `o % N`, so the rotation covers the stash buckets too.
+    pub(crate) const fn victim_slots() -> u16 {
+        // `BUCKETS * N` and not `layout::SEGMENT_SLOTS`, which is fixed at the
+        // production slot width; the layout comparison builds tables at others.
+        (BUCKETS * N) as u16
+    }
+
+    /// The next live slot at or after `from` that `accept` will take, as a
+    /// `(bucket, slot, ordinal)` triple, scanning forward and wrapping once.
+    ///
+    /// `None` means the whole segment was rotated over without a candidate —
+    /// it is empty, or nothing in it is in the policy's candidate set.
+    pub(crate) fn next_evictable(
+        &self,
+        from: u16,
+        accept: impl Fn(&V) -> bool,
+    ) -> Option<(usize, usize, u16)> {
+        let total = Self::victim_slots();
+        let start = if from >= total { 0 } else { from };
+        for step in 0..total {
+            let ord = (start + step) % total;
+            let (b, i) = (ord as usize / N, ord as usize % N);
+            if self.buckets[b].occupied() & (1 << i) == 0 {
+                continue;
+            }
+            if accept(&self.buckets[b].slot(i).val) {
+                return Some((b, i, (ord + 1) % total));
+            }
+        }
+        None
+    }
+
+    /// The key at a position from [`Segment::next_evictable`], written into
+    /// `buf` and handed back as bytes.
+    ///
+    /// Bytes rather than the `KeyWord` itself: an owned key word escaping the
+    /// table would break the threading argument on `Table`'s `Send` impl.
+    #[inline]
+    pub(crate) fn key_at<'a>(&'a self, b: usize, i: usize, buf: &'a mut [u8; 16]) -> &'a [u8] {
+        self.buckets[b].slot(i).key.bytes(buf)
+    }
+
     /// Every live entry, as `(bucket, slot)` positions in scan order.
     ///
     /// Bucket order is the order a SCAN cursor walks, so a caller can resume
@@ -344,6 +521,13 @@ impl<V, const N: usize> Segment<V, N> {
     #[inline]
     pub fn slot_at(&self, b: usize, i: usize) -> &Slot<V> {
         self.buckets[b].slot(i)
+    }
+
+    /// The value at a known position, mutably — [`Segment::get_mut`] split so
+    /// its caller can count the lookup before taking the borrow.
+    #[inline]
+    pub(crate) fn value_at_mut(&mut self, b: usize, i: usize) -> &mut V {
+        &mut self.buckets[b].slot_mut(i).val
     }
 
     /// Splits this segment into itself and `into`, which must be a fresh segment.
@@ -445,6 +629,88 @@ mod tests {
         assert_eq!(std::mem::size_of::<Seg>(), crate::layout::SEGMENT_BYTES);
         assert!(std::mem::size_of::<Seg>() <= SEGMENT_CLASS_BYTES);
         assert_eq!(Seg::allocated_bytes(), SEGMENT_CLASS_BYTES);
+    }
+
+    /// R9's space claim, ported from the spike: the whole of the eviction state
+    /// is header bytes the segment already had, and enough of the header stays
+    /// unspoken for that the next thing to need header space does not have to
+    /// grow the cache line and cost a bucket.
+    ///
+    /// The floor is 24 bytes. If a change here drops below it, the answer is the
+    /// PRD, not a bigger header.
+    #[test]
+    fn segment_capacity_and_r9_reservation() {
+        const RESERVED_FLOOR: usize = 24;
+
+        // Everything named in the header, 2Q's fields included.
+        let in_use = size_of::<u8>()   // local_depth
+            + size_of::<u8>()          // q_state
+            + 2                        // _pad
+            + size_of::<u32>()         // len
+            + size_of::<u16>()         // victim_cursor
+            + size_of::<u16>()         // last_touch
+            + size_of::<u32>() * 2     // q_prev, q_next
+            + size_of::<Cell<u32>>() * 2; // hits, misses
+        let reserved = size_of::<SegmentHeader>() - in_use;
+        assert_eq!(
+            reserved, 36,
+            "the header's reserved tail moved; check it against the floor below"
+        );
+        assert!(
+            reserved >= RESERVED_FLOOR,
+            "eviction state left only {reserved} B reserved, under R9's {RESERVED_FLOOR} B floor"
+        );
+
+        // And the bucket count the header's size decides is unchanged.
+        assert_eq!(size_of::<SegmentHeader>(), crate::layout::HEADER_BYTES);
+        assert_eq!(BUCKETS, 63);
+        assert_eq!(Seg::victim_slots() as usize, BUCKETS * SLOTS_PER_BUCKET);
+    }
+
+    /// A fresh segment is in no queue and its links are the sentinel, not the
+    /// zero that `alloc_zeroed` leaves — zero is segment 0, a real neighbour.
+    #[test]
+    fn a_fresh_segment_has_no_queue_links() {
+        let seg = Seg::alloc(0);
+        assert_eq!(seg.q_state(), crate::evict::QUEUE_NONE);
+        assert!(seg.queue().is_none());
+        assert_eq!(seg.q_prev(), crate::evict::NIL);
+        assert_eq!(seg.q_next(), crate::evict::NIL);
+        assert_eq!(seg.hits(), 0);
+        assert_eq!(seg.misses(), 0);
+        assert_eq!(seg.victim_cursor(), 0);
+    }
+
+    /// The victim scan resumes where it stopped and wraps exactly once, which
+    /// is what makes draining a segment O(1) per victim rather than O(slots).
+    #[test]
+    fn the_victim_scan_rotates_and_wraps() {
+        let h = hasher();
+        let mut seg = Seg::alloc(0);
+        for i in 0..300i64 {
+            let key = format!("rot:{i}");
+            let hash = h.hash(key.as_bytes());
+            seg.insert(fingerprint(hash), route(hash), slot(key.as_bytes(), i))
+                .expect("room for 300");
+        }
+
+        // A full rotation from 0 sees every live slot exactly once.
+        let mut cursor = 0u16;
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..300 {
+            let (b, i, next) = seg.next_evictable(cursor, |_| true).expect("a live slot");
+            assert!(seen.insert((b, i)), "the rotation repeated a slot");
+            cursor = next;
+        }
+        assert_eq!(seen.len(), 300);
+
+        // A predicate nothing satisfies reports "no candidate" rather than
+        // spinning — the segment-level half of the termination argument.
+        assert!(seg.next_evictable(0, |_| false).is_none());
+
+        // An empty segment likewise.
+        let empty = Seg::alloc(0);
+        assert!(empty.next_evictable(0, |_| true).is_none());
     }
 
     #[test]

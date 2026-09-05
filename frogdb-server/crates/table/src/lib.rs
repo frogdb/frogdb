@@ -53,9 +53,11 @@
 //!
 //! [`layout`] fixes the geometry, [`record`] and [`word`] the storage,
 //! [`hasher`] the placement inputs, [`bucket`] and [`segment`] the placement
-//! rules, and [`table`] the directory and the cursor over it.
+//! rules, [`table`] the directory and the cursor over it, and the private
+//! `evict` module the 2Q queues threaded through the segment headers.
 
 pub mod bucket;
+pub(crate) mod evict;
 pub mod hasher;
 pub mod layout;
 pub mod record;
