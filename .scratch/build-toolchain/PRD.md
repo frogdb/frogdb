@@ -36,3 +36,6 @@ filed as issue 08 once 01 landed.
   CockroachDB lease-duration / FoundationDB knob shape, not a measured constant. nextest
   `cluster.max-threads` stays 2; no testbox confirmation; issue 25 (jemalloc arenas in test
   binaries) stays separate. Carved as memory-architecture/26, sequenced after 23.
+- D6: the `quint_conformance` CI failures are a cold-cache download race on quint's Rust
+  evaluator, fixed by a serial warm-up step in the `unit-tests` job before `cargo nextest run`
+  (issue 09), not by a `~/.quint` cache or timeout bumps.

@@ -15,28 +15,10 @@ Origin: Test run on `build-toolchain/impl` @ c66fc0fb5 (https://github.com/natha
 not product defects. Run 33941010778 (first run with quint installing, per 04): `10 failed,
 15 timed out`. Two distinct causes:
 
-**A. `frogdb-replication::quint_conformance` — a download race, not heaviness.** The first
-`quint run` on a machine fetches quint's Rust evaluator into `~/.quint/rust-evaluator-v0.6.0/`
-("Fetching Rust evaluator v0.6.0... Downloading ... from api.github.com/.../releases/assets").
-nextest starts the binary's tests in parallel, so every test's own `quint run` races that
-fetch: three fail outright with
-
-```
-Error: EEXIST: file already exists, open '/home/runner/.quint/rust-evaluator-v0.6.0/quint_evaluator-x86_64-unknown-linux-gnu.tar.gz'
-```
-
-(`ack_above_live_is_ignored`, `barrier_floor_is_the_live_offset_at_arm_time`,
-`close_inside_window_drains_then_ends_graceful`, each ~13.5–14 s) and the other seven block
-behind the download until the `3 × 5 s` hard kill (`sampled_traces`,
-`mid_send_session_is_not_classified_out_from_under_its_frame`, `lag_breach_ends_at_the_frame`,
-`handoff_dedup`, `channel_overrun_refuses_intake`, `barrier_while_held`,
-`ack_watermark_never_retreats`). Locally the cache is warm (`~/.quint/rust-evaluator-v0.6.0`
-exists), which is why the binary is green on a dev machine. The `quint` job's `just quint-run`
-warms the cache on *its* runner, not the unit-tests runner. Raising the timeout would not fix
-the EEXIST failures. Fix direction: warm the evaluator once, serially, in the `unit-tests` job
-before `cargo nextest run` (a step running one tiny `quint run` against
-`specs/quint/replication_feed_gate.qnt`, or caching `~/.quint` on the sticky disk), in
-`workflow_gen/workflows/test.py`.
+**A. `frogdb-replication::quint_conformance` — a download race, not heaviness.** Carved out as
+issue 09 (D6): the first `quint run` on a runner fetches quint's Rust evaluator into `~/.quint`
+and parallel nextest races it (`EEXIST` on the tarball, 15 s timeouts queued behind). Fix is a
+serial warm-up step in the `unit-tests` job.
 
 **B. Genuinely heavy tests at the default `3 × 5 s`** (`.config/nextest.toml:7`):
 
@@ -88,13 +70,6 @@ on retry (counted flaky, not failed).
 
 ## Options (decision needed)
 
-For A (the quint race):
-1. **Recommended:** a `Warm quint evaluator` step in the `unit-tests` job between the mise step
-   and `cargo nextest run`, running one serial `quint run` (e.g. `--max-steps 0 --max-samples 1`
-   against `specs/quint/replication_feed_gate.qnt`). Same generator, no test change, no cache key.
-2. Cache `~/.quint` on the sticky disk keyed on the quint version — saves the download but
-   the first run after a bump still races.
-
 For B (the heavy tests):
 1. **Recommended:** nextest overrides in the existing style (`.config/nextest.toml` already has a
    dozen "legitimately heavy, not flaky" entries): the six named tests at `30s × 3`. Cheapest;
@@ -108,20 +83,14 @@ For C: reproduce on Linux under load (`cargo nextest run -p frogdb-server -E
 shard-harness test the same way), read the waits / setup ordering, and file the finding — a
 separate issue per test if either is a real hang or a harness hole.
 
-## Acceptance criteria (for A1 + B1)
+## Acceptance criteria (for B1)
 
-- [ ] the `unit-tests` job warms the quint evaluator once before `cargo nextest run`; the step
-      is generated (`just workflow-gen --check` green) with a comment naming this issue
 - [ ] overrides added with a comment naming the run and the observed durations, same shape as the neighbours
-- [ ] `cargo nextest run -p frogdb-replication --test quint_conformance` green locally with a
-      cold `~/.quint` (move it aside first)
 - [ ] a `workflow_dispatch` run of `test.yml` on the integration branch shows 0 timed out in the
-      A and B rows; C is reported, not necessarily fixed
+      B rows; C is reported, not necessarily fixed
 
 ## Files likely touched
 
-- `.github/workflows/workflow_gen/src/workflow_gen/workflows/test.py`
-- `.github/workflows/test.yml` (regenerated)
 - `.config/nextest.toml`
 
 ## See also
@@ -137,4 +106,4 @@ None — 04 landed 2026-09-04; the A rows above are read from the first post-04 
 
 ## Decisions
 
-Pending: A1/A2, B1/B2/B3, whether C becomes its own issue.
+D6 (A → issue 09). Pending: B1/B2/B3, whether C becomes its own issue.
