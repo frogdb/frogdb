@@ -55,17 +55,6 @@ RUST_VERSION = _read_rust_version()
 # `cargo` is actually missing from PATH.
 RUST_TOOLCHAIN = f"dtolnay/rust-toolchain@{RUST_VERSION}"
 
-# Pin mise itself. mise 2026.9.0 made the `cargo:` backend require a mise-managed
-# `rust` install, so `cargo:cargo-deny` fails with "requires configured install
-# dependency 'rust@...', but its selected version is not installed" — and this repo
-# deliberately installs Rust with dtolnay/rust-toolchain after the mise step (see the
-# RUST_TOOLCHAIN comment above), so adding `rust` to install_args is not the fix.
-# 2026.8.16 is the last 2026.8.x release, before the regression. Unpin once a mise
-# newer than this installs `cargo:cargo-deny` with no `rust` entry in .mise.toml, then
-# `just workflow-gen`; `.github/workflows/test-unit-tests-testbox.yml` is hand-written
-# and carries its own copy of this value, so it has to move in the same commit.
-MISE_VERSION = "2026.8.16"
-
 
 def ensure_path(path: str) -> str:
     """Validate that a repo-root-relative path exists, then return it."""
@@ -129,13 +118,26 @@ def mise_setup_step(install_args: str | None = None) -> Step:
         need Rust (e.g. docs jobs that only need Node + bun).
     """
     w = CommentedMap()
-    w["version"] = SQ(MISE_VERSION)
     w["install"] = SQ("true")
     if install_args:
         w["install_args"] = install_args
     w["cache"] = SQ("true")
     w["experimental"] = SQ("true")  # enables cargo: and ubi: backends
-    return Step(name="Set up mise toolchain", uses=MISE_ACTION, with_=w)
+    # mise >= 2026.8.11 refuses to install a `cargo:` tool while `.mise.toml`
+    # declares a `rust` that mise did not install itself (jdx/mise#12234):
+    # `cargo:cargo-deny` fails with "requires configured install dependency
+    # 'rust@...', but its selected version is not installed". This repo
+    # deliberately installs Rust with dtolnay/rust-toolchain *after* the mise
+    # step (see the RUST_TOOLCHAIN comment above), so `rust` is never
+    # mise-installed here. MISE_DISABLE_TOOLS=rust hides `rust` from mise for
+    # this step, so the `cargo:` backend falls back to the runner's PATH cargo
+    # instead of bailing. See .scratch/build-toolchain/issues/ issue 03.
+    return Step(
+        name="Set up mise toolchain",
+        uses=MISE_ACTION,
+        env=omap(MISE_DISABLE_TOOLS="rust"),
+        with_=w,
+    )
 
 
 def rust_toolchain_step(components: str | None = None, targets: str | None = None) -> Step:
