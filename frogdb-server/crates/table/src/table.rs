@@ -7,6 +7,18 @@
 //! segment being split was already at global depth. Nothing rehashes the whole
 //! keyspace, which is the stall this structure exists to remove.
 //!
+//! # Past 2^16 segments
+//!
+//! A slot carries only the low [`crate::layout::ROUTE_BITS`] bits of its key
+//! hash, so once `global_depth` exceeds that width the directory index of an
+//! entry can no longer be read out of its metadata. Nothing panics and no
+//! ceiling is enforced: both places that need the index — [`Segment::split`]
+//! and [`Table::place`] — fall back to hashing the key, and count each fallback
+//! in `TableStats::split_rehashed`. A split past that point costs what an
+//! ordinary open-hash rehash of one segment's entries costs, which is still
+//! 16 KB of work rather than a whole-keyspace rehash. Reaching it takes 65 536
+//! segments in a single shard, some 48 M live keys.
+//!
 //! # SCAN
 //!
 //! [`Table::scan`] returns whole segments and advances the cursor in
@@ -302,6 +314,17 @@ impl<V, const N: usize> Table<V, N> {
         }
     }
 
+    /// The directory index of an entry whose only routing information is its
+    /// stored [`route`], or `None` once the directory is deeper than the stored
+    /// route width and the index needs bits the route does not carry.
+    #[inline]
+    fn dir_index_from_route(route: u16, global_depth: u8) -> Option<usize> {
+        if u32::from(global_depth) > crate::layout::ROUTE_BITS {
+            return None;
+        }
+        Some((route as usize) & ((1usize << global_depth) - 1))
+    }
+
     /// Re-inserts an entry that already belongs to the table, splitting as needed.
     fn place(&mut self, item: Displaced<V>) {
         let Displaced {
@@ -311,9 +334,18 @@ impl<V, const N: usize> Table<V, N> {
         } = item;
         loop {
             // The directory index is the low `global_depth` bits of the hash, and
-            // `route` holds the low 16 — enough while the directory is under
-            // 2^16 entries, which `double_directory` refuses to exceed.
-            let di = (route as usize) & ((1usize << self.global_depth) - 1);
+            // `route` holds the low 16 of it.
+            let di = match Self::dir_index_from_route(route, self.global_depth) {
+                Some(di) => di,
+                None => {
+                    // Past the stored route width, exactly as `Segment::split`:
+                    // the index needs low hash bits `route` no longer carries, so
+                    // pay for a hash and count it rather than route it wrongly.
+                    self.stats.split_rehashed += 1;
+                    let mut buf = [0u8; 16];
+                    self.dir_index(self.hasher.hash(slot.key.bytes(&mut buf)))
+                }
+            };
             let si = self.directory[di] as usize;
             match self.segments[si].insert(fp, route, slot) {
                 Ok(()) => return,
@@ -325,12 +357,14 @@ impl<V, const N: usize> Table<V, N> {
         }
     }
 
+    /// Doubles the directory.
+    ///
+    /// There is no depth ceiling. Past [`crate::layout::ROUTE_BITS`] the stored
+    /// `route` no longer carries every bit an index needs, and both readers of
+    /// it — [`Segment::split`] and [`Table::place`] — fall back to hashing the
+    /// key, counting the fallback in `TableStats::split_rehashed`. See this
+    /// module's *Past 2^16 segments*.
     fn double_directory(&mut self) {
-        assert!(
-            u32::from(self.global_depth) < crate::layout::ROUTE_BITS,
-            "directory depth {} would outgrow the stored route width",
-            self.global_depth + 1
-        );
         let old = self.directory.len();
         self.directory.reserve_exact(old);
         for i in 0..old {
@@ -449,6 +483,26 @@ mod tests {
             t.insert(k.as_bytes(), ValueWord::from_int(i as i64));
         }
         keys
+    }
+
+    /// Past the stored route width the index needs bits `route` does not carry,
+    /// and `place` has to say so rather than route the entry to the wrong half.
+    /// (The segment-level fallback this guards is forced end-to-end by
+    /// `segment::tests::a_split_past_the_route_width_falls_back_to_hashing`;
+    /// a table that deep is 1 GiB of directory and segments, so the arithmetic
+    /// is what is checked here.)
+    #[test]
+    fn a_directory_deeper_than_the_route_width_cannot_be_indexed_from_a_route() {
+        assert_eq!(T::dir_index_from_route(u16::MAX, 0), Some(0));
+        assert_eq!(T::dir_index_from_route(u16::MAX, 3), Some(0b111));
+        assert_eq!(
+            T::dir_index_from_route(u16::MAX, crate::layout::ROUTE_BITS as u8),
+            Some(65_535)
+        );
+        assert_eq!(
+            T::dir_index_from_route(u16::MAX, crate::layout::ROUTE_BITS as u8 + 1),
+            None
+        );
     }
 
     /// The other half of the threading rule the `compile_fail` doctests pin:

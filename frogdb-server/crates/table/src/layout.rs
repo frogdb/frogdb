@@ -61,6 +61,13 @@ pub const SEGMENT_BYTES: usize = HEADER_BYTES + BUCKETS * BUCKET_BYTES;
 /// a shard holds 65 536 segments — some 48 M live keys — and splits past that
 /// point fall back to rehashing. Correctness is unaffected either way; only the
 /// split's cost is.
+///
+/// Concretely, past this depth the table pays one hash per moved entry in
+/// [`crate::segment::Segment::split`] and one per re-placed leftover in
+/// `Table::place`, both counted by `TableStats::split_rehashed`. Nothing
+/// panics and no ceiling is enforced: growth degrades to the cost of an
+/// ordinary open-hash rehash of the entries a single split touches, which is
+/// still 16 KB of work rather than a whole-keyspace rehash.
 pub const ROUTE_BITS: u32 = 16;
 
 /// Every relation the geometry rests on, checked at compile time: each constant
