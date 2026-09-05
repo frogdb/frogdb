@@ -34,6 +34,8 @@ mod integration_debug_introspection;
 mod integration_dump_restore;
 #[cfg(all(not(feature = "turmoil"), feature = "cmd-event-sourcing"))]
 mod integration_event_sourcing;
+#[cfg(all(not(feature = "turmoil"), feature = "table-keyspace"))]
+mod integration_eviction_2q;
 #[cfg(not(feature = "turmoil"))]
 mod integration_hashes;
 #[cfg(not(feature = "turmoil"))]

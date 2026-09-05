@@ -17,6 +17,10 @@
 //! 3. **SCAN keeps that guarantee across splits.** The interesting one: keys are
 //!    inserted *between* scan steps, so the table splits underneath a live
 //!    cursor, and every key present for the whole scan must still be returned.
+//! 4. **Eviction nominates only what it may take, once each.** The 2Q walk runs
+//!    interleaved with the growth and churn above, and every key it hands back
+//!    must be present, inside the caller's candidate set, and distinct within
+//!    the call — the caller deletes what it is handed, so a repeat is a bug.
 //!
 //! Growth is real, not simulated: the op stream inserts enough keys to push the
 //! table through several directory doublings, so splits happen mid-scan rather
@@ -43,6 +47,14 @@ enum Op {
     /// Walk with SCAN while inserting between steps, so the table splits under
     /// the cursor.
     ScanUnderChurn { count: u8, churn: u8 },
+    /// Ask the 2Q queues for cold keys and delete what comes back, the way the
+    /// eviction driver does. `only_even` stands in for a policy's candidate
+    /// set (`volatile-*`): the walk may only nominate keys it accepts.
+    Evict {
+        want: u8,
+        epoch: u16,
+        only_even: bool,
+    },
 }
 
 #[derive(Arbitrary, Debug)]
@@ -199,6 +211,49 @@ fuzz_target!(|input: Input| {
                 }
                 for (k, v) in churned {
                     model.insert(k, v);
+                }
+            }
+            Op::Evict {
+                want,
+                epoch,
+                only_even,
+            } => {
+                let want = (*want % 8) as usize;
+                let accept = |v: &ValueWord| !*only_even || value_of(v) % 2 == 0;
+
+                let mut nominated: Vec<Vec<u8>> = Vec::new();
+                let produced =
+                    t.cold_candidates(want, *epoch, accept, |k| nominated.push(k.to_vec()));
+
+                assert_eq!(
+                    produced,
+                    nominated.len(),
+                    "cold_candidates reported {produced} nominations but yielded {}",
+                    nominated.len()
+                );
+                assert!(produced <= want, "cold_candidates over-delivered");
+                let unique: HashSet<&Vec<u8>> = nominated.iter().collect();
+                assert_eq!(
+                    unique.len(),
+                    nominated.len(),
+                    "one call nominated the same key twice: {nominated:?}"
+                );
+
+                for k in &nominated {
+                    let expected = model.get(k).copied().unwrap_or_else(|| {
+                        panic!("cold_candidates nominated {k:?}, which the table does not hold")
+                    });
+                    assert!(
+                        !*only_even || expected % 2 == 0,
+                        "cold_candidates nominated {k:?}, outside the candidate set"
+                    );
+                    // The caller deletes what it is handed.
+                    assert_eq!(
+                        t.remove(k).as_ref().map(value_of),
+                        Some(expected),
+                        "removing a nominee returned the wrong value for {k:?}"
+                    );
+                    model.remove(k);
                 }
             }
         }

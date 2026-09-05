@@ -484,7 +484,7 @@
           "name": "maxmemory-policy",
           "type": "string",
           "default": "noeviction",
-          "description": "Eviction policy when maxmemory is reached.\nOptions: noeviction, volatile-lru, allkeys-lru, volatile-lfu, allkeys-lfu,\n         volatile-random, allkeys-random, volatile-ttl",
+          "description": "Eviction policy when maxmemory is reached.\nOptions: noeviction, volatile-lru, allkeys-lru, volatile-lfu, allkeys-lfu,\n         volatile-random, allkeys-random, volatile-ttl, tiered-lru, tiered-lfu\n\nThe policy names and their candidate sets are Redis's. How the coldest\nkey is *found* depends on the keyspace container: the default one uses\nRedis's sampled approximation (see `maxmemory-samples`), while the\nsegmented container ranks 16 KiB segments with a 2Q queue and takes the\nvictim from the coldest one, which costs no per-key recency field. Both\nare approximations of true LRU/LFU, and both confine themselves to the\npolicy's candidate set — `volatile-*` never takes a key without a TTL.",
           "config_param": "maxmemory-policy",
           "mutable": true
         },

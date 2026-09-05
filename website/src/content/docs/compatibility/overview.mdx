@@ -179,6 +179,22 @@ The following commands and features are intentionally absent because they do not
 | ACL selectors v2 (`(...)`, `clearselectors`) | Not supported; use separate users instead |
 | Diskless replication | Not applicable; FrogDB does not replicate via RDB transfer |
 
+## Eviction
+
+`maxmemory` and `maxmemory-policy` take Redis's names and mean what they mean in Redis: the policy fixes the *candidate set* (`allkeys-*` may take any key, `volatile-*` only keys carrying a TTL, `noeviction` refuses the write) and the shard evicts only when it is over its limit. What differs is how the coldest key inside that set is found.
+
+| Policy | Redis | FrogDB (default keyspace) | FrogDB (segmented keyspace) |
+|---|---|---|---|
+| `allkeys-lru`, `volatile-lru` | Sample `maxmemory-samples` keys, evict the one with the oldest 24-bit per-key clock | Same sampled approximation | 2Q over 16 KiB segments; the victim comes from the coldest segment |
+| `allkeys-lfu`, `volatile-lfu` | Sample, evict the lowest 8-bit log counter (decayed by `lfu-decay-time`) | Same | Same 2Q ordering — a segment's hit and miss counters stand in for the per-key counter |
+| `allkeys-random`, `volatile-random` | Random key from the candidate set | Same | Same (a cold ordering is exactly what `*-random` promises not to use) |
+| `volatile-ttl` | Sample, evict the shortest remaining TTL | Same | Same (TTL is a property of the key, not of how recently it was used) |
+| `tiered-lru`, `tiered-lfu` | No equivalent | Spill instead of delete — see below | Same, victim chosen by 2Q |
+
+Neither backend implements true LRU or LFU, and neither does Redis: all three are approximations, and FrogDB's differ in *which* approximation. The sampled path is Redis's own algorithm, including the cross-sample eviction pool. The segmented path — selected at build time, not at runtime — ranks whole segments instead of keys, which is how it avoids a per-key recency field altogether; the trade is coarser ordering. Both confine themselves to the policy's candidate set per *key*: a segment holding both TTL'd and persistent keys yields only its TTL'd keys under `volatile-lru`.
+
+This is the same trade Dragonfly makes for the same reason. Dragonfly's segmented hash table evicts from the bucket a new key hashes into rather than maintaining a global LRU, on the grounds that a per-key timestamp is unaffordable at its densities; FrogDB keeps the queue state in a segment header for the same 0-bytes-per-key result, but orders segments globally rather than evicting locally at the insertion point. Every policy remains observable identically to Redis: an eviction fires the `evicted` keyspace notification and is counted by `frogdb_eviction_keys_total` and `frogdb_eviction_bytes_total`.
+
 ## Tiered storage
 
 FrogDB offers a two-tier hot/warm store as an alternative to eviction. With the `tiered-lru` or `tiered-lfu` eviction policy, instead of deleting a key under memory pressure FrogDB serializes its value to the RocksDB warm tier (a *spill*); the key's metadata stays in memory and reads transparently deserialize the value back (an *unspill*).
