@@ -215,31 +215,43 @@ async fn write_replica_dataset(server: &TestServer) {
 /// The `+FULLRESYNC` line is consumed so the test knows the handoff happened;
 /// from there the socket is left un-drained and the primary is holding the
 /// payload.
-async fn psync_and_stall(server: &TestServer) -> crate::common::test_server::TestClient {
+///
+/// The connection's own id is taken first, so a test can read `omem` off *this*
+/// row rather than off whichever row happens to be largest.
+async fn psync_and_stall(server: &TestServer) -> (crate::common::test_server::TestClient, i64) {
     let mut replica = server.connect().await;
+    let conn_id = match replica.command(&["CLIENT", "ID"]).await {
+        Response::Integer(id) => id,
+        other => panic!("CLIENT ID must return this connection's id; got {other:?}"),
+    };
     let reply = replica.command(&["PSYNC", "?", "-1"]).await;
     assert!(
         !is_error(&reply),
         "the primary must accept the full-sync request; got {reply:?}"
     );
-    replica
+    (replica, conn_id)
 }
 
-/// The largest `omem=` any connection currently reports.
-async fn max_reported_omem(control: &mut crate::common::test_server::TestClient) -> usize {
+/// The `omem=` connection `conn_id` reports, or `None` if it is no longer
+/// listed.
+async fn reported_omem(
+    control: &mut crate::common::test_server::TestClient,
+    conn_id: i64,
+) -> Option<usize> {
     let listing = match control.command(&["CLIENT", "LIST"]).await {
         Response::Bulk(Some(data)) => String::from_utf8_lossy(&data).to_string(),
         other => panic!("CLIENT LIST must return a bulk listing; got {other:?}"),
     };
-    listing
+    let wanted = format!("id={conn_id}");
+    let row = listing
         .lines()
-        .filter_map(|line| {
-            line.split(' ')
-                .find_map(|field| field.strip_prefix("omem="))
-                .and_then(|v| v.parse::<usize>().ok())
-        })
-        .max()
-        .unwrap_or(0)
+        .find(|line| line.split(' ').any(|field| field == wanted))?;
+    Some(
+        row.split(' ')
+            .find_map(|field| field.strip_prefix("omem="))
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or_else(|| panic!("every CLIENT LIST row carries omem=; got {row:?}")),
+    )
 }
 
 /// The bytes a primary is holding for a replica are the replica's `omem`.
@@ -265,13 +277,16 @@ async fn test_replica_feed_reports_its_buffered_bytes_as_omem() {
     write_replica_dataset(&server).await;
 
     let mut control = server.connect().await;
-    let _replica = psync_and_stall(&server).await;
+    let (_replica, replica_id) = psync_and_stall(&server).await;
 
     // The export is asynchronous with the `+FULLRESYNC` line, so poll rather
-    // than sample once.
+    // than sample once. Read the replica's *own* row: a figure that appeared on
+    // some other connection would be a different bug, not this fix.
     let mut observed = 0;
     for _ in 0..100 {
-        observed = max_reported_omem(&mut control).await;
+        observed = reported_omem(&mut control, replica_id)
+            .await
+            .expect("the replica stays listed as a client across the PSYNC handoff");
         if observed > 0 {
             break;
         }
@@ -281,7 +296,7 @@ async fn test_replica_feed_reports_its_buffered_bytes_as_omem() {
     assert!(
         observed >= REPLICA_VALUE_BYTES,
         "a replica that is not reading must show the staged full sync as omem; \
-         the largest omem reported was {observed} against a {REPLICA_DATASET_BYTES}-byte dataset"
+         its row reported {observed} against a {REPLICA_DATASET_BYTES}-byte dataset"
     );
 
     // Same bytes, the operator's other view of them: the per-subsystem budget
@@ -334,7 +349,7 @@ async fn test_replica_feed_over_the_hard_limit_is_disconnected() {
 
     write_replica_dataset(&server).await;
 
-    let mut replica = psync_and_stall(&server).await;
+    let (mut replica, _replica_id) = psync_and_stall(&server).await;
 
     // Read raw rather than through the RESP codec: the full-sync payload is a
     // binary envelope the client codec cannot parse, so a decode error would
@@ -374,6 +389,68 @@ async fn test_replica_feed_over_the_hard_limit_is_disconnected() {
     assert!(
         disconnects >= 1.0,
         "the replica disconnect must be counted against its class and reason; got {disconnects}"
+    );
+
+    server.shutdown().await;
+}
+
+/// A replica that stalls under the soft mark and stays there is dropped when
+/// the window expires — with no further byte of feed activity to notice it.
+///
+/// This is the failure mode `client-output-buffer-limit`'s soft seconds exist
+/// for and the one issue 23 was filed against: the hard limit catches *growth*,
+/// and a stalled full sync does not grow. The primary stages the dataset once,
+/// parks inside the write to a replica that has stopped reading, and from there
+/// nothing on that link runs again — so the drop can only come from the
+/// account's own clock. The hard limit here is above the dataset precisely so
+/// that it cannot be what fires.
+// FM-REPLICATION-069
+#[tokio::test]
+async fn test_replica_feed_past_its_soft_window_is_disconnected() {
+    let soft = REPLICA_VALUE_BYTES;
+    let hard = REPLICA_DATASET_BYTES * 4;
+    let server = TestServer::start_primary_with_config(TestServerConfig {
+        num_shards: Some(1),
+        // Startup-fixed knob (CONFIG SET is refused), so the window is set here.
+        client_output_buffer_limit: Some(format!("replica {hard} {soft} 1")),
+        ..Default::default()
+    })
+    .await;
+
+    write_replica_dataset(&server).await;
+
+    let (mut replica, _replica_id) = psync_and_stall(&server).await;
+
+    let closed = tokio::time::timeout(Duration::from_secs(30), async {
+        let socket = replica.framed.get_mut();
+        let mut scratch = vec![0u8; 64 * 1024];
+        loop {
+            match socket.read(&mut scratch).await {
+                Ok(0) => return true,
+                Ok(_) => continue,
+                Err(_) => return true,
+            }
+        }
+    })
+    .await;
+    assert_eq!(
+        closed,
+        Ok(true),
+        "a replica held above the soft mark for the whole window must be dropped"
+    );
+
+    let mut control = server.connect().await;
+    assert_eq!(control.command(&["PING"]).await, Response::pong());
+
+    let metrics = server.fetch_metrics().await;
+    let disconnects = frogdb_telemetry::testing::get_counter(
+        &metrics,
+        "frogdb_client_output_buffer_disconnects_total",
+        &[("class", "replica"), ("reason", "soft_limit")],
+    );
+    assert!(
+        disconnects >= 1.0,
+        "the drop must be counted as a soft-limit kill, not a hard one; got {disconnects}"
     );
 
     server.shutdown().await;
