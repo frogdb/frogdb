@@ -957,6 +957,7 @@ impl ReplicaSession {
         handler: &Arc<PrimaryReplicationHandler>,
         replay_from: u64,
         resume: ResumeSource,
+        feed: SharedFeedAccount,
     ) -> io::Result<ReplicaDeparture> {
         // `Phase::Streaming` is already published and the previous generation's
         // departure already cleared — both are steps of the transition that got
@@ -1023,9 +1024,23 @@ impl ReplicaSession {
         if resume == ResumeSource::PartialGrant {
             handler.tracker.record_sync_outcome(SyncOutcome::PartialOk);
         }
+        // The tail is now materialized in this primary's memory, in full, and
+        // stays there until it is written — so it is charged in full before a
+        // byte of it goes out, and the charge comes down frame by frame as it
+        // drains (FM-REPLICATION-069). Charging the whole tail up front is what
+        // lets the hard limit refuse a window this primary cannot afford to
+        // stage, rather than discovering it one frame at a time.
+        let mut held_bytes: u64 = tail
+            .iter()
+            .map(|(_, _, payload)| payload.len() as u64)
+            .sum();
+        report_feed(&feed, held_bytes, "the backlog handoff tail")?;
         for (offset, shard_id, payload) in tail {
+            let payload_bytes = payload.len() as u64;
             let encoded = ReplicationFrame::new_on_shard(offset, shard_id, payload).encode()?;
             stream.write_all(&encoded).await?;
+            held_bytes = held_bytes.saturating_sub(payload_bytes);
+            report_feed(&feed, held_bytes, "the backlog handoff tail")?;
             // The backlog-replay lane of the frame lane (hardening issue 29):
             // a resumed replica's tail is real bytes on the wire, written
             // directly here rather than through `forward_frame`, so it needs
@@ -1082,6 +1097,7 @@ impl ReplicaSession {
         let write_timeout = frame_write_timeout(handler.write_timeout_ms);
 
         let feed_gate = handler.feed_gate.clone();
+        let feed_account = feed.clone();
         // The handoff lane is behind us: the barrier released and the tail is on
         // the wire up to `resume_offset`. From here the sequencer decides and
         // this task performs.
@@ -1116,6 +1132,33 @@ impl ReplicaSession {
                     FeedAction::End(departure) => break departure,
                 };
                 action = sequencer.step(input);
+
+                // What the barrier is holding is the third and last of the
+                // feed's buffers (FM-REPLICATION-069). Reported after every
+                // step because every step is where the figure can change — a
+                // frame held, a frame flushed — and reported even when it is
+                // zero, because that is what releases the charge of a barrier
+                // that has just lifted.
+                //
+                // Acting on the verdict here rather than feeding it back into
+                // the sequencer is deliberate: what the sequencer decides is
+                // *sequencing* — when a frame may go on the wire — and it owns
+                // no clock and no memory. "This link costs more than it is
+                // allowed to" is neither, and folding it in would mean new
+                // inputs to a model-checked machine to express a resource
+                // decision it cannot make.
+                if let FeedVerdict::Shed { reason } =
+                    feed_account.set_buffered(sequencer.buffered_bytes())
+                {
+                    tracing::warn!(
+                        replica_id = lag_replica_id,
+                        reason,
+                        held_frames = sequencer.held_frames(),
+                        held_bytes = sequencer.buffered_bytes(),
+                        "Replica feed exceeded its client-output-buffer-limit; ending the link"
+                    );
+                    break ReplicaDeparture::Lost;
+                }
             }
         });
 
@@ -1147,6 +1190,24 @@ impl ReplicaSession {
             }
         };
         Ok(departure)
+    }
+}
+
+/// Tell the feed's account how much it is holding, and turn a shed verdict
+/// into the error that ends the sync.
+///
+/// The one place the replication crate converts a
+/// `client-output-buffer-limit` decision into control flow
+/// (FM-REPLICATION-069). `holding` names the buffer for the operator reading
+/// the log of a link that died: which of the feed's three buffers was over,
+/// not just that something was.
+fn report_feed(feed: &SharedFeedAccount, total_bytes: u64, holding: &str) -> io::Result<()> {
+    match feed.set_buffered(total_bytes) {
+        FeedVerdict::Keep => Ok(()),
+        FeedVerdict::Shed { reason } => Err(io::Error::other(format!(
+            "replica feed exceeded its client-output-buffer-limit ({reason}) holding \
+             {total_bytes} bytes of {holding}"
+        ))),
     }
 }
 
@@ -1446,11 +1507,19 @@ impl<'a> SessionDriver<'a> {
                 // Published before the phase moves on, exactly as they were when
                 // this ran inline, so `progress_percent` never reports the
                 // previous sync's totals against this one's transfer.
-                self.session.inner.write().sync_total_bytes =
-                    blobs.iter().map(|b| b.len() as u64).sum();
+                let staged: u64 = blobs.iter().map(|b| b.len() as u64).sum();
+                self.session.inner.write().sync_total_bytes = staged;
                 self.session
                     .sync_bytes_transferred
                     .store(0, Ordering::Release);
+                // The whole payload is in this primary's memory from here until
+                // `SendLiveDataset` has written it — the largest single thing a
+                // feed ever holds, and what Redis's `slave` class is for
+                // (FM-REPLICATION-069). Charged before it is stored, so a
+                // dataset the limit will not pay for is dropped here instead of
+                // being held for the length of a transfer that is going to be
+                // refused anyway.
+                report_feed(&self.feed, staged, "the exported live dataset")?;
                 self.blobs = Some(blobs);
                 Ok(Next::Event(SessionEvent::DatasetExported))
             }
@@ -1477,6 +1546,11 @@ impl<'a> SessionDriver<'a> {
                 session
                     .stream_live_dataset(stream, handler, &blobs, &replication_id, offset, coverage)
                     .await?;
+                // The payload is on the wire and `blobs` dies with this arm, so
+                // the feed stops paying for it now rather than at the end of a
+                // link that may stream for hours (FM-REPLICATION-069).
+                drop(blobs);
+                report_feed(&self.feed, 0, "the written live dataset")?;
                 Ok(Next::Event(SessionEvent::PayloadSent))
             }
 
@@ -1530,10 +1604,11 @@ impl<'a> SessionDriver<'a> {
                     .stream
                     .take()
                     .ok_or_else(|| io::Error::other("session stream already handed off"))?;
+                let feed = self.feed.clone();
                 let departure = self
                     .session
                     .clone()
-                    .start_streaming(stream, self.handler, replay_from, resume)
+                    .start_streaming(stream, self.handler, replay_from, resume, feed)
                     .await?;
                 Ok(Next::Ended(departure))
             }
