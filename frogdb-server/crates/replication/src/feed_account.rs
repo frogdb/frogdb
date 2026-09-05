@@ -406,6 +406,42 @@ mod tests {
     }
 
     // FM-REPLICATION-069
+    /// The read half is guarded too, and passes bytes through until it is.
+    ///
+    /// A streaming session splits the stream and parks its read half on
+    /// `REPLCONF ACK`, which is precisely where a replica that has stopped
+    /// reading also stops *writing*. One signal is armed over the whole stream
+    /// before the split so it reaches that half as well.
+    #[tokio::test]
+    async fn a_shed_fails_the_read_side_too() {
+        let (tx, rx) = oneshot::channel();
+        let (client, mut server) = tokio::io::duplex(1024);
+        let mut guarded = ShedGuardedStream::new(client, rx);
+
+        server
+            .write_all(b"REPLCONF")
+            .await
+            .expect("the peer writes before it stalls");
+        let mut scratch = [0u8; 8];
+        guarded
+            .read_exact(&mut scratch)
+            .await
+            .expect("an unshed stream delivers what the peer sent");
+        assert_eq!(&scratch, b"REPLCONF", "the read must be the peer's bytes");
+
+        tx.send("soft_limit")
+            .expect("the stream holds the receiver");
+        let error = guarded
+            .read(&mut scratch)
+            .await
+            .expect_err("a shed link must not go on reading");
+        assert!(
+            error.to_string().contains("soft_limit"),
+            "the read must fail naming the limit that shed it; got {error}"
+        );
+    }
+
+    // FM-REPLICATION-069
     /// Shutdown is deliberately *not* guarded, and must really reach the
     /// socket: closing the link is how a shed is carried out, so a shutdown
     /// that quietly succeeded without shutting anything down would leave the
