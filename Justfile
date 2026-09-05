@@ -1243,16 +1243,25 @@ cross-install:
 # `.cargo/config.toml`, so native builds, `just check`, and the Docker builder — whose older
 # clang has no `-mevex512` — never see it. `docker-cross-build` depends on this recipe and
 # inherits the flags with it.
+#
+# `AR` is jemalloc's. tikv-jemalloc-sys builds jemalloc with autoconf, and its configure reads
+# plain `AR` — not the `AR_<target>` that cargo-zigbuild sets for cc-rs consumers like rocksdb.
+# So it found the host's Mach-O-only `ar`, which archived nothing from the ELF objects
+# ("ranlib: warning: archive member 'jemalloc.pic.o' not a mach-o file") and left a 96-byte
+# empty `libjemalloc_pic.a`; the link then failed on undefined `mallctl`/`mallocx`/`rallocx`/
+# `sdallocx`. `zig ar` is llvm-ar and handles both object formats, so the plain name is safe
+# for any host-side cc-rs build that also falls through to it.
 cross-build:
-    CXXFLAGS_x86_64_unknown_linux_gnu="-x c++ -mevex512" cargo zigbuild --release --target x86_64-unknown-linux-gnu --bin frogdb-server --features cmd-full
+    CXXFLAGS_x86_64_unknown_linux_gnu="-x c++ -mevex512" AR="zig ar" cargo zigbuild --release --target x86_64-unknown-linux-gnu --bin frogdb-server --features cmd-full
 
 # Cross-compile for Linux ARM64 using zig (for benchmarks on Apple Silicon; cmd-full — see cross-build)
 #
 # Same `-x c++` driver fix as cross-build; no `-mevex512` because aarch64's SIMD targets are
-# NEON/SVE, not AVX-512. Target-scoped for the same reason. `docker-build-bench` depends on
-# this recipe and inherits the flag with it.
+# NEON/SVE, not AVX-512. Target-scoped for the same reason. `AR` is the same jemalloc autoconf
+# fix, and is not target-scoped because autoconf only reads the plain name. `docker-build-bench`
+# depends on this recipe and inherits both with it.
 cross-build-arm:
-    CXXFLAGS_aarch64_unknown_linux_gnu="-x c++" cargo zigbuild --release --target aarch64-unknown-linux-gnu --bin frogdb-server --features cmd-full
+    CXXFLAGS_aarch64_unknown_linux_gnu="-x c++" AR="zig ar" cargo zigbuild --release --target aarch64-unknown-linux-gnu --bin frogdb-server --features cmd-full
 
 # Verify binary is valid Linux ELF
 cross-verify:
