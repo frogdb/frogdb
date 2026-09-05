@@ -1,6 +1,6 @@
 # 19: zero-copy parse path
 
-Status: ready-for-agent
+Status: ready-for-human
 Type: AFK
 Origin: memory-architecture PRD phase filing, 2026-09-01 — [PRD.md](../../PRD.md) R12
 Area: frogdb-protocol (command.rs) + frogdb-server (connection/, dispatch)
@@ -75,20 +75,47 @@ lease is ever stored in a `Value`.
 
 ## Acceptance criteria
 
-- [ ] `ParsedCommand::try_from` performs no per-arg copy for the immediate single-core path
-      (assert via allocation counting in a test, or a debug assertion on the buffer's
-      refcount origin).
-- [ ] Cross-core hops and parked blocking commands copy out; a test pins buffer-return timing
-      for both (buffer returns to pool while a BLPOP is still parked).
-- [ ] No stored `Value` aliases a network buffer (debug_assert at store boundary + test).
-- [ ] Hop batching: multi-key command touching K distinct foreign cores sends exactly K
-      messages (counter-based test); fan-out width cap honored.
+Landed (each with its forcing test, most tagged `FM-MEMORY-003` in `specs/memory.md`):
+zero-copy `try_from` (`test_try_from_is_zero_copy`); escape-point copies at the keyspace
+install seam, blocking park (`detach_wait_inputs`), foreign-core hop (`command_for_shard`),
+connection-local retention (MULTI queue, WATCH, tracking prefixes, client name/lib info),
+cross-connection retention (slow log — always a copy — pub/sub publish, script cache) and
+collection-internal retention points (quicklist plain nodes, stream group/consumer/PEL
+names, vector-set element names, time-series compaction destinations), all through the
+single `frogdb_protocol::detach_bytes` chokepoint; scatter batches (`partition_keys`, MSET
+pairs) are deliberately per-op slices — one synchronous round trip, and the shard's install
+seam makes the one copy (`partition_batches_keys_per_shard_without_copying`,
+`mset_partition_sends_read_buffer_slices`); the read buffer is pool-seeded at accept and
+recycled/released back; parked pipelined frames are copied out (`detach_frame`) so the
+`is_unique` discriminator stays sound across the one mid-command read-ahead — a `reserve`
+during that read-ahead can leave the parked command's own args holding the old
+allocation, which never pins it because name and args co-hold one allocation and after
+the wait the args are only borrowed
+(`read_ahead_realloc_leaves_parked_args_shared_and_parked_frames_detached`, loopback TCP);
+hop batching K shards → K messages (`a_scatter_over_k_shards_sends_exactly_k_lock_messages`);
+pipelined-completion pool property test
+(`a_pipelined_burst_of_slices_releases_the_lease_only_when_the_last_drops`; no unsafe
+anywhere in the handoff, so no miri/loom needed).
+
+**Store boundary (§4) — enforced by convention, not by type.** No `Bytes` rooted in the
+read buffer is stored in a `Value`: `HashMapStore::install` detaches args and calls
+`Value::detach_network_aliases`, whose exhaustive match makes every variant declare
+whether it copies on insert or detaches at its own retention point. There is no runtime
+assertion — `is_unique()` cannot distinguish "aliases a read buffer" from "shared with a
+COPY'd sibling", so a `debug_assert` would misfire on legitimately shared values. The
+forcing test is `install_detaches_args_that_alias_a_shared_read_buffer`; adding a
+variant does not compile until its arm — and therefore its copy/detach story — is written.
+
+Remaining — needs the Linux rig and a human decision, hence ready-for-human:
+
+- [ ] **Fan-out width cap** (~4 concurrent foreign-core waves, config-capped, with the
+      spike's ~6 µs/core and 11× p99.9 provenance in the doc comment). Touches the LOCKED
+      vll/txn dispatch path (gate 0.90) and needs an atomicity ruling: bounded-width waves
+      change when a wide command's locks are requested, which interacts with wound-retry
+      fairness. Spec-first work.
 - [ ] Bench vs [issue 04](../) baselines: large-value SET/GET throughput improves or
-      holds; cross-thread p99.9 at 512 clients does not regress (target: improve via
-      batching, per the spike's lever).
-- [ ] Pipelined-commands fuzz/property test: interleaved completion orders never return a
-      buffer early (miri or loom on the refcount handoff if unsafe is involved; prefer no
-      unsafe).
+      holds; cross-thread p99.9 at 512 clients does not regress. Needs the issue-04 Linux
+      rig; this session ran in local (macOS) mode.
 
 ## Test boundary
 
@@ -97,9 +124,8 @@ via the issue-04 rig on the Linux box for the tail-latency claims.
 
 ## Spec rows at R15
 
-Buffer-aliasing invariant ("storage never aliases network buffers") is a candidate row —
-mechanical, testable, and load-bearing for both correctness and the pool accounting. Note it
-in `specs/memory.md` DRAFT for [issue 22](../).
+Landed as `FM-MEMORY-003` in `specs/memory.md` (DRAFT discipline: row and forcing tests in
+the same commit). [Issue 22](../) inherits it.
 
 ## Out of scope
 

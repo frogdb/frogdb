@@ -218,11 +218,12 @@ fn client_setname(ctx: &mut ConnCtx<'_>, args: &[Bytes]) -> Response {
         return Response::error(msg);
     }
 
-    // Empty name clears the name
+    // Empty name clears the name. Retained by connection state and the
+    // (cross-thread) client registry — detach from the pooled read buffer.
     let name_opt = if name.is_empty() {
         None
     } else {
-        Some(name.clone())
+        Some(frogdb_protocol::detach_bytes(name.clone()))
     };
 
     let id = conn_id(ctx);
@@ -535,6 +536,10 @@ fn client_setinfo(ctx: &ConnCtx<'_>, args: &[Bytes]) -> Response {
     let value = &args[1];
     let id = conn_id(ctx);
 
+    // Retained by the cross-thread client registry — detach from the pooled
+    // read buffer before it leaves this connection.
+    let retained = || frogdb_protocol::detach_bytes(value.clone());
+
     match attr.as_slice() {
         b"LIB-NAME" => {
             // Validate: no spaces or newlines allowed
@@ -544,7 +549,7 @@ fn client_setinfo(ctx: &ConnCtx<'_>, args: &[Bytes]) -> Response {
                 );
             }
             ctx.client_registry
-                .update_lib_info(id, Some(value.clone()), None);
+                .update_lib_info(id, Some(retained()), None);
             Response::ok()
         }
         b"LIB-VER" => {
@@ -555,7 +560,7 @@ fn client_setinfo(ctx: &ConnCtx<'_>, args: &[Bytes]) -> Response {
                 );
             }
             ctx.client_registry
-                .update_lib_info(id, None, Some(value.clone()));
+                .update_lib_info(id, None, Some(retained()));
             Response::ok()
         }
         _ => Response::error(format!(

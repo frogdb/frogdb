@@ -9,6 +9,13 @@ use frogdb_protocol::Response;
 use super::{PartitionResult, ScatterGatherStrategy};
 
 /// Helper to partition keys by shard.
+///
+/// The batches are slices of the connection's read buffer, not copies: a
+/// scatter is one synchronous round trip, the connection holds the buffer
+/// alive until every participant has replied, and the shards only retain what
+/// they install — where `HashMapStore::install` copies once. Copying here as
+/// well would make MSET pay twice per key and value (see `routing.rs` for the
+/// per-op-slice rule).
 fn partition_keys(keys: &[Bytes], num_shards: usize) -> PartitionResult {
     let mut shard_keys: BTreeMap<usize, Vec<Bytes>> = BTreeMap::new();
     let mut key_order: Vec<(usize, Bytes)> = Vec::new();
@@ -108,6 +115,8 @@ impl ScatterGatherStrategy for MSetStrategy {
 
         for (key, value) in &self.pairs {
             let shard_id = shard_for_key(key, num_shards);
+            // Read-buffer slices, as in `partition_keys`: the shard's install
+            // seam makes the one copy of each key and value it keeps.
             shard_keys.entry(shard_id).or_default().push(key.clone());
             shard_pairs
                 .entry(shard_id)
@@ -322,6 +331,87 @@ mod tests {
         for &shard_id in result.shard_keys.keys() {
             assert!(result.shard_operations.contains_key(&shard_id));
         }
+    }
+
+    /// The partition half of the hop-batching contract (issue 19): many keys
+    /// spanning K distinct shards produce exactly K participants — the
+    /// coordinator then sends one lock message per participant, so keys never
+    /// cost a message each. The batches stay slices of the read buffer: a
+    /// scatter is one synchronous round trip and the shard's install seam is
+    /// where the single copy of anything retained is made, so partitioning
+    /// must not copy (MSET would otherwise pay twice per key and value).
+    // FM-MEMORY-003
+    #[test]
+    fn partition_batches_keys_per_shard_without_copying() {
+        let num_shards = 4;
+        // Slices of one shared buffer, as the zero-copy parse path produces.
+        let backing = Bytes::from(
+            (0..32)
+                .flat_map(|i| format!("key{i:02}--").into_bytes())
+                .collect::<Vec<u8>>(),
+        );
+        let keys: Vec<Bytes> = (0..32).map(|i| backing.slice(i * 7..i * 7 + 5)).collect();
+
+        let distinct: std::collections::BTreeSet<usize> =
+            keys.iter().map(|k| shard_for_key(k, num_shards)).collect();
+
+        let result = partition_keys(&keys, num_shards);
+
+        assert_eq!(
+            result.shard_keys.len(),
+            distinct.len(),
+            "one participant per distinct shard, not per key"
+        );
+        assert_eq!(
+            result.shard_keys.values().map(Vec::len).sum::<usize>(),
+            keys.len(),
+            "every key lands in exactly one shard's batch"
+        );
+        let range = backing.as_ptr_range();
+        for key in result.shard_keys.values().flatten() {
+            assert!(
+                range.contains(&key.as_ptr()),
+                "a partitioned key must alias the read buffer, not copy it"
+            );
+        }
+
+        // The batches keep the buffer shared for exactly the request's
+        // lifetime: dropping them (and the parsed args) releases it.
+        drop(keys);
+        drop(result);
+        assert!(backing.is_unique());
+    }
+
+    // FM-MEMORY-003
+    /// MSET's pairs cross to the shards as read-buffer slices too; the value
+    /// is the large one, and copying it here as well as at install is the
+    /// double copy this pins against.
+    #[test]
+    fn mset_partition_sends_read_buffer_slices() {
+        let backing = Bytes::from(b"k1 v1 k2 v2".to_vec());
+        let pairs = vec![
+            (backing.slice(0..2), backing.slice(3..5)),
+            (backing.slice(6..8), backing.slice(9..11)),
+        ];
+        let strategy = MSetStrategy::new(pairs);
+        let result = strategy.partition(&[], 4);
+
+        let range = backing.as_ptr_range();
+        for op in result.shard_operations.values() {
+            let ScatterOp::MSet { pairs } = op else {
+                panic!("MSET partitions into MSet ops");
+            };
+            for (key, value) in pairs {
+                assert!(range.contains(&key.as_ptr()));
+                assert!(
+                    range.contains(&value.as_ptr()),
+                    "the value must reach the shard as a slice, not a copy"
+                );
+            }
+        }
+        drop(strategy);
+        drop(result);
+        assert!(backing.is_unique());
     }
 
     #[test]

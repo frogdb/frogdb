@@ -313,6 +313,9 @@ pub struct RuntimeConfig {
 
     // Client memory limit
     pub maxmemory_clients: String,
+
+    // Per-core transaction buffer bound (bytes)
+    pub txn_buffer_limit: u64,
 }
 
 impl RuntimeConfig {
@@ -337,6 +340,7 @@ impl RuntimeConfig {
             slowlog_max_len: config.slowlog.max_len,
             slowlog_max_arg_len: config.slowlog.max_arg_len,
             maxmemory_clients: config.memory.maxmemory_clients.clone(),
+            txn_buffer_limit: config.memory.txn_buffer_limit,
         }
     }
 }
@@ -882,6 +886,12 @@ pub struct ConfigManager {
     /// thresholds: the primary handler that owns the backlog is built on every
     /// role, so a SET governs this node the moment it becomes a primary.
     backlog_ttl: std::sync::OnceLock<Arc<frogdb_replication::BacklogTtl>>,
+    /// Every shard's `TxnBuffering` budget, published once the shards are
+    /// built (they are built after this manager). `CONFIG SET
+    /// txn-buffer-limit` re-limits each of them; the configured value is the
+    /// authority for CONFIG GET/REWRITE and is synced in on publish, so a SET
+    /// that landed first is not lost.
+    txn_budgets: std::sync::OnceLock<Arc<Vec<frogdb_memory::Budget>>>,
     /// Serializes the whole CONFIG SET lifecycle (see [`Self::set`]).
     set_lock: Mutex<()>,
 }
@@ -1043,8 +1053,28 @@ impl ConfigManager {
                 config.replication.replica_serve_stale_data,
             )),
             replication_self_fence: std::sync::OnceLock::new(),
+            txn_budgets: std::sync::OnceLock::new(),
             set_lock: Mutex::new(()),
         }
+    }
+
+    /// Publish the shards' `TxnBuffering` budgets, syncing the configured
+    /// `txn-buffer-limit` into each so the shard builder's default never
+    /// outlives boot. Called once, from the shard spawn loop's caller.
+    pub fn set_txn_budgets(&self, budgets: Arc<Vec<frogdb_memory::Budget>>) {
+        if self.txn_budgets.set(budgets).is_ok()
+            && let Some(budgets) = self.txn_budgets.get()
+        {
+            let limit = self.runtime.read().unwrap().txn_buffer_limit;
+            for budget in budgets.iter() {
+                budget.set_limit(limit);
+            }
+        }
+    }
+
+    /// The per-core transaction buffer bound, in bytes.
+    pub fn txn_buffer_limit(&self) -> u64 {
+        self.runtime.read().unwrap().txn_buffer_limit
     }
 
     /// Live hot-shard thresholds, for the collector to adopt at startup.
@@ -1858,6 +1888,44 @@ impl ConfigManager {
                     Ok(())
                 },
                 render: |v| v.clone(),
+                propagation: Propagation::None,
+            }),
+            TxnBufferLimit => Box::new(ConfigParam::<u64, ConfigManager> {
+                name: id.name(),
+                parse: |s| {
+                    s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                        param: "txn-buffer-limit".to_string(),
+                        message: "must be a byte count".to_string(),
+                    })
+                },
+                validate: |v, _ctx| {
+                    if *v < frogdb_config::memory::MIN_TXN_BUFFER_LIMIT {
+                        Err(ConfigError::InvalidValue {
+                            param: "txn-buffer-limit".to_string(),
+                            message: format!(
+                                "must be >= {} bytes",
+                                frogdb_config::memory::MIN_TXN_BUFFER_LIMIT
+                            ),
+                        })
+                    } else {
+                        Ok(())
+                    }
+                },
+                default: || frogdb_config::memory::DEFAULT_TXN_BUFFER_LIMIT,
+                get: |mgr| mgr.runtime.read().unwrap().txn_buffer_limit,
+                // Re-limit every shard's budget directly: the `Budget` handle
+                // is the slot itself, so no shard message is needed and the new
+                // bound governs the next charge on every core.
+                apply: |mgr, v| {
+                    mgr.runtime.write().unwrap().txn_buffer_limit = v;
+                    if let Some(budgets) = mgr.txn_budgets.get() {
+                        for budget in budgets.iter() {
+                            budget.set_limit(v);
+                        }
+                    }
+                    Ok(())
+                },
+                render: |v| v.to_string(),
                 propagation: Propagation::None,
             }),
             // === Logging family ===

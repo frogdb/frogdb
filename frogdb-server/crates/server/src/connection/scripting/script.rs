@@ -243,6 +243,7 @@ mod broadcast_timeout_routing_tests {
             registry: Arc::new(registry),
             shard_senders,
             acl_manager: frogdb_core::AclManager::new(Default::default()),
+            txn_budgets: crate::connection::deps::unbounded_txn_budgets(2),
         };
         let client_registry = Arc::new(frogdb_core::ClientRegistry::new());
         let admin = AdminDeps {

@@ -175,7 +175,12 @@ impl SlowLog {
             .iter()
             .map(|arg| {
                 if max_arg_len == 0 || arg.len() <= max_arg_len {
-                    arg.clone()
+                    // Slow-log entries outlive the command and are held on
+                    // shard 0, so an entry never adopts the caller's
+                    // allocation — which can be a whole read buffer behind a
+                    // short arg. Always a copy, not a `detach_bytes`
+                    // pass-through.
+                    Bytes::copy_from_slice(arg)
                 } else {
                     // Truncate and add indicator
                     let truncated = &arg[..max_arg_len];
@@ -341,6 +346,36 @@ mod tests {
 
         // Verify the truncated arg starts with the first 128 bytes
         assert_eq!(&truncated[1][..128], &long_arg[..128]);
+    }
+
+    // FM-MEMORY-003
+    /// A slow-log entry never adopts the caller's allocation, even when the
+    /// arg is that allocation's sole holder — the case a read-ahead
+    /// reallocation leaves a parked command's args in. A pass-through here
+    /// would keep a whole read buffer alive behind a five-byte key.
+    #[test]
+    fn truncate_args_copies_a_slice_that_is_the_sole_holder_of_its_buffer() {
+        let backing = Bytes::from(vec![b'k'; 8 * 1024]);
+        let key = backing.slice(0..5);
+        drop(backing);
+        assert!(
+            key.is_unique(),
+            "the key is the last holder of the 8 KiB buffer"
+        );
+
+        let logged = SlowLog::truncate_args(std::slice::from_ref(&key), 128);
+
+        assert_eq!(logged[0], key);
+        assert_ne!(
+            logged[0].as_ptr(),
+            key.as_ptr(),
+            "the entry must be a copy, not the caller's allocation"
+        );
+        drop(logged);
+        assert!(
+            key.is_unique(),
+            "nothing in the log still references the buffer"
+        );
     }
 
     #[test]

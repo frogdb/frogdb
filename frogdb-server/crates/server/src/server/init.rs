@@ -89,6 +89,11 @@ pub(super) struct InitResult {
     pub health_checker: HealthChecker,
     pub shared_maxmemory: Arc<AtomicU64>,
     pub shard_memory_used: Arc<Vec<AtomicU64>>,
+    /// Each shard's `TxnBuffering` budget, indexed by shard id. Minted here
+    /// rather than by the shard builder because the runtime replica streamer
+    /// (phase 3) charges them before the shards exist (phase 4); the shards
+    /// adopt them on spawn.
+    pub txn_budgets: Arc<Vec<frogdb_memory::Budget>>,
     pub wal_config: WalConfig,
     pub eviction_config: EvictionConfig,
     pub slowlog_next_id: Arc<AtomicU64>,
@@ -392,6 +397,21 @@ pub(super) async fn init_infrastructure(
     let shard_memory_used: Arc<Vec<AtomicU64>> =
         Arc::new((0..num_shards).map(|_| AtomicU64::new(0)).collect());
 
+    // One transaction-buffer budget per core (`txn-buffer-limit`), published
+    // to the ConfigManager so `CONFIG SET` re-limits every core at once.
+    let txn_budgets: Arc<Vec<frogdb_memory::Budget>> = Arc::new(
+        (0..num_shards)
+            .map(|_| {
+                frogdb_memory::Budget::new(
+                    frogdb_memory::Subsystem::TxnBuffering,
+                    frogdb_memory::Disposition::Shed,
+                    config_manager.txn_buffer_limit(),
+                )
+            })
+            .collect(),
+    );
+    config_manager.set_txn_budgets(txn_budgets.clone());
+
     let mut wal_config = build_wal_config(&config.persistence);
     // Hand every WAL writer the ConfigManager's batch-threshold cell so
     // `CONFIG SET batch-size-threshold-kb` retunes all shards' flush threads at
@@ -483,6 +503,7 @@ pub(super) async fn init_infrastructure(
         health_checker,
         shared_maxmemory,
         shard_memory_used,
+        txn_budgets,
         wal_config,
         eviction_config,
         slowlog_next_id,

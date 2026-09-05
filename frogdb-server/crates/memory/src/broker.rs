@@ -19,6 +19,20 @@ pub mod defaults {
     /// so a million small keys fit comfortably and a table of large keys binds
     /// on bytes long before it binds on count.
     pub const CLIENT_TRACKING_BYTES: u64 = 128 * 1024 * 1024;
+
+    /// Transaction buffering (`txn-buffer-limit`), per core: the bytes an open
+    /// `MULTI` may queue, a batch may hold on its shard before the first
+    /// apply, and a replica may accumulate in a pending group. Redis has no
+    /// such limit; the default is large enough that no sane transaction
+    /// notices it and small enough that an unterminated `MULTI` cannot take
+    /// the node down.
+    pub const TXN_BUFFER_BYTES: u64 = 512 * 1024 * 1024;
+
+    /// The floor `txn-buffer-limit` is clamped to. There is no "0 = unlimited"
+    /// reading — an unlimited bound is the bug the budget exists to fix — and
+    /// a limit below one bulk argument's worth would refuse ordinary
+    /// transactions rather than runaway ones.
+    pub const TXN_BUFFER_MIN_BYTES: u64 = 1024 * 1024;
 }
 
 /// One budget slot in the broker's dense table.

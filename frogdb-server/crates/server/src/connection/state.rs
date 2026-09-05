@@ -21,6 +21,7 @@ use frogdb_core::{
     AuthenticatedUser, ClientStatsDelta, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
     MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION,
 };
+use frogdb_memory::{Budget, Refused};
 use frogdb_protocol::{ParsedCommand, ProtocolVersion};
 
 pub use frogdb_txn::{TransactionState, TransactionTarget, TxnError, TxnMetrics, TxnSummary};
@@ -445,6 +446,10 @@ pub struct ConnectionState {
     /// lifecycle methods (`begin_transaction`, `take_transaction`, ...).
     transaction: TransactionState,
 
+    /// The assigned shard's `TxnBuffering` budget, charged for the commands
+    /// this connection queues under MULTI (FM-TXN-054).
+    txn_budget: Budget,
+
     /// Pub/Sub state. Private: mutate via the subscription methods
     /// (`admit_subscriptions`, `add_subscription`, `exit_pubsub`, ...).
     pubsub: PubSubState,
@@ -494,7 +499,7 @@ pub struct ConnectionState {
 
 impl ConnectionState {
     /// Create a new connection state.
-    pub fn new(id: u64, addr: SocketAddr, requires_auth: bool) -> Self {
+    pub fn new(id: u64, addr: SocketAddr, requires_auth: bool, txn_budget: Budget) -> Self {
         let now = clock::now();
         Self {
             id,
@@ -505,6 +510,7 @@ impl ConnectionState {
             hello_at: None,
             name: None,
             transaction: TransactionState::default(),
+            txn_budget,
             pubsub: PubSubState::default(),
             tracking: TrackingState::default(),
             auth: if requires_auth {
@@ -700,13 +706,19 @@ impl ConnectionState {
     /// Begin a transaction (MULTI). Errors with [`TxnError::Nested`] if one is
     /// already open. Existing watches are preserved (WATCH before MULTI).
     pub fn begin_transaction(&mut self) -> Result<(), TxnError> {
-        self.transaction.begin()
+        self.transaction.begin(&self.txn_budget)
     }
 
     /// Push a validated command onto the transaction queue (no-op outside a
-    /// transaction, matching the historical guard).
-    pub fn push_queued_command(&mut self, cmd: ParsedCommand) {
-        self.transaction.push_queued_command(cmd);
+    /// transaction, matching the historical guard). `Err` when the command's
+    /// retained bytes would take the transaction past the buffer limit: it is
+    /// not queued and the transaction is already poisoned (FM-TXN-054).
+    pub fn push_queued_command(&mut self, mut cmd: ParsedCommand) -> Result<(), Refused> {
+        // Queued commands are retained until EXEC/DISCARD, which is bounded
+        // only by the buffer budget — copy them out of the connection's pooled
+        // read buffer (zero-copy parse path escape point).
+        cmd.detach();
+        self.transaction.push_queued_command(cmd)
     }
 
     /// Mark the transaction poisoned so EXEC aborts. An accompanying error
@@ -731,6 +743,9 @@ impl ConnectionState {
     /// Record a watched key with its watch-time version, shard, and liveness.
     /// First watch wins — see [`TransactionState::watch_key`].
     pub fn watch_key(&mut self, key: Bytes, shard_id: usize, version: u64, live_at_watch: bool) {
+        // Watches are retained until EXEC/UNWATCH — copy the key out of the
+        // pooled read buffer (zero-copy parse path escape point).
+        let key = frogdb_protocol::detach_bytes(key);
         self.transaction
             .watch_key(key, shard_id, version, live_at_watch);
     }
@@ -1010,7 +1025,13 @@ impl ConnectionState {
             let batch = if prefixes.is_empty() {
                 vec![Bytes::new()]
             } else {
+                // Prefixes are retained for the life of the tracking session
+                // and cross to the shards — copy them out of the pooled read
+                // buffer (zero-copy parse path escape point).
                 prefixes
+                    .into_iter()
+                    .map(frogdb_protocol::detach_bytes)
+                    .collect()
             };
             for p in &batch {
                 if !self.tracking.prefixes.contains(p) {
@@ -1123,8 +1144,16 @@ mod tests {
     use frogdb_core::WatchEntry;
     use frogdb_txn::WatchedKey;
 
+    fn roomy() -> Budget {
+        Budget::new(
+            frogdb_memory::Subsystem::TxnBuffering,
+            frogdb_memory::Disposition::Shed,
+            u64::MAX,
+        )
+    }
+
     fn state() -> ConnectionState {
-        ConnectionState::new(1, "127.0.0.1:0".parse().unwrap(), false)
+        ConnectionState::new(1, "127.0.0.1:0".parse().unwrap(), false, roomy())
     }
 
     fn cmd(name: &'static [u8]) -> ParsedCommand {
@@ -1378,8 +1407,8 @@ mod tests {
         assert!(s.in_transaction());
         assert_eq!(s.begin_transaction(), Err(TxnError::Nested));
 
-        s.push_queued_command(cmd(b"GET"));
-        s.push_queued_command(cmd(b"SET"));
+        s.push_queued_command(cmd(b"GET")).unwrap();
+        s.push_queued_command(cmd(b"SET")).unwrap();
         s.transaction.fold_shard(2);
         s.watch_key(Bytes::from_static(b"k"), 2, 7, true);
 
@@ -1420,7 +1449,7 @@ mod tests {
 
         s.begin_transaction().expect("MULTI after WATCH");
         // Queue a single-shard command (shard 1), as seed 8 does (DEL {t1}kv1).
-        s.push_queued_command(cmd(b"DEL"));
+        s.push_queued_command(cmd(b"DEL")).unwrap();
         s.transaction.fold_shard(1);
 
         let summary = s.take_transaction().expect("in transaction");
@@ -1452,7 +1481,7 @@ mod tests {
         // UNWATCH inside MULTI clears the live watch set (dispatched immediately).
         s.unwatch_all();
         // Queue a single-shard command on a *different* shard than the old watch.
-        s.push_queued_command(cmd(b"SET"));
+        s.push_queued_command(cmd(b"SET")).unwrap();
         s.transaction.fold_shard(1);
 
         let summary = s.take_transaction().expect("in transaction");
@@ -1473,7 +1502,7 @@ mod tests {
     fn transaction_abort_marks_summary() {
         let mut s = state();
         s.begin_transaction().unwrap();
-        s.push_queued_command(cmd(b"GET"));
+        s.push_queued_command(cmd(b"GET")).unwrap();
         s.abort_transaction(Some("ERR boom".to_string()));
 
         let summary = s.take_transaction().expect("in transaction");
@@ -1485,7 +1514,7 @@ mod tests {
     fn discard_resets_everything_including_watches() {
         let mut s = state();
         s.begin_transaction().unwrap();
-        s.push_queued_command(cmd(b"GET"));
+        s.push_queued_command(cmd(b"GET")).unwrap();
         s.watch_key(Bytes::from_static(b"k"), 0, 1, true);
 
         let metrics = s.discard_transaction().expect("in transaction");
@@ -1574,7 +1603,7 @@ mod tests {
         use std::sync::Arc;
 
         // A connection that requires auth starts unauthenticated.
-        let mut s = ConnectionState::new(1, "127.0.0.1:0".parse().unwrap(), true);
+        let mut s = ConnectionState::new(1, "127.0.0.1:0".parse().unwrap(), true, roomy());
         assert!(!s.is_authenticated());
         assert!(s.authenticated_user().is_none());
         assert_eq!(s.username(), "(not authenticated)");
@@ -1968,5 +1997,61 @@ mod tests {
         s.revert_to_default_user(true);
         assert!(s.is_authenticated());
         assert_eq!(s.username(), "default");
+    }
+
+    // ---- zero-copy escape points -----------------------------------------
+
+    // FM-MEMORY-003
+    /// MULTI queues and WATCH sets outlive the command that produced them, so
+    /// both must copy out of the (shared) read buffer at the retention point.
+    #[test]
+    fn queued_commands_and_watches_detach_from_the_shared_read_buffer() {
+        // One heap buffer standing in for the connection's read buffer; the
+        // command and watch key are slices of it, as the parser produces.
+        let backing = Bytes::from(b"SET key val watched".to_vec());
+        let queued = ParsedCommand::new(
+            backing.slice(0..3),
+            vec![backing.slice(4..7), backing.slice(8..11)],
+        );
+
+        let mut s = state();
+        s.begin_transaction().expect("MULTI");
+        s.push_queued_command(queued).unwrap();
+        s.watch_key(backing.slice(12..19), 0, 1, true);
+
+        assert!(
+            backing.is_unique(),
+            "retained queue and watch must not alias the read buffer"
+        );
+        let summary = s.take_transaction().expect("in transaction");
+        assert_eq!(summary.queue[0].args[1].as_ref(), b"val");
+        assert_eq!(summary.watches[0].entry.key.as_ref(), b"watched");
+    }
+
+    // FM-MEMORY-003
+    /// BCAST tracking prefixes live for the tracking session and cross to
+    /// every shard, so `enable_tracking` copies them out of the read buffer:
+    /// neither the retained set nor the batch handed back for shard
+    /// registration may alias it.
+    #[test]
+    fn tracking_prefixes_detach_from_the_shared_read_buffer() {
+        let backing = Bytes::from(b"user: order:".to_vec());
+        let prefixes = vec![backing.slice(0..5), backing.slice(6..12)];
+
+        let mut s = state();
+        let batch = s
+            .enable_tracking(TrackingEnableRequest {
+                bcast: true,
+                prefixes,
+                ..Default::default()
+            })
+            .expect("BCAST with disjoint prefixes");
+
+        assert!(
+            backing.is_unique(),
+            "retained prefixes and the shard batch must not alias the read buffer"
+        );
+        assert_eq!(batch.len(), 2);
+        assert_eq!(s.tracking().prefixes[1].as_ref(), b"order:");
     }
 }

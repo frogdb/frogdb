@@ -501,6 +501,21 @@ impl ShardWorkerBuilder {
             frogdb_memory::defaults::CLIENT_TRACKING_BYTES,
             frogdb_memory::Disposition::Shed,
         );
+        // Transaction buffering sheds too: the shed action is "abort this
+        // transaction" (`specs/persistence.md` FM-PERSISTENCE-062), never a
+        // stalled core. The connection side charges this same budget for its
+        // queued MULTI (`specs/txn.md` FM-TXN-054). The server mints the
+        // budget before the shards exist (the replica streamer needs it
+        // first) and hands it in through `ShardWorker::set_txn_buffer_budget`;
+        // this default only ever serves a worker built without one. The
+        // returned handle is dropped on purpose: the charge site takes its
+        // handle from the broker (`memory.budget(TxnBuffering)`) so an
+        // adopted replacement is seen without re-plumbing.
+        memory.open(
+            frogdb_memory::Subsystem::TxnBuffering,
+            frogdb_memory::defaults::TXN_BUFFER_BYTES,
+            frogdb_memory::Disposition::Shed,
+        );
 
         Ok(ShardWorker {
             identity: ShardIdentity::new(shard_id, num_shards, self.is_replica),

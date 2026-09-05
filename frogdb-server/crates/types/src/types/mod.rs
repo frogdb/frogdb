@@ -137,6 +137,33 @@ impl Value {
 }
 
 impl Value {
+    /// Copy any directly-held `Bytes` that still aliases a shared buffer.
+    ///
+    /// Called by the keyspace install seam so a stored value never pins a
+    /// connection's pooled read buffer (see [`frogdb_protocol::detach_bytes`]).
+    /// Only strings hold caller-supplied `Bytes` verbatim at install time.
+    /// Every other variant either copies elements into packed storage on
+    /// insert or detaches at its own retention point (quicklist plain nodes,
+    /// stream group/consumer names, vector-set element names, time-series
+    /// compaction destinations). The match is exhaustive on purpose: adding a
+    /// variant forces the author to say which of the two it is.
+    pub fn detach_network_aliases(&mut self) {
+        match self {
+            Value::String(sv) => sv.detach(),
+            Value::List(_) | Value::Stream(_) | Value::VectorSet(_) | Value::TimeSeries(_) => {} // detach at retention points
+            Value::SortedSet(_)
+            | Value::Hash(_)
+            | Value::Set(_)
+            | Value::BloomFilter(_)
+            | Value::HyperLogLog(_)
+            | Value::Json(_)
+            | Value::CuckooFilter(_)
+            | Value::TopK(_)
+            | Value::TDigest(_)
+            | Value::CountMinSketch(_) => {} // copy on insert
+        }
+    }
+
     /// Create a string value from bytes.
     pub fn string(data: impl Into<Bytes>) -> Self {
         Value::String(StringValue::new(data))
@@ -521,6 +548,32 @@ pub enum BlockingOp {
 }
 
 impl BlockingOp {
+    /// Copy any embedded `Bytes` that still aliases a shared buffer, in place.
+    ///
+    /// A blocking op is retained by the shard for the whole park, which can
+    /// be unbounded — it must never pin a connection's pooled read buffer.
+    /// See [`frogdb_protocol::detach_bytes`].
+    pub fn detach(&mut self) {
+        match self {
+            BlockingOp::BLMove { dest, .. } => {
+                *dest = frogdb_protocol::detach_bytes(std::mem::take(dest));
+            }
+            BlockingOp::XReadGroup {
+                group, consumer, ..
+            } => {
+                *group = frogdb_protocol::detach_bytes(std::mem::take(group));
+                *consumer = frogdb_protocol::detach_bytes(std::mem::take(consumer));
+            }
+            BlockingOp::BLPop
+            | BlockingOp::BRPop
+            | BlockingOp::BLMPop { .. }
+            | BlockingOp::BZPopMin
+            | BlockingOp::BZPopMax
+            | BlockingOp::BZMPop { .. }
+            | BlockingOp::XRead { .. } => {}
+        }
+    }
+
     /// The reply a timed-out wait of this op produces, with the correct RESP2
     /// nil shape.
     ///
@@ -786,6 +839,50 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The blocking-park boundary of the zero-copy parse path (issue 19): an
+    /// op parked on a shard must not pin the connection's pooled read buffer,
+    /// so `detach` copies every embedded `Bytes` that still aliases one.
+    // FM-MEMORY-003
+    #[test]
+    fn blocking_op_detach_releases_the_shared_read_buffer() {
+        // Heap-backed like a frozen read buffer (a static literal's `Bytes`
+        // is never `is_unique`).
+        let backing = Bytes::from(b"destkey groupname consumername".to_vec());
+
+        let mut blmove = BlockingOp::BLMove {
+            dest: backing.slice(0..7),
+            src_dir: Direction::Left,
+            dest_dir: Direction::Right,
+        };
+        let mut xreadgroup = BlockingOp::XReadGroup {
+            group: backing.slice(8..17),
+            consumer: backing.slice(18..30),
+            noack: false,
+            count: None,
+        };
+        assert!(!backing.is_unique(), "the ops alias the read buffer");
+
+        blmove.detach();
+        xreadgroup.detach();
+
+        assert!(
+            backing.is_unique(),
+            "a parked op must hold copies, not slices of the read buffer"
+        );
+        let BlockingOp::BLMove { dest, .. } = &blmove else {
+            unreachable!()
+        };
+        assert_eq!(dest, &Bytes::from("destkey"));
+        let BlockingOp::XReadGroup {
+            group, consumer, ..
+        } = &xreadgroup
+        else {
+            unreachable!()
+        };
+        assert_eq!(group, &Bytes::from("groupname"));
+        assert_eq!(consumer, &Bytes::from("consumername"));
+    }
 
     #[test]
     fn test_blocking_op_timeout_reply_nil_shape() {

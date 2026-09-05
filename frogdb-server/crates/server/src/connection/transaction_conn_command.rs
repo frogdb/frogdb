@@ -568,7 +568,12 @@ mod tests {
                 memory_diag: crate::connection::observability_conn_command::MemoryDiag(
                     frogdb_debug::MemoryDiagConfig::default(),
                 ),
-                state: ConnectionState::new(1, "127.0.0.1:0".parse().unwrap(), false),
+                state: ConnectionState::new(
+                    1,
+                    "127.0.0.1:0".parse().unwrap(),
+                    false,
+                    crate::connection::deps::unbounded_txn_budget(),
+                ),
             }
         }
 

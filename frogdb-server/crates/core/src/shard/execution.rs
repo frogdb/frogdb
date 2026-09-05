@@ -600,6 +600,50 @@ impl ShardWorker {
     /// applied as a single atomic batch after all commands complete.
     ///
     /// This prevents replicas from observing intermediate transaction state.
+    /// Charge a batch's pre-apply footprint to this core's `TxnBuffering`
+    /// budget: the commands the shard is holding (its own copy — the
+    /// coordinator clones per attempt), plus, under the `rollback` failure
+    /// policy, the rollback snapshots the apply loop will take. A snapshot pins
+    /// the pre-write value behind an `Arc`, and the write's `Arc::make_mut`
+    /// then clones it, so the value's size is real memory the transaction
+    /// holds until it commits. `store.get` here unspills a warm key, which the
+    /// snapshot capture would do a moment later anyway.
+    fn charge_transaction_buffer(
+        &mut self,
+        commands: &[ParsedCommand],
+        rollback_mode: bool,
+    ) -> Result<frogdb_memory::Charge, frogdb_memory::Refused> {
+        let mut footprint: u64 = commands.iter().map(ParsedCommand::retained_bytes).sum();
+        if rollback_mode {
+            for command in commands {
+                let name = command.name_uppercase_string();
+                let Some(handler) = self.registry.get(&name) else {
+                    continue;
+                };
+                if !handler
+                    .flags()
+                    .contains(crate::command::CommandFlags::WRITE)
+                {
+                    continue;
+                }
+                for action in handler.wal_strategy().actions(&command.args).iter() {
+                    if matches!(action, crate::WalAction::ClearShard) {
+                        continue;
+                    }
+                    if let Some(value) = self.store.get(action.key()) {
+                        footprint += value.memory_size() as u64;
+                    }
+                }
+            }
+        }
+        let mut charge = self
+            .memory
+            .budget(frogdb_memory::Subsystem::TxnBuffering)
+            .open_charge();
+        charge.grow(footprint)?;
+        Ok(charge)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn execute_transaction(
         &mut self,
@@ -697,6 +741,21 @@ impl ShardWorker {
         // commit, the failure policy decides whether a failed wait aborts.
         let rollback_mode = self.persistence.has_wal() && self.persistence.should_rollback();
         let confirm_mode = self.persistence.has_wal() && self.persistence.should_confirm();
+
+        // The batch's footprint on this core, charged to the `TxnBuffering`
+        // budget *after* every gate above and *before* the first apply
+        // (`specs/persistence.md` FM-PERSISTENCE-062). This is the last point
+        // at which refusing costs nothing to undo; a refusal mid-loop could
+        // only be atomic by snapshotting every write for every transaction,
+        // WAL or not. The guard lives for the rest of the call, so every exit
+        // — refusal, rollback, isolated panic, commit — releases it.
+        let _txn_charge = match self.charge_transaction_buffer(&commands, rollback_mode) {
+            Ok(charge) => charge,
+            Err(refused) => {
+                tracing::debug!(%refused, "EXEC refused by the transaction buffer budget");
+                return TransactionResult::Error(crate::TXN_BUFFER_LIMIT_ERROR.to_string());
+            }
+        };
 
         // Execute all commands, deferring side effects
         let mut results = Vec::with_capacity(commands.len());

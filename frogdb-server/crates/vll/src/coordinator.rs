@@ -938,6 +938,79 @@ mod tests {
         assert!(aborts.lock().await.is_empty());
     }
 
+    /// The hop-batching contract of the zero-copy parse path (issue 19): a
+    /// command whose keys span K distinct shards costs exactly K lock-request
+    /// messages — one per participant, never one per key — and the
+    /// `frogdb_scatter_gather_shards` histogram records that same K.
+    // FM-MEMORY-003
+    #[tokio::test]
+    async fn a_scatter_over_k_shards_sends_exactly_k_lock_messages() {
+        let (sink, _aborts) = TestSink::ok_sink();
+        let lock_sends = Arc::new(Mutex::new(Vec::<usize>::new()));
+        {
+            let lock_sends = lock_sends.clone();
+            *sink.on_lock_send.lock().await = Box::new(move |shard, _| {
+                lock_sends
+                    .try_lock()
+                    .expect("test sink is serial")
+                    .push(shard);
+                Ok(())
+            });
+        }
+
+        #[derive(Default)]
+        struct RecordingMetrics {
+            histograms: std::sync::Mutex<Vec<(&'static str, f64)>>,
+        }
+        impl MetricsSink for &RecordingMetrics {
+            fn increment_counter(&self, _: &'static str, _: u64, _: &[(&str, &str)]) {}
+            fn record_histogram(&self, name: &'static str, value: f64, _: &[(&str, &str)]) {
+                self.histograms.lock().unwrap().push((name, value));
+            }
+        }
+        let metrics = RecordingMetrics::default();
+
+        // Many keys, three distinct shards: shard 2 carries three keys, the
+        // others one each. Message count must follow shards, not keys.
+        let participants = vec![
+            ScatterParticipant {
+                shard_id: 2,
+                keys: vec![Bytes::from("a"), Bytes::from("b"), Bytes::from("c")],
+                operation: 2,
+            },
+            participant(5),
+            participant(9),
+        ];
+
+        let coord = VllCoordinator::new(sink, &metrics);
+        coord
+            .scatter(ScatterRequest {
+                txid: 1,
+                mode: LockMode::Write,
+                participants,
+                timeout: Duration::from_secs(1),
+                command: "TEST",
+            })
+            .await
+            .expect("scatter ok");
+
+        let sends = lock_sends.lock().await.clone();
+        assert_eq!(
+            sends,
+            vec![2, 5, 9],
+            "one lock message per shard, in dispatch order"
+        );
+        let shards_recorded: Vec<f64> = metrics
+            .histograms
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(name, _)| *name == "frogdb_scatter_gather_shards")
+            .map(|&(_, v)| v)
+            .collect();
+        assert_eq!(shards_recorded, vec![3.0], "the histogram records K, once");
+    }
+
     #[tokio::test]
     async fn scatter_aborts_when_shard_lock_fails() {
         let (sink, aborts) = TestSink::ok_sink();

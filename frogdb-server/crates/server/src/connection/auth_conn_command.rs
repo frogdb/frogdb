@@ -57,6 +57,10 @@ impl ConnStateMut for ConnectionState {
     }
 
     fn set_name(&mut self, name: Option<Bytes>) {
+        // Retained for the life of the connection and shared with the
+        // cross-thread client registry. The two callers (CLIENT SETNAME,
+        // HELLO SETNAME) detach once and hand the same copy to both, so
+        // detaching again here would only pay for a second copy.
         self.name = name;
     }
 
@@ -444,8 +448,11 @@ fn handle_hello(ctx: &mut ConnCtx<'_>, args: &[Bytes]) -> Response {
             state.set_name(None);
             client_registry.update_name(conn_id, None);
         } else {
+            // Retained by connection state and the cross-thread registry —
+            // detach from the pooled read buffer once, shared by both.
+            let name = frogdb_protocol::detach_bytes(name.clone());
             state.set_name(Some(name.clone()));
-            client_registry.update_name(conn_id, Some(name.clone()));
+            client_registry.update_name(conn_id, Some(name));
         }
     }
 
@@ -534,7 +541,12 @@ mod tests {
                 ),
                 // `requires_auth = false` → starts as the default authenticated
                 // user, matching a standalone server with no requirepass.
-                state: ConnectionState::new(1, "127.0.0.1:0".parse().unwrap(), false),
+                state: ConnectionState::new(
+                    1,
+                    "127.0.0.1:0".parse().unwrap(),
+                    false,
+                    crate::connection::deps::unbounded_txn_budget(),
+                ),
             }
         }
 

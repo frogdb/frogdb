@@ -505,10 +505,13 @@ impl Server {
                     self.config_manager.clone(),
                 )));
             let is_replica_for_consumer = self.is_replica_flag.clone();
-            let txn_bound = std::sync::Arc::new(frogdb_replication::ReplicaTxnBound::new(
-                self.config.replication.replica_txn_max_commands,
-                self.config.replication.replica_txn_max_bytes,
-            ));
+            let txn_bound = std::sync::Arc::new(
+                frogdb_replication::ReplicaTxnBound::new(
+                    self.config.replication.replica_txn_max_commands,
+                    self.config.replication.replica_txn_max_bytes,
+                )
+                .with_budgets(self.txn_budgets.clone()),
+            );
             let frame_consumer_handle = spawn(async move {
                 consume_frames(
                     frame_rx,
@@ -600,6 +603,7 @@ impl Server {
                 registry: self.registry.clone(),
                 shard_senders: self.shard_senders.clone(),
                 acl_manager: self.acl_manager.clone(),
+                txn_budgets: self.txn_budgets.clone(),
             },
             admin: AdminDeps {
                 client_registry: self.client_registry.clone(),

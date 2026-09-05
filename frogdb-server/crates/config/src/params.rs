@@ -626,6 +626,13 @@ mod tests {
             noop: false,
         },
         ConfigParamInfo {
+            name: "txn-buffer-limit",
+            section: Some("memory"),
+            field: Some("txn-buffer-limit"),
+            mutable: true,
+            noop: false,
+        },
+        ConfigParamInfo {
             name: "loglevel",
             section: Some("logging"),
             field: Some("level"),

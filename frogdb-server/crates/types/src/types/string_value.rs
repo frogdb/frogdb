@@ -43,6 +43,18 @@ impl StringValue {
         }
     }
 
+    /// Copy the raw bytes if they still alias a shared buffer, in place.
+    ///
+    /// A stored string lives in the keyspace indefinitely, so it must never
+    /// alias a connection's pooled read buffer. Called by the keyspace
+    /// install seam; see [`frogdb_protocol::detach_bytes`].
+    pub fn detach(&mut self) {
+        if let StringData::Raw(b) = &mut self.data {
+            let bytes = std::mem::take(b);
+            *b = frogdb_protocol::detach_bytes(bytes);
+        }
+    }
+
     /// Get the value as bytes.
     pub fn as_bytes(&self) -> Bytes {
         match &self.data {

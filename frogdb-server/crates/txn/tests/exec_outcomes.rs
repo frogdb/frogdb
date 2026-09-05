@@ -18,10 +18,11 @@ use frogdb_core::{
     MetricsRecorder, RateLimitExceeded, ServerWideOp, TransactionResult, WatchEntry, WatchFence,
     WatchFenceRole,
 };
+use frogdb_memory::{Budget, Disposition, Subsystem};
 use frogdb_protocol::{ParsedCommand, Response};
 use frogdb_txn::{
-    Deferral, ShardTxnReply, TransactionOutcome, TransactionTarget, TxnHost, TxnSummary,
-    WatchedKey, execute_transaction, handle_exec,
+    Deferral, ShardTxnReply, TransactionOutcome, TransactionState, TransactionTarget, TxnHost,
+    TxnSummary, WatchedKey, execute_transaction, handle_exec,
 };
 
 /// The shard [`MockTxnHost`] reports as its own.
@@ -371,6 +372,7 @@ fn summary(queue: Vec<ParsedCommand>) -> TxnSummary {
         exec_abort: false,
         asking: false,
         start_time: Some(std::time::Instant::now()),
+        charge: None,
     }
 }
 
@@ -408,6 +410,36 @@ async fn exec_abort_when_queuing_poisoned_the_transaction() {
     // A poisoned transaction never reaches the shard, the redirect seam, or the
     // pause barrier.
     assert!(host.effects.is_empty(), "effects: {:?}", host.effects);
+}
+
+// FM-TXN-054
+#[tokio::test]
+async fn exec_abort_when_the_buffer_limit_poisoned_the_transaction() {
+    let budget = Budget::new(Subsystem::TxnBuffering, Disposition::Shed, 64);
+    let mut state = TransactionState::default();
+    state.begin(&budget).expect("MULTI");
+    let big = ParsedCommand::new(
+        Bytes::from_static(b"SET"),
+        vec![Bytes::from_static(b"k"), Bytes::from(vec![b'x'; 4096])],
+    );
+    let refused = state
+        .push_queued_command(big)
+        .expect_err("a command past the limit is refused at queue time");
+    assert_eq!(refused.subsystem, Subsystem::TxnBuffering);
+    let summary = state.take(false).expect("still open");
+    assert!(summary.exec_abort, "the refusal poisons the transaction");
+
+    let mut host = MockTxnHost::default();
+    let (outcome, responses) = execute_transaction(&mut host, summary).await;
+
+    assert_eq!(outcome, TransactionOutcome::ExecAbort);
+    assert_eq!(
+        error_text(&only(responses)),
+        "EXECABORT Transaction discarded because of previous errors."
+    );
+    assert!(host.effects.is_empty(), "effects: {:?}", host.effects);
+    assert_eq!(budget.charged(), 0, "EXEC released whatever was charged");
+    assert_eq!(budget.refusals(), 1);
 }
 
 // FM-TXN-017

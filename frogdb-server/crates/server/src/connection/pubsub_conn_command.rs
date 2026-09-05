@@ -402,13 +402,19 @@ impl<'a> PubSubIo<'a> {
                 }
             }
 
+            // The name is retained for the life of the subscription (local
+            // tracking + shard registries) — copy it out of the pooled read
+            // buffer (zero-copy parse path escape point). The tracking entry,
+            // shard batch, and confirmation share the detached allocation.
+            let channel = frogdb_protocol::detach_bytes(channel.clone());
+
             // Add to local tracking; the confirmation count is the
             // per-connection count, so it is known before the shard replies.
             let count = self.state.add_subscription(spec.kind, channel.clone());
 
             debug!(
                 conn_id = self.state.id,
-                channel = %String::from_utf8_lossy(channel),
+                channel = %String::from_utf8_lossy(&channel),
                 kind = ?spec.kind,
                 "Subscribed"
             );
@@ -547,11 +553,13 @@ impl<'a> PubSubIo<'a> {
         // Broadcast pub/sub uses the coordinator shard so the count reflects
         // actual unique subscribers rather than being multiplied by the number
         // of shards.
+        // The payload sits in subscriber queues until each subscriber drains
+        // it: copy once here so no subscriber pins this connection's read buffer.
         let (response_tx, response_rx) = oneshot::channel();
         let _ = self.core.shard_senders[BROADCAST_SHARD]
             .send(PubSubMsg::Publish {
-                channel: channel.clone(),
-                message: message.clone(),
+                channel: frogdb_protocol::detach_bytes(channel.clone()),
+                message: frogdb_protocol::detach_bytes(message.clone()),
                 response_tx,
             })
             .await;
@@ -593,8 +601,8 @@ impl<'a> PubSubIo<'a> {
         let (response_tx, response_rx) = oneshot::channel();
         let _ = self.core.shard_senders[shard_id]
             .send(PubSubMsg::ShardedPublish {
-                channel: channel.clone(),
-                message: message.clone(),
+                channel: frogdb_protocol::detach_bytes(channel.clone()),
+                message: frogdb_protocol::detach_bytes(message.clone()),
                 response_tx,
             })
             .await;

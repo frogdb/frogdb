@@ -690,9 +690,25 @@ impl ConsumerGroup {
 
     /// Get or create a consumer.
     pub fn get_or_create_consumer(&mut self, name: Bytes) -> &mut Consumer {
+        // On creation the name is retained for the life of the group, so it
+        // must not alias a network read buffer; existing consumers are looked
+        // up without touching the caller's bytes.
+        //
+        // Not the `entry` API: a vacant entry is keyed by the caller's bytes
+        // and cannot be re-keyed with the detached copy, so it would cost an
+        // extra clone on every create. The lookup-then-insert costs one more
+        // probe only on the create path.
+        let name = if self.consumers.contains_key(&name) {
+            name
+        } else {
+            let name = frogdb_protocol::detach_bytes(name);
+            self.consumers
+                .insert(name.clone(), Consumer::new(name.clone()));
+            name
+        };
         self.consumers
-            .entry(name.clone())
-            .or_insert_with(|| Consumer::new(name))
+            .get_mut(&name)
+            .expect("present or just inserted")
     }
 
     /// Whether a consumer with this name currently exists in the group.
@@ -712,6 +728,8 @@ impl ConsumerGroup {
         if self.consumers.contains_key(&name) {
             false
         } else {
+            // Retained for the life of the group — see get_or_create_consumer.
+            let name = frogdb_protocol::detach_bytes(name);
             self.consumers.insert(name.clone(), Consumer::new(name));
             true
         }
@@ -741,12 +759,17 @@ impl ConsumerGroup {
 
     /// Add a pending entry for a consumer.
     pub fn add_pending(&mut self, id: StreamId, consumer: Bytes) {
-        // Update consumer's pending count
-        if let Some(c) = self.consumers.get_mut(&consumer) {
+        // The PEL entry is retained until acked, so it stores the *stored*
+        // consumer's (already detached) name rather than the caller's bytes —
+        // no copy on the delivery path, and no aliasing of a network buffer.
+        let name = if let Some(c) = self.consumers.get_mut(&consumer) {
             c.pending_count += 1;
             c.touch();
-        }
-        self.pending.insert(id, PendingEntry::new(consumer));
+            c.name.clone()
+        } else {
+            frogdb_protocol::detach_bytes(consumer)
+        };
+        self.pending.insert(id, PendingEntry::new(name));
     }
 
     /// Acknowledge entries (remove from PEL).
@@ -791,19 +814,30 @@ impl ConsumerGroup {
                 c.pending_count = c.pending_count.saturating_sub(1);
             }
         }
+        // Resolve the canonical (stored, already detached) name for the new
+        // owner, creating the consumer if needed. The PEL entry then shares
+        // the consumer's allocation instead of retaining the caller's bytes.
+        let canonical = match self.consumers.get(consumer) {
+            Some(c) => c.name.clone(),
+            None => {
+                let name = frogdb_protocol::detach_bytes(consumer.clone());
+                self.consumers
+                    .insert(name.clone(), Consumer::new(name.clone()));
+                name
+            }
+        };
         // (Re)create the entry and reassign it to the new consumer.
         let pe = self
             .pending
             .entry(id)
-            .or_insert_with(|| PendingEntry::new(consumer.clone()));
-        pe.consumer = consumer.clone();
+            .or_insert_with(|| PendingEntry::new(canonical.clone()));
+        pe.consumer = canonical.clone();
         opts.apply(pe, clock);
-        // Increment the new owner's count, creating the consumer if needed
-        // (Consumer has no Default, so or_insert_with builds it from the name).
+        // Increment the new owner's count.
         let c = self
             .consumers
-            .entry(consumer.clone())
-            .or_insert_with(|| Consumer::new(consumer.clone()));
+            .get_mut(&canonical)
+            .expect("consumer resolved above");
         c.pending_count += 1;
         c.touch();
     }
@@ -853,6 +887,9 @@ impl ConsumerGroup {
         last_seen: Instant,
         active_time: Option<Instant>,
     ) {
+        // RESTORE feeds this from a network-supplied dump payload, so the
+        // retained name must be detached like the runtime creation paths.
+        let name = frogdb_protocol::detach_bytes(name);
         self.consumers.insert(
             name.clone(),
             Consumer::restore(name, last_seen, active_time),
@@ -870,13 +907,24 @@ impl ConsumerGroup {
         delivery_time: Instant,
         delivery_count: u32,
     ) {
+        // Canonicalize to the stored consumer's (detached) name — RESTORE
+        // feeds this from a network-supplied dump payload.
+        let canonical = match self.consumers.get(&consumer) {
+            Some(c) => c.name.clone(),
+            None => {
+                let name = frogdb_protocol::detach_bytes(consumer);
+                self.consumers
+                    .insert(name.clone(), Consumer::new(name.clone()));
+                name
+            }
+        };
         self.consumers
-            .entry(consumer.clone())
-            .or_insert_with(|| Consumer::new(consumer.clone()))
+            .get_mut(&canonical)
+            .expect("consumer resolved above")
             .pending_count += 1;
         self.pending.insert(
             id,
-            PendingEntry::restore(consumer, delivery_time, delivery_count),
+            PendingEntry::restore(canonical, delivery_time, delivery_count),
         );
     }
 
@@ -1700,6 +1748,10 @@ impl StreamValue {
         if self.groups.contains_key(&name) {
             return Err(StreamGroupError::GroupExists);
         }
+        // Retained for the life of the stream — must not alias a network read
+        // buffer. The map key and the group's own name share the detached
+        // allocation.
+        let name = frogdb_protocol::detach_bytes(name);
         let mut group = ConsumerGroup::new(name.clone(), last_delivered_id);
         group.entries_read = entries_read;
         self.groups.insert(name, group);

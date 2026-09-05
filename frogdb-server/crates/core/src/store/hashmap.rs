@@ -384,9 +384,17 @@ impl HashMapStore {
     fn install(
         &mut self,
         key: Bytes,
-        value: Value,
+        mut value: Value,
         mut metadata: KeyMetadata,
     ) -> Option<Arc<Value>> {
+        // The keyspace boundary of the zero-copy parse path: command args are
+        // refcounted slices of the connection's pooled read buffer, and an
+        // installed entry lives indefinitely — so the key and any directly
+        // held string bytes are copied out here iff they still alias a shared
+        // buffer. Already-owned bytes pass through untouched.
+        let key = frogdb_protocol::detach_bytes(key);
+        value.detach_network_aliases();
+
         // Retire any previous incarnation wholesale — memory, histograms, both
         // expiry indexes, ts_labels, warm-key count, and the pending-refresh
         // queue all settle inside `uninstall`. Field TTLs and labels are then
@@ -1682,6 +1690,40 @@ impl Store for HashMapStore {
 mod tests {
     use super::*;
     use crate::glob::glob_match;
+
+    /// The keyspace boundary of the zero-copy parse path (issue 19): a SET
+    /// whose key and value are refcounted slices of the connection's pooled
+    /// read buffer must copy at install, so the buffer is reusable the moment
+    /// the command completes — never pinned by a stored entry.
+    // FM-MEMORY-003
+    #[test]
+    fn install_detaches_args_that_alias_a_shared_read_buffer() {
+        // Heap-backed (a static literal's `Bytes` is never `is_unique`), as a
+        // pooled read buffer's frozen contents are.
+        let backing = Bytes::from(b"SET somekey somevalue".to_vec());
+        let key = backing.slice(4..11);
+        let value = backing.slice(12..21);
+        assert!(!backing.is_unique(), "the slices alias the read buffer");
+
+        let mut store = HashMapStore::new();
+        store.set(key.clone(), Value::string(value.clone()));
+        drop(key);
+        drop(value);
+
+        assert!(
+            backing.is_unique(),
+            "the stored entry must hold copies, not slices of the read buffer"
+        );
+        let stored = store.get(b"somekey").expect("key stored");
+        let Value::String(sv) = stored.as_ref() else {
+            panic!("stored value is a string");
+        };
+        assert_eq!(
+            sv.as_bytes(),
+            Bytes::from("somevalue"),
+            "detaching must not change what was stored"
+        );
+    }
 
     #[test]
     fn recompute_matches_tracked_after_inserts() {

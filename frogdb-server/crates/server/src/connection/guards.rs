@@ -59,6 +59,7 @@ use crate::slot_migration::{
     route_migrating_source, route_queued_batch, route_watched_keys, route_with_snapshot,
     stamp_fence, watch_slot_is_locally_served,
 };
+use frogdb_txn::TXN_BUFFER_LIMIT_ERROR;
 
 /// The `-MISCONF` reply sent while `snapshot.stop-writes-on-save-error` is on
 /// and the last background save failed.
@@ -753,8 +754,12 @@ impl PreDispatchView<'_> {
         self.state
             .fold_transaction_keys(&keys, self.num_shards, is_cluster);
 
-        // Queue the command
-        self.state.push_queued_command(cmd.clone());
+        // Queue the command. Past the buffer limit it is not queued, the
+        // transaction is poisoned (EXEC will abort), and the client hears why.
+        if let Err(refused) = self.state.push_queued_command(cmd.clone()) {
+            tracing::debug!(conn_id = self.state.id, %refused, "MULTI queue refused");
+            return Response::error(TXN_BUFFER_LIMIT_ERROR);
+        }
 
         Response::queued()
     }
@@ -1347,7 +1352,12 @@ mod tests {
             let mut config = crate::config::Config::default();
             config.replication.replica_serve_stale_data = serve_stale_data;
             Self {
-                state: ConnectionState::new(1, "127.0.0.1:9999".parse().unwrap(), false),
+                state: ConnectionState::new(
+                    1,
+                    "127.0.0.1:9999".parse().unwrap(),
+                    false,
+                    crate::connection::deps::unbounded_txn_budget(),
+                ),
                 registry: Arc::new(registry),
                 cluster,
                 acl_manager: AclManager::new(Default::default()),
@@ -1894,7 +1904,12 @@ mod tests {
     fn test_noauth_rejected_when_auth_required() {
         // requires_auth = true, unauthenticated connection.
         let mut fx = ViewFixture::new(None);
-        fx.state = ConnectionState::new(1, "127.0.0.1:9999".parse().unwrap(), true);
+        fx.state = ConnectionState::new(
+            1,
+            "127.0.0.1:9999".parse().unwrap(),
+            true,
+            crate::connection::deps::unbounded_txn_budget(),
+        );
 
         // GET requires auth → NOAUTH.
         match fx.view().run_pre_checks("GET", &[]) {

@@ -138,7 +138,9 @@ impl ListValue {
     /// Push an element to the front (left).
     pub fn push_front(&mut self, value: Bytes) {
         if Self::is_large(value.len()) {
-            self.blocks.push_front(Block::Plain(value));
+            // Stored verbatim, so it must not alias a network read buffer.
+            self.blocks
+                .push_front(Block::Plain(frogdb_protocol::detach_bytes(value)));
         } else {
             match self.blocks.front_mut() {
                 Some(Block::Packed(lp)) if lp.len() < Self::LIMITS.max_entries => {
@@ -164,7 +166,9 @@ impl ListValue {
     /// Push an element to the back (right).
     pub fn push_back(&mut self, value: Bytes) {
         if Self::is_large(value.len()) {
-            self.blocks.push_back(Block::Plain(value));
+            // Stored verbatim, so it must not alias a network read buffer.
+            self.blocks
+                .push_back(Block::Plain(frogdb_protocol::detach_bytes(value)));
         } else {
             match self.blocks.back_mut() {
                 Some(Block::Packed(lp)) if lp.len() < Self::LIMITS.max_entries => {
@@ -377,7 +381,8 @@ impl ListValue {
         self.split_block_at(b, off);
         let at = if off == 0 { b } else { b + 1 };
         let block = if Self::is_large(value.len()) {
-            Block::Plain(value)
+            // Stored verbatim, so it must not alias a network read buffer.
+            Block::Plain(frogdb_protocol::detach_bytes(value))
         } else {
             let mut fresh = Listpack::new();
             fresh.push_back(&value);

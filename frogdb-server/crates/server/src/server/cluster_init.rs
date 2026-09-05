@@ -119,6 +119,10 @@ pub(super) async fn init_cluster(
     // adopts its new primary's libraries the same way a boot-configured replica
     // does.
     control_applier: Option<Arc<dyn frogdb_replication::ControlApplier>>,
+    // Each shard's `TxnBuffering` budget: every runtime replica stream charges
+    // the tagged shard's budget for the group it is reconstructing
+    // (FM-REPLICATION-045), the same slot the shard charges at EXEC.
+    txn_budgets: Arc<Vec<frogdb_memory::Budget>>,
     #[cfg(not(feature = "turmoil"))] tls_runtime: &Option<
         Arc<crate::tls_runtime::TlsRuntimeHandle>,
     >,
@@ -151,6 +155,7 @@ pub(super) async fn init_cluster(
     if let Some(control) = control_applier {
         real_streamer = real_streamer.with_control_applier(control);
     }
+    real_streamer = real_streamer.with_txn_budgets(txn_budgets);
     // Hardening issue 29: a runtime `REPLICAOF`/failover-driven demotion must
     // report real input bytes through the same tracker the boot-time replica
     // path wires (`init_replication`), not the handler's private, unread

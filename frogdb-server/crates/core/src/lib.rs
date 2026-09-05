@@ -18,6 +18,15 @@ pub use frogdb_types::*;
 pub const ROLE_CHANGED_UNBLOCK_ERR: &str =
     "UNBLOCKED force unblock from blocking operation, instance state changed (master -> replica?)";
 
+/// The reply when a transaction outgrows its `TxnBuffering` budget
+/// (`txn-buffer-limit`), from either end of the bound: the connection refusing
+/// to queue one more command (`specs/txn.md` FM-TXN-054) and the shard refusing
+/// to hold the batch before its first apply (`specs/persistence.md`
+/// FM-PERSISTENCE-062). Redis's `-OOM` prefix, so clients class it with the
+/// other "the server will not take this" refusals rather than with a failed
+/// command; one string so the two halves are indistinguishable on the wire.
+pub const TXN_BUFFER_LIMIT_ERROR: &str = "OOM transaction buffer limit exceeded";
+
 // Re-export frogdb-cluster as the cluster module for backward compatibility.
 pub use frogdb_cluster as cluster;
 

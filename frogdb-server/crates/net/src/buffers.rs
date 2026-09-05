@@ -558,6 +558,7 @@ mod tests {
         });
     }
 
+    // FM-MEMORY-003
     #[test]
     fn a_shared_slice_keeps_the_lease_out_of_the_pool_until_it_drops() {
         on_fresh_core(|| {
@@ -603,6 +604,70 @@ mod tests {
             with_pool(|pool| {
                 assert_eq!(pool.parked(0), 1);
                 assert_eq!(pool.stats().pooled_returns, 1);
+            });
+        });
+    }
+
+    /// The pipelined-completion property: one read fills the buffer with many
+    /// commands' worth of arguments, and the commands complete in whatever
+    /// order the shards answer. However the slices drop, the lease is whole
+    /// exactly when the *last* one is gone — never before, always after.
+    // FM-MEMORY-003
+    #[test]
+    fn a_pipelined_burst_of_slices_releases_the_lease_only_when_the_last_drops() {
+        on_fresh_core(|| {
+            // A handful of drop orders, including in-order, reverse, and a few
+            // deterministic shuffles — no rand dependency needed.
+            const SLICES: usize = 16;
+            let orders: Vec<Vec<usize>> = {
+                let forward: Vec<usize> = (0..SLICES).collect();
+                let reverse: Vec<usize> = (0..SLICES).rev().collect();
+                let mut shuffles = vec![forward, reverse];
+                let mut seed: u64 = 0x00F0_0D5E;
+                for _ in 0..4 {
+                    let mut order: Vec<usize> = (0..SLICES).collect();
+                    // Fisher–Yates with a small LCG.
+                    for i in (1..SLICES).rev() {
+                        seed = seed
+                            .wrapping_mul(6364136223846793005)
+                            .wrapping_add(1442695040888963407);
+                        let j = (seed >> 33) as usize % (i + 1);
+                        order.swap(i, j);
+                    }
+                    shuffles.push(order);
+                }
+                shuffles
+            };
+
+            for order in orders {
+                let mut leased = lease(MIN_CLASS_BYTES);
+                for _ in 0..SLICES {
+                    leased.extend_from_slice(b"argument");
+                }
+                let mut slices: Vec<Option<Bytes>> =
+                    (0..SLICES).map(|_| Some(leased.split_shared(8))).collect();
+
+                for (dropped, &idx) in order.iter().enumerate() {
+                    slices[idx] = None;
+                    let is_last = dropped == SLICES - 1;
+                    assert_eq!(
+                        leased.reclaim(),
+                        is_last,
+                        "lease must be whole exactly when the last slice drops \
+                         (drop order {order:?}, dropped {})",
+                        dropped + 1
+                    );
+                }
+                drop(leased);
+            }
+
+            with_pool(|pool| {
+                assert_eq!(
+                    pool.stats().freed_returns,
+                    0,
+                    "every lease was whole at drop; none may be freed instead of parked"
+                );
+                assert_eq!(pool.parked(0), 1, "same class, so returns reuse one slot");
             });
         });
     }

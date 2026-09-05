@@ -504,6 +504,23 @@ impl ShardWorker {
         self.memory.set_arena_sampler(sampler);
     }
 
+    /// This core's transaction-buffering budget, for the holders that charge
+    /// it from off the shard thread: the connections homed here (their queued
+    /// `MULTI`, FM-TXN-054), the replica applier (pending groups tagged for
+    /// this shard, FM-REPLICATION-045) and `CONFIG SET txn-buffer-limit`.
+    /// The shard's own charge — the batch it holds before the first apply
+    /// (FM-PERSISTENCE-062) — goes through the broker directly.
+    pub fn txn_buffer_budget(&self) -> frogdb_memory::Budget {
+        self.memory.budget(frogdb_memory::Subsystem::TxnBuffering)
+    }
+
+    /// Adopt the `TxnBuffering` budget the server minted for this core, so
+    /// the connections, the replica applier and `CONFIG SET txn-buffer-limit`
+    /// all charge and re-limit the very slot the shard charges at EXEC.
+    pub fn set_txn_buffer_budget(&mut self, budget: frogdb_memory::Budget) {
+        self.memory.adopt(budget);
+    }
+
     /// Share the process-wide keyspace hit/miss accumulator with this worker.
     ///
     /// The same `Arc` is held by the server so `INFO stats` reads it and
