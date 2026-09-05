@@ -274,3 +274,52 @@ slow-timeout = { period = "15s", terminate-after = 3 }
 [[profile.default.overrides]]
 filter = "test(tcl_sdiff_fuzzing)"
 slow-timeout = { period = "30s", terminate-after = 3 }
+
+# Six more tests killed at the default 3 x 5s on the ubuntu CI runner
+# (build-toolchain issue 06 part B / issue 10, D7): genuinely heavy, not
+# hanging — each passes run alone, just past the default hard kill under CI
+# load. Observed TIMEOUT in runs 33941010778 and 33942554391 on
+# build-toolchain/impl; the scan_tcl and telemetry rows also timed out on
+# main run 33936207419.
+
+# The hash fuzzing ports build 512 fields per iteration over 10 iterations,
+# HSET-ing and then HGET-verifying every field — over 10k real socket
+# round-trips to the spawned test server. Same shape as the SDIFF/HLL
+# round-trip-heavy tests above.
+[[profile.default.overrides]]
+filter = "test(hash_tcl::tcl_hash_fuzzing_1_512_fields) | test(hash_tcl::tcl_hash_fuzzing_2_512_fields)"
+slow-timeout = { period = "30s", terminate-after = 3 }
+
+# SCAN-under-write-load inserts 50 distinct keys after every batch to force
+# real griddle resizes mid-scan, so its runtime grows with however many
+# resizes the growing keyspace triggers before the cursor returns to 0 —
+# hundreds of real socket round-trips on top of the resize work itself.
+[[profile.default.overrides]]
+filter = "test(scan_tcl::tcl_scan_guarantees_under_write_load)"
+slow-timeout = { period = "30s", terminate-after = 3 }
+
+# The Bloom filter false-positive-rate test does 1000 BF.ADD then 10000
+# BF.EXISTS round-trips against the spawned test server to get a large enough
+# sample to bound the false-positive rate — 11k real socket round-trips.
+[[profile.default.overrides]]
+filter = "test(bloom_regression::bf_false_positive_rate)"
+slow-timeout = { period = "30s", terminate-after = 3 }
+
+# The metrics-usage audit walks every .rs file under the whole frogdb-server
+# crates tree (recursive read_dir + read_to_string, hundreds of files) to
+# check that every metric in ALL_METRICS is emitted through its typed handle
+# somewhere in the source. All I/O, no product code under test, but the walk
+# itself is what makes it heavy.
+[[profile.default.overrides]]
+filter = "package(frogdb-telemetry) & test(every_metric_is_emitted_through_its_typed_handle)"
+slow-timeout = { period = "30s", terminate-after = 3 }
+
+# The core scan-stress property runs the default proptest case budget, each
+# case driving a full scan loop (up to 600 insert/delete ops interleaved with
+# scan batches) against a growing HashMapStore to check every key present
+# throughout the scan is returned. Not caught by the `properties::` overrides
+# above — it lives under `store::hashmap::tests::scan_stress`, not a
+# `properties` module.
+[[profile.default.overrides]]
+filter = "package(frogdb-core) & test(scan_stress::scan_present_throughout_is_subset_of_returned)"
+slow-timeout = { period = "30s", terminate-after = 3 }
