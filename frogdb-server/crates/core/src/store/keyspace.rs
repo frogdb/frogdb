@@ -117,11 +117,19 @@ pub(super) trait Keyspace {
     /// One SCAN step: feeds the visitor every unexpired key the step covers and
     /// returns the cursor to resume from, or 0 when the walk is complete.
     ///
-    /// The visitor applies MATCH/TYPE and returns whether it kept the key, so
-    /// `count` bounds kept keys rather than examined ones — the store's existing
-    /// behaviour, preserved here rather than quietly changed by the seam. A
-    /// backend may overshoot (the table emits whole segments); Redis permits
-    /// that, and the cursor is still exact.
+    /// `count` is a hint with a permitted range, not a limit. A backend may
+    /// bound **either** the keys it examines **or** the keys the visitor keeps
+    /// (the visitor applies MATCH/TYPE and returns whether it kept the key), and
+    /// may overshoot whichever it bounds in order to finish a unit it can only
+    /// walk atomically. Redis permits all of that; what a caller may rely on is
+    /// the cursor, not the reply size.
+    ///
+    /// Concretely, of the two backends here: `GriddleKeyspace` bounds keys
+    /// *kept*, which is the store's long-standing behaviour and is preserved
+    /// rather than quietly changed by the seam; `TableKeyspace` bounds keys
+    /// *examined*, because a step emits whole segments and so overshoots by up
+    /// to one segment. (Only the selected backend is compiled, which is why
+    /// neither is a doc link.)
     ///
     /// Each backend owns its own cursor encoding. The only contract they share
     /// is Redis's: a key present for the whole walk is returned at least once.
