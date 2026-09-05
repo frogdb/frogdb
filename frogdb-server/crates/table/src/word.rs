@@ -221,13 +221,8 @@ impl ValueWord {
         }
         // SAFETY: the tag says `PTR`, so the word is a live record pointer this
         // word owns, and `&mut self` rules out any other handle to it here.
-        let mut record = unsafe { record_handle(self.0) };
-        let out = f(&mut record);
-        // The word still owns the reference the handle was rebuilt from, but
-        // `make_mut` may have replaced the record with a private copy, so the word
-        // follows the handle rather than keeping a stale address.
-        self.0 = pack_record(ManuallyDrop::into_inner(record));
-        Some(out)
+        let mut lent = unsafe { LentRecord::new(&mut self.0) };
+        Some(f(&mut lent.record))
     }
 
     /// Runs `f` on the record behind an out-of-line value, shared. `None` when
@@ -339,6 +334,40 @@ unsafe fn record_bytes(word: &u64) -> &[u8] {
     // reference to and so outlives the word's borrow. Only the handle is
     // temporary, so the slice is re-formed to borrow from the word instead of it.
     unsafe { std::slice::from_raw_parts(bytes.as_ptr(), bytes.len()) }
+}
+
+/// A `PTR` word's record, lent out as a `&mut Record` and written back into the
+/// word when the borrow ends — on the way out of a panic as much as a return.
+///
+/// The write-back is what makes the loan safe: `make_mut` replaces a shared
+/// record with a private copy and releases the reference the word held, so a
+/// borrower that unwinds part-way through would otherwise leave the word holding
+/// a stale address and a reference it no longer owns.
+struct LentRecord<'a> {
+    word: &'a mut u64,
+    record: ManuallyDrop<Record>,
+}
+
+impl<'a> LentRecord<'a> {
+    /// # Safety
+    /// As [`record_handle`]. The word must not be read until the loan ends.
+    #[inline]
+    unsafe fn new(word: &'a mut u64) -> LentRecord<'a> {
+        // SAFETY: the caller guarantees the tag and liveness. The handle takes
+        // over the word's reference for the loan, and `Drop` hands it back.
+        let record = unsafe { record_handle(*word) };
+        LentRecord { word, record }
+    }
+}
+
+impl Drop for LentRecord<'_> {
+    #[inline]
+    fn drop(&mut self) {
+        // SAFETY: the handle is taken exactly once, here, and the reference it
+        // carries goes straight back into the word instead of being released.
+        let record = unsafe { ManuallyDrop::take(&mut self.record) };
+        *self.word = pack_record(record);
+    }
 }
 
 /// # Safety
@@ -463,6 +492,37 @@ mod tests {
         );
         assert_eq!(live.with_record(Record::is_unique), Some(true));
         assert_eq!(snapshot.with_record(Record::is_unique), Some(true));
+    }
+
+    /// `make_mut` releases the shared record before the closure is done with it,
+    /// so a caller that unwinds mid-write must still leave the word owning the
+    /// record it now points at — otherwise its `Drop` frees a stale address.
+    #[test]
+    fn a_write_that_unwinds_leaves_the_word_owning_its_record() {
+        let mut live = ValueWord::from_bytes(b"the original payload");
+        let snapshot = live.clone();
+
+        let gave_up = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            live.with_record_mut(|r| {
+                r.make_mut()[..3].copy_from_slice(b"THE");
+                panic!("the caller gave up mid-write");
+            })
+        }));
+        assert!(gave_up.is_err(), "the closure's panic should propagate");
+
+        let mut buf: InlineBuf = [0; 16];
+        let mut snap_buf: InlineBuf = [0; 16];
+        assert_eq!(
+            live.decode(&mut buf),
+            Decoded::Bytes(b"THE original payload"),
+            "the word should point at the copy `make_mut` gave the closure"
+        );
+        assert_eq!(
+            snapshot.decode(&mut snap_buf),
+            Decoded::Bytes(b"the original payload")
+        );
+        assert_eq!(live.with_record(Record::ref_count), Some(1));
+        assert_eq!(snapshot.with_record(Record::ref_count), Some(1));
     }
 
     #[test]
