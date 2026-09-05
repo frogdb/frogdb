@@ -229,6 +229,16 @@ impl<V, const N: usize> Segment<V, N> {
 
         // Balanced insert: the emptier of the two candidates, so neither runs out
         // long before the other.
+        //
+        // Mutation note: `||` survives being narrowed to `&&`. The narrowed form
+        // gives up as soon as *either* candidate is full, where this one carries
+        // on while one still has room. Both are correct — giving the slot back is
+        // always a legal answer, and the caller's response is to split — so the
+        // difference is load factor and split rate, not behaviour. It is real
+        // enough to matter (the whole point of the balanced pair is to reach a
+        // high occupancy before splitting) but it is a benchmark result, not an
+        // assertion: no test can distinguish "split later" from "split sooner"
+        // without pinning a fill ratio this code is free to tune.
         if !self.buckets[home].is_full() || !self.buckets[neighbour].is_full() {
             let (target, displaced) = if self.buckets[home].len() <= self.buckets[neighbour].len() {
                 (home, false)
@@ -682,6 +692,67 @@ mod tests {
         assert_eq!(seg.hits(), 0);
         assert_eq!(seg.misses(), 0);
         assert_eq!(seg.victim_cursor(), 0);
+    }
+
+    /// 2Q decides on what the accounting window says, and a window that never
+    /// clears is a segment that keeps being promoted on evidence from an hour
+    /// ago. The walk tests exercise the decisions; this one pins the state the
+    /// decisions read — every field written is read back, and the reset actually
+    /// resets.
+    #[test]
+    fn the_accounting_window_reads_back_what_it_was_told_and_clears_on_reset() {
+        let mut seg = Seg::alloc(0);
+
+        seg.note_hit();
+        seg.note_hit();
+        seg.note_miss();
+        assert_eq!(seg.hits(), 2);
+        assert_eq!(seg.misses(), 1);
+
+        assert_eq!(seg.last_touch(), 0);
+        seg.set_last_touch(9);
+        assert_eq!(seg.last_touch(), 9);
+        seg.set_last_touch(1);
+        assert_eq!(seg.last_touch(), 1);
+
+        seg.reset_counters();
+        assert_eq!(seg.hits(), 0, "reset must clear the hit counter");
+        assert_eq!(seg.misses(), 0, "reset must clear the miss counter");
+        assert_eq!(
+            seg.last_touch(),
+            1,
+            "the accounting window resets; the touch epoch is not part of it"
+        );
+    }
+
+    /// Occupancy is the fraction the directory's split and shrink decisions are
+    /// made against, so it has to be a fraction of the addressable slots and not
+    /// of anything else. A partly filled segment is the case that separates the
+    /// division from every arithmetic that is not one.
+    #[test]
+    fn occupancy_is_live_entries_over_addressable_slots() {
+        let h = hasher();
+        let mut seg = Seg::alloc(0);
+        assert_eq!(seg.occupancy(), 0.0, "an empty segment occupies nothing");
+
+        for i in 0..64i64 {
+            let key = format!("occ:{i}");
+            let hash = h.hash(key.as_bytes());
+            seg.insert(fingerprint(hash), route(hash), slot(key.as_bytes(), i))
+                .expect("room for 64");
+        }
+
+        assert_eq!(seg.len(), 64);
+        let expected = 64.0 / SEGMENT_SLOTS as f64;
+        assert!(
+            (seg.occupancy() - expected).abs() < f64::EPSILON,
+            "occupancy {} is not {expected}",
+            seg.occupancy()
+        );
+        assert!(
+            seg.occupancy() < 1.0,
+            "a segment holding 64 of {SEGMENT_SLOTS} slots is not full"
+        );
     }
 
     /// The victim scan resumes where it stopped and wraps exactly once, which

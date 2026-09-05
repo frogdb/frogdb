@@ -141,3 +141,51 @@ explanation. So R2, R3 and R4 ship together or not at all, and a phase plan that
 ships a large regression in between (spike-report §(b)). The corollary sizes a design detail
 these seams have to live with: a cross-slot hop costs roughly 8×, and it is the thread hop,
 not the copy, that costs it.
+
+## Addendum, 2026-09-05: memory is a locked area
+
+[`specs/memory.md`](../specs/memory.md) is `Status: LOCKED`, making memory the fifth locked
+core area beside txn, persistence, replication and cluster. The locked crates are
+**`frogdb-memory`** — the per-core broker, the `Budget` handles §2 rules, and the
+per-subsystem breakdown an operator reads — and **`frogdb-table`**, the keyspace structure
+whose `memory_size()` the `maxmemory` verdict is measured against. Behaviour in either is
+now spec-first: failure-mode row, then failing test, then code, with `just lint-spec`
+enforcing that every row names live forcing tests and every tagged test names a row.
+
+The gate is **0.85** for both crates (measured at lock: frogdb-memory MEMORY_SCORE,
+frogdb-table TABLE_SCORE, caught / caught+missed).
+
+Two of the rulings above need qualifying against what actually landed. Both narrow a claim;
+neither reopens a seam.
+
+**§2's chokepoint exists; §2's guarantee does not yet.** `lint-budget-growth` shipped with
+its ratchet, as ruled — and the ratchet is still holding 83 unconverted growth sites across
+32 files against 20 budgeted ones, with three of the seven declared subsystems
+(`replication_backlog`, `wal_channel`, `fullsync_staging`) charged by nobody. *A structure
+that cannot charge cannot grow* is therefore the direction of travel and not a contract, so
+the locked spec deliberately writes no row claiming a buffer is bounded unless the row can
+name that buffer's own `Budget`. The claim becomes a row when the allowlist is empty, one
+converted buffer at a time.
+
+**§3's "sampled upper bound" governs the arena figure, not the `maxmemory` verdict.** The
+closing paragraph of §3 directs `specs/memory.md` to write its OOM rows against what a
+sampled upper bound can promise. That is right about the arena statistics and wrong about
+the verdict, and the code that landed draws the line the other way round: `is_over_memory_limit`
+compares the shard's limit against `Store::memory_used()`, an exact running sum of
+`Entry::memory_size()`, and never against the arena sample. Keeping them separate is the
+point rather than an oversight — a verdict taken from the sampled bound would refuse writes
+over thread-cache residue and over a neighbour's fragmentation, neither of which the shard
+can evict its way out of. So FM-MEMORY-004 binds to the *accounted contents* and can state
+an exact boundary (at the limit is inside it), while FM-MEMORY-008 owns the arena figure and
+says in its own row that it is an upper bound and never drives a verdict. The honest caveat
+runs the other way instead: `memory_size()` is a contents figure, deliberately run-stable, so
+it excludes spare capacity and true footprint can exceed it — worst case about 2× for a
+freshly doubled buffer.
+
+**Fragmentation is measured, not fought.** Recorded here because it is a decision with no
+row: there is no active defragmentation. Nothing walks the keyspace re-encoding values to
+compact an arena. `MEMORY PURGE` returns dirty pages to the OS, the fragmentation ratio is
+published, and re-encoding a value is a manual O(value) operation an operator triggers — never
+a background task on a shard core, because an active defragmenter is a second allocator-load
+generator on the one core the shard needs. It stays prose rather than a failure-mode row
+because "nothing anywhere does this" over an open set of code is not something a test forces.

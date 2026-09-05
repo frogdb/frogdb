@@ -136,6 +136,12 @@ pub const fn route(hash: u64) -> u16 {
 /// function of either alone. In particular `fp` is not recoverable from `home`,
 /// so entries sharing a home bucket still spread across all 256 fingerprints and
 /// the in-bucket filter keeps its full strength.
+///
+/// Mutation note: `|` here is an equivalent mutant under `^`. The two operands
+/// occupy disjoint bit ranges — `fp` is shifted entirely above bit 15 and `route`
+/// is at most 16 bits — so no bit is ever set on both sides and the two operators
+/// compute the same word. No test can distinguish them; the `|` is kept because
+/// concatenation is what the code means.
 #[inline]
 pub const fn home(fp: u8, route: u16, regular_buckets: usize) -> usize {
     let bits = ((fp as u32) << 16) | route as u32;
@@ -162,6 +168,45 @@ mod tests {
         let seed = TableSeed::from_u64(0xDEAD_BEEF);
         assert_eq!(TableHasher::new(seed).seed(), seed);
         assert_eq!(seed.words(), TableSeed::from_u64(0xDEAD_BEEF).words());
+    }
+
+    /// Replay is only worth something if the expansion is the *same* expansion
+    /// next month, on the next machine, after the next refactor. "Unrelated
+    /// neighbours" is far too weak a property to pin that with: almost any
+    /// mixing function passes it, so almost any accidental edit to the constants
+    /// or the shift directions goes unnoticed and every recorded fuzz seed
+    /// silently means something else. These are the reference SplitMix64 outputs
+    /// for states 0, 1 and 2; changing the algorithm is allowed, but it has to
+    /// come here and say so.
+    #[test]
+    fn the_seed_expansion_is_splitmix64_and_stays_byte_for_byte_stable() {
+        assert_eq!(
+            TableSeed::from_u64(0).words(),
+            [
+                0xE220_A839_7B1D_CDAF,
+                0x6E78_9E6A_A1B9_65F4,
+                0x06C4_5D18_8009_454F,
+                0xF88B_B8A8_724C_81EC,
+            ]
+        );
+        assert_eq!(
+            TableSeed::from_u64(1).words(),
+            [
+                0x910A_2DEC_8902_5CC1,
+                0xBEEB_8DA1_658E_EC67,
+                0xF893_A2EE_FB32_555E,
+                0x71C1_8690_EE42_C90B,
+            ]
+        );
+        assert_eq!(
+            TableSeed::from_u64(2).words(),
+            [
+                0x9758_35DE_1C97_56CE,
+                0xBFC8_4610_0BFC_1E42,
+                0x987B_BCBF_DD7E_532F,
+                0xC3F2_827A_FFE7_F664,
+            ]
+        );
     }
 
     /// A fuzzer feeds 0, 1, 2. Those must not produce near-identical keys, or a

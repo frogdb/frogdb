@@ -1191,14 +1191,40 @@ mod tests {
     #[test]
     fn structural_cost_is_reported_at_the_allocated_size_class() {
         let mut t = table();
+        assert!(t.is_empty(), "a table with no entries is empty");
+        assert_eq!(t.occupancy(), 0.0, "and occupies none of its slots");
+
         fill(&mut t, 100_000);
-        let expected_segments = t.segment_count() * SEGMENT_CLASS_BYTES;
-        assert!(t.structural_bytes() > expected_segments);
+        assert!(!t.is_empty());
+
+        // The figure an operator is charged for the structure is a sum of three
+        // costs that can each be counted independently: the segments at their
+        // allocator size class, the directory's slots, and the segment vector's
+        // own pointers. Pin it against those three counts rather than against a
+        // bound — a bound passes for any arithmetic that trends the same way,
+        // and this is the number the store seam adds to a shard's accounted
+        // contents.
+        let segments = t.segment_count() * SEGMENT_CLASS_BYTES;
+        let directory = t.directory.capacity() * 4;
+        let segment_vec = t.segments.capacity() * std::mem::size_of::<usize>();
+        assert_eq!(t.structural_bytes(), segments + directory + segment_vec);
+        assert!(t.structural_bytes() > segments);
+
+        assert_eq!(
+            t.structural_bytes_per_entry(),
+            t.structural_bytes() as f64 / t.len() as f64
+        );
         assert!(
             t.structural_bytes_per_entry() < 40.0,
             "structural cost {:.1} B/entry",
             t.structural_bytes_per_entry()
         );
+
+        // Occupancy is live entries over addressable slots, so a table well
+        // short of its slots is well short of 1.0.
+        let slots = t.segment_count() * crate::layout::BUCKETS * crate::layout::SLOTS_PER_BUCKET;
+        assert_eq!(t.occupancy(), 100_000.0 / slots as f64);
+        assert!(t.occupancy() < 1.0);
     }
 
     // ----- 2Q eviction -------------------------------------------------------

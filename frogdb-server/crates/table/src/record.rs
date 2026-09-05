@@ -191,6 +191,12 @@ impl Clone for Record {
 }
 
 impl Drop for Record {
+    /// Mutation note: `rc > 1` survives being widened to `rc >= 1`. The widened
+    /// form takes the decrement branch on the *last* handle too, writing `rc = 0`
+    /// and returning without the `dealloc` — a pure leak. A leak changes no value
+    /// this crate can read back and raises no signal any in-process test can
+    /// assert on, so no unit test kills it; catching it needs an allocator-level
+    /// checker (Miri, LeakSanitizer, heaptrack) rather than a test case.
     fn drop(&mut self) {
         let rc = self.header().rc;
         if rc > 1 {
@@ -228,6 +234,22 @@ mod tests {
         assert_eq!(r.as_bytes(), b"frogdb");
         assert_eq!(r.len(), 6);
         assert_eq!(r.requested_bytes(), 14);
+        assert!(!r.is_empty());
+        assert!(Record::new(b"").is_empty());
+    }
+
+    /// The allocation is a header *plus* a payload, and `Drop` reproduces the
+    /// same layout from the same length to hand back to `dealloc`. Pinning the
+    /// arithmetic here rather than only through `Record::new` keeps the free
+    /// side honest: any other shape (a product, a payload with no header) would
+    /// still round-trip within this module while handing the allocator a layout
+    /// that does not match the one it gave out.
+    #[test]
+    fn the_layout_is_the_header_plus_the_payload() {
+        assert_eq!(layout_for(0).size(), HEADER_BYTES);
+        assert_eq!(layout_for(6).size(), HEADER_BYTES + 6);
+        assert_eq!(layout_for(4096).size(), HEADER_BYTES + 4096);
+        assert_eq!(layout_for(6).align(), RECORD_ALIGN);
     }
 
     #[test]

@@ -1,14 +1,16 @@
 # Memory — failure modes
 
-Status: DRAFT — rows land as the behavior they describe lands. This file is the scope
-statement and the vocabulary the rows are written in, published ahead of them so the memory
-work has one place to be spec-first *from*. It becomes the fifth locked area under
-[`.scratch/memory-architecture/PRD.md`](../.scratch/memory-architecture/PRD.md) R15 —
-`Status: LOCKED`, behavior changes spec-first — once the broker and table crates exist and
-pass their mutation gate. The discipline holds from the first row on: **a row arrives with
-the test that forces it, in the same commit**, or it is a wish rather than a contract.
-`just lint-spec` checks both directions for every row present, so the file is never ahead
-of the code.
+Status: LOCKED (2026-09-05) — Phase 6 mutation gates passed (frogdb-memory MEMORY_SCORE,
+frogdb-table TABLE_SCORE, vs an 85% gate). Behavior changes to this area are spec-first: edit
+the row, update the forcing test, then the code. See CLAUDE.md "Locked core areas".
+
+Every way FrogDB refuses bytes, sheds a client, evicts a key, or accounts for what it is
+holding, one table per mode. This is the reference the mutation run is measured against: a
+mutant that survives is a row nothing forces. The discipline that produced the rows is the
+one that keeps them: **a row arrives with the test that forces it, in the same commit**, or
+it is a wish rather than a contract, and `just lint-spec` checks both directions. Scope this
+area claims but does not yet contract is listed under [Open items](#open-items) with the
+issue that closes it — never left to be read into a row.
 
 ## Scope
 

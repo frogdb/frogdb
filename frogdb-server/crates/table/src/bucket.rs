@@ -158,6 +158,14 @@ impl<V, const N: usize> Bucket<V, N> {
         if displaced {
             self.probing |= 1 << i;
         } else {
+            // Mutation note: this clear is belt and braces, and mutating its
+            // shift survives. `free_slot` only ever returns a slot whose
+            // occupancy bit is clear, and the only way a bit gets cleared is
+            // `take`, which clears the probing bit in the same breath — so the
+            // bit being cleared here is already zero on every reachable path and
+            // no test can tell a working clear from a broken one. The statement
+            // stays because it makes the invariant local: a slot's probing bit
+            // is written by whoever writes the slot.
             self.probing &= !(1 << i);
         }
         Ok(i)
@@ -220,6 +228,14 @@ impl<V, const N: usize> Bucket<V, N> {
         );
     };
 
+    /// Mutation note: `fp_match_raw` has three bodies behind `cfg`, and only one
+    /// of them is compiled on any given host. A mutation-testing run therefore
+    /// reports surviving mutants in the other two every time — the mutated code
+    /// is not in the binary the tests run against, so nothing can kill it. This
+    /// is a property of the run, not of the tests: the same survivors appear on
+    /// x86_64 for the NEON body. `simd_and_scalar_fingerprint_match_agree` pins
+    /// whichever body *is* compiled against an independent scalar reference, and
+    /// CI running the suite on both architectures is what covers the pair.
     #[cfg(target_arch = "aarch64")]
     #[inline]
     fn fp_match_raw(&self, fp: u8) -> u16 {
@@ -395,12 +411,16 @@ mod tests {
     type ProdBucket = Bucket<ValueWord, SLOTS_PER_BUCKET>;
 
     fn empty() -> Box<ProdBucket> {
+        empty_of::<ValueWord>()
+    }
+
+    fn empty_of<V>() -> Box<Bucket<V, SLOTS_PER_BUCKET>> {
         // A zeroed bucket is a valid empty bucket: every bitmap and counter is 0.
-        let layout = std::alloc::Layout::new::<ProdBucket>();
+        let layout = std::alloc::Layout::new::<Bucket<V, SLOTS_PER_BUCKET>>();
         // SAFETY: the layout is non-zero-sized, and all-zero is a valid
         // `Bucket` — `occupied == 0` means no `MaybeUninit` slot is ever read.
         unsafe {
-            let p = std::alloc::alloc_zeroed(layout).cast::<ProdBucket>();
+            let p = std::alloc::alloc_zeroed(layout).cast::<Bucket<V, SLOTS_PER_BUCKET>>();
             assert!(!p.is_null());
             Box::from_raw(p)
         }
@@ -411,6 +431,102 @@ mod tests {
             key: KeyWord::new(key),
             val: ValueWord::from_int(val),
         }
+    }
+
+    /// A value that says when it was dropped, so a leaked slot is a failed
+    /// assertion rather than an invisible loss.
+    struct CountsItsDrop(std::rc::Rc<std::cell::Cell<usize>>);
+
+    impl Drop for CountsItsDrop {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+
+    /// Emptiness, and the probing bit that says an entry is not in its home
+    /// bucket. The bit is what `find` uses to decide whether a miss here means
+    /// the key is absent or that the probe has to carry on, so it has to be set
+    /// only for the slot that was actually displaced and cleared when that slot
+    /// is taken — a stale mark turns an absent key into a longer probe, and a
+    /// missing one turns a present key into a miss.
+    #[test]
+    fn the_probing_mark_follows_the_slot_that_earned_it() {
+        let mut b = empty();
+        assert!(b.is_empty());
+        assert_eq!(b.len(), 0);
+
+        let home = b.insert(0x01, 0, false, slot(b"a", 1)).unwrap();
+        assert!(!b.is_empty(), "a bucket holding an entry is not empty");
+        let displaced = b.insert(0x02, 0, true, slot(b"b", 2)).unwrap();
+
+        assert!(!b.is_displaced(home));
+        assert!(
+            b.is_displaced(displaced),
+            "the displaced insert must mark its own slot"
+        );
+
+        b.take(displaced);
+        assert!(
+            !b.is_displaced(displaced),
+            "taking a displaced entry must clear its probing bit, or the slot \
+             inherits a mark the next occupant never earned"
+        );
+        assert!(!b.is_empty());
+
+        b.take(home);
+        assert!(
+            b.is_empty(),
+            "a bucket with every slot taken is empty again"
+        );
+    }
+
+    /// The bucket owns its live slots and nothing else. `take` hands ownership
+    /// back to the caller, so the value it returns must *not* be dropped again
+    /// when the bucket goes.
+    #[test]
+    fn dropping_a_bucket_drops_its_live_slots_exactly_once() {
+        let drops = std::rc::Rc::new(std::cell::Cell::new(0usize));
+        let mut b = empty_of::<CountsItsDrop>();
+        for i in 0..3u8 {
+            let s = Slot {
+                key: KeyWord::new(b"k"),
+                val: CountsItsDrop(std::rc::Rc::clone(&drops)),
+            };
+            assert!(b.insert(i, 0, false, s).is_ok());
+        }
+
+        let taken = b.take(2);
+        assert_eq!(drops.get(), 0, "take must not drop the value it hands back");
+        drop(taken);
+        assert_eq!(drops.get(), 1);
+
+        drop(b);
+        assert_eq!(
+            drops.get(),
+            3,
+            "the two slots still live must be dropped with the bucket, and the \
+             taken one must not be dropped twice"
+        );
+    }
+
+    /// The layout assertion is the whole reason the SIMD load is sound, so it
+    /// has to actually refuse a bucket that breaks it.
+    #[test]
+    fn a_bucket_that_breaks_the_layout_contract_is_refused() {
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let too_many_slots = std::panic::catch_unwind(assert_bucket_layout::<ValueWord, 17>);
+        let too_big = std::panic::catch_unwind(assert_bucket_layout::<[u8; 512], SLOTS_PER_BUCKET>);
+        std::panic::set_hook(hook);
+
+        assert!(
+            too_many_slots.is_err(),
+            "17 slots overflow the 16-bit slot bitmaps and must be refused"
+        );
+        assert!(
+            too_big.is_err(),
+            "a value that blows the bucket byte budget must be refused"
+        );
     }
 
     #[test]
