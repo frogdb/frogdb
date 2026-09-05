@@ -1,6 +1,6 @@
 # 12: segment-integrated 2Q eviction
 
-Status: needs-triage
+Status: ready-for-agent
 Type: AFK
 Origin: drafted 2026-09-01 from the landed
 [spike report](../../spike-report-table.md) §4 — [PRD.md](../../PRD.md) R9
