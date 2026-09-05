@@ -106,4 +106,4 @@ None — 04 landed 2026-09-04; the A rows above are read from the first post-04 
 
 ## Decisions
 
-D6 (A → issue 09), D7 (B1 → issue 10). Pending: whether C becomes its own issue.
+D6 (A → issue 09), D7 (B1 → issue 10), D8 (C → decided by the post-10 `workflow_dispatch` run: recurrence carves issue 11, otherwise 06 closes).

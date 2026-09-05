@@ -44,3 +44,8 @@ filed as issue 08 once 01 landed.
   nextest overrides at `30s × 3` in `.config/nextest.toml`, in the existing "legitimately heavy,
   not flaky" style — not smaller test inputs (changes what the tests prove) and not a lower CI
   `test-threads` (slows every job). Carved as issue 10.
+- D8: issue 06 part C (the two runner-only failures, `test_broadcast_lag_disconnect_and_resync`
+  and shard-harness `regression_gap4_second_watcher_aborts`) is decided on evidence, not carved
+  now: the `workflow_dispatch` run of `test.yml` that verifies issue 10 doubles as the probe. A
+  recurrence carves an investigation issue (11); no recurrence closes 06 with C recorded as a
+  one-off. Local mode has no Linux box, so a speculative investigation issue would only block.
