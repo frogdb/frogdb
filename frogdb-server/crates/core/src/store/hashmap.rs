@@ -63,8 +63,9 @@ impl Entry {
     /// For tests of the keyspace *container* — which key the backend nominates
     /// as coldest, how many times it asks — where the value inside the entry is
     /// beside the point. `Entry`'s fields are private to this module, so a
-    /// backend test in a sibling module cannot spell one out.
-    #[cfg(test)]
+    /// backend test in a sibling module cannot spell one out. Only the
+    /// segmented backend has such a test, hence the feature gate.
+    #[cfg(all(test, feature = "table-keyspace"))]
     pub(in crate::store) fn hot_for_test() -> Entry {
         Entry {
             location: ValueLocation::Hot(Arc::new(Value::string(Bytes::new()))),
