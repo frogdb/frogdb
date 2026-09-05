@@ -3,6 +3,7 @@
 //! ```text
 //! offset  size  field
 //!      0    13  fp[13]          fingerprint, top 8 bits of the key hash
+//!     13     1  _pad            explicit, so the SIMD load reads no padding
 //!     14    26  route[13]       low 16 bits of the key hash — the split bit
 //!     40     2  occupied        slot bitmap
 //!     42     2  probing         set = this slot's home is the previous bucket
@@ -26,9 +27,12 @@
 //!   hold the key.
 //!
 //! The fingerprint block is matched with one SIMD compare ([`Bucket::fp_matches`],
-//! follow-up 1), which is why it sits at offset 0 and why the 16-byte load is
-//! allowed to read three bytes of `route`: those lanes land on bits 13..16 of the
-//! match mask, which `occupied` can never set.
+//! follow-up 1), which is why it sits at offset 0. The load is 16 bytes wide and
+//! `fp` is only 13, so three further bytes come back with it: `_pad`, and the two
+//! bytes of `route[0]`. Those lanes land on bits 13..16 of the match mask, which
+//! `occupied` can never set, so they cannot affect a result. `_pad` is an
+//! explicit field rather than compiler padding precisely so that all sixteen of
+//! those bytes are initialised — see [`Bucket::fp_matches`] for the argument.
 
 use std::mem::MaybeUninit;
 
@@ -51,6 +55,17 @@ pub struct Slot<V> {
 #[repr(C)]
 pub struct Bucket<V, const N: usize> {
     fp: [u8; N],
+    /// The byte the compiler would otherwise insert to align `route`, made an
+    /// explicit field.
+    ///
+    /// The SIMD fingerprint match loads 16 bytes from offset 0, which for the
+    /// production `N = 13` reaches past `fp` and over this byte. Compiler
+    /// padding is not guaranteed to hold any particular value — a struct move
+    /// need not copy it — so reading it would be reading uninitialised memory.
+    /// As a declared field it is zeroed by the segment's `alloc_zeroed` and
+    /// copied by any move, like every other field. `fp_matches` asserts at
+    /// compile time that it really is the only gap before `route`.
+    _pad: u8,
     route: [u16; N],
     occupied: u16,
     probing: u16,
@@ -166,11 +181,44 @@ impl<V, const N: usize> Bucket<V, N> {
     ///
     /// One 16-byte compare on NEON and SSE2; a byte loop where neither is
     /// available. The result is masked by `occupied`, so lanes past `N` — which
-    /// read `route` bytes, not fingerprints — can never appear in it.
+    /// read `_pad` and `route` bytes, not fingerprints — can never appear in it.
+    ///
+    /// # Why reading past `fp` is sound
+    ///
+    /// The load covers bytes 0..16 of the bucket. `fp` is `N` bytes, so for the
+    /// production `N = 13` the remaining three are `_pad` and `route[0]`. Every
+    /// one of them is a declared field, and a declared field is initialised
+    /// memory whenever the bucket is: segments come from `alloc_zeroed`
+    /// ([`crate::segment::Segment::alloc`]), and a field — unlike compiler
+    /// padding — is copied by any move. So there is no uninitialised byte in
+    /// the load however the bucket got there.
+    ///
+    /// `ENOUGH_INITIALISED_BYTES` pins that at compile time for whichever `N`
+    /// this is instantiated with, so an `N` that put real padding inside the
+    /// first 16 bytes fails the build rather than reading it.
     #[inline]
     pub fn fp_matches(&self, fp: u8) -> u16 {
         self.fp_match_raw(fp) & self.occupied
     }
+
+    /// The first 16 bytes of the bucket are entirely declared fields.
+    ///
+    /// `fp` occupies `0..N`, `_pad` the single byte at `N`, and `route` runs
+    /// from `N + 1`. Both halves matter: the offset check catches an `N` for
+    /// which the compiler inserts padding of its own (an even `N` would need a
+    /// second byte to align `route`), and the length check catches an `N` too
+    /// small for `fp` and `route` together to cover the load.
+    const ENOUGH_INITIALISED_BYTES: () = {
+        assert!(
+            std::mem::offset_of!(Bucket<V, N>, route) == N + 1,
+            "`_pad` is not the only gap before `route` — the SIMD load would \
+             read compiler padding"
+        );
+        assert!(
+            N + 1 + 2 * N >= 16,
+            "`fp`, `_pad` and `route` do not cover the 16 bytes the SIMD load reads"
+        );
+    };
 
     #[cfg(target_arch = "aarch64")]
     #[inline]
@@ -182,9 +230,14 @@ impl<V, const N: usize> Bucket<V, N> {
         // 16 lanes of 1<<(i%8), so a horizontal add over each half of the
         // equality mask produces one byte of the 16-bit match bitmap.
         const LANE_BITS: [u8; 16] = [1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128];
+        const { Self::ENOUGH_INITIALISED_BYTES };
         // SAFETY: NEON is baseline on aarch64, so the intrinsics are always
         // available. Both loads read 16 bytes: one from `LANE_BITS`, one from the
-        // start of the bucket, whose first 16 bytes are `fp` followed by `route`.
+        // start of the bucket, whose first 16 bytes are `fp`, the explicit `_pad`
+        // byte, and the two bytes of `route[0]` — all declared fields, so all
+        // initialised: a segment is `alloc_zeroed`, and a field (unlike compiler
+        // padding) is copied by any move of the bucket. `ENOUGH_INITIALISED_BYTES`
+        // above rejects at compile time any `N` for which that is not the layout.
         // The pointer is derived from the whole bucket rather than from `fp` —
         // `fp` is only `N` bytes, so a pointer into it may not be read past its
         // end — and `assert_bucket_layout` pins the bucket at 16 bytes or more.
@@ -208,12 +261,18 @@ impl<V, const N: usize> Bucket<V, N> {
         use std::arch::x86_64::{
             _mm_cmpeq_epi8, _mm_loadu_si128, _mm_movemask_epi8, _mm_set1_epi8,
         };
+        const { Self::ENOUGH_INITIALISED_BYTES };
         // SAFETY: SSE2 is guaranteed by the `target_feature` gate above (and is
         // baseline on x86_64). `_mm_loadu_si128` is an unaligned 16-byte read from
-        // the start of the bucket, whose first 16 bytes are `fp` followed by
-        // `route`. The pointer is derived from the whole bucket rather than from
-        // `fp` — `fp` is only `N` bytes, so a pointer into it may not be read past
-        // its end — and `assert_bucket_layout` pins the bucket at 16 bytes or more.
+        // the start of the bucket, whose first 16 bytes are `fp`, the explicit
+        // `_pad` byte, and the two bytes of `route[0]` — all declared fields, so
+        // all initialised: a segment is `alloc_zeroed`, and a field (unlike
+        // compiler padding) is copied by any move of the bucket.
+        // `ENOUGH_INITIALISED_BYTES` above rejects at compile time any `N` for
+        // which that is not the layout. The pointer is derived from the whole
+        // bucket rather than from `fp` — `fp` is only `N` bytes, so a pointer into
+        // it may not be read past its end — and `assert_bucket_layout` pins the
+        // bucket at 16 bytes or more.
         unsafe {
             let block = _mm_loadu_si128(std::ptr::from_ref(self).cast());
             _mm_movemask_epi8(_mm_cmpeq_epi8(block, _mm_set1_epi8(fp as i8))) as u16
