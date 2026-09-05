@@ -123,7 +123,15 @@ def mise_setup_step(install_args: str | None = None) -> Step:
         w["install_args"] = install_args
     w["cache"] = SQ("true")
     w["experimental"] = SQ("true")  # enables cargo: and ubi: backends
-    return Step(name="Set up mise toolchain", uses=MISE_ACTION, with_=w)
+    # MISE_DISABLE_TOOLS=rust: mise >= 2026.8.11 refuses `cargo:` tools while `.mise.toml`
+    # declares a `rust` it did not install (jdx/mise#12234); Rust comes from dtolnay after
+    # this step. See .scratch/build-toolchain/issues/done/03-ci-mise-cargo-backend-rust-dependency.md.
+    return Step(
+        name="Set up mise toolchain",
+        uses=MISE_ACTION,
+        env=omap(MISE_DISABLE_TOOLS="rust"),
+        with_=w,
+    )
 
 
 def rust_toolchain_step(components: str | None = None, targets: str | None = None) -> Step:

@@ -3006,7 +3006,7 @@
           "status": "supported",
           "arity": {
             "kind": "at_least",
-            "min": 2
+            "min": 1
           },
           "note": ""
         },
@@ -3015,7 +3015,7 @@
           "status": "supported",
           "arity": {
             "kind": "at_least",
-            "min": 2
+            "min": 1
           },
           "note": ""
         },

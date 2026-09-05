@@ -147,7 +147,6 @@ frogdb-server/
 │   ├── vll/                   # Very Lightweight Locking
 │   ├── telemetry/             # Prometheus metrics, OpenTelemetry tracing
 │   ├── debug/                 # Debug web UI
-│   ├── frogdb-macros/         # Proc macros
 │   ├── metrics-derive/        # Typed metrics proc macro
 │   ├── test-harness/          # TestServer, ClusterHarness
 │   ├── testing/               # Consistency checker, test models
@@ -179,7 +178,7 @@ testing/
 | **Core Engine** | `frogdb-core` | Command trait, Store trait, shard worker |
 | **Features** | `frogdb-acl`, `frogdb-scripting`, `frogdb-search`, `frogdb-replication`, `frogdb-cluster`, `frogdb-persistence`, `frogdb-vll` | Feature modules |
 | **Foundation** | `frogdb-types`, `frogdb-protocol`, `frogdb-config` | Value types, RESP protocol, configuration |
-| **Macros** | `frogdb-macros`, `frogdb-metrics-derive` | Proc macros (no internal deps) |
+| **Macros** | `frogdb-metrics-derive` | Proc macros (no internal deps) |
 | **Testing** | `frogdb-test-harness`, `frogdb-testing`, `frogdb-redis-regression`, `frogdb-browser-tests` | Test infrastructure |
 | **CLI** | `frogctl` | Command-line client |
 | **Tooling** | `frogdb-benches`, `helm-gen`, `dashboard-gen`, `frogdb-admin`, `docs-gen`, `deb-gen`, `tokio-coz` | Benchmarks, generators, ops tooling |

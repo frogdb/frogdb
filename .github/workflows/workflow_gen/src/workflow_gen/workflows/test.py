@@ -35,11 +35,13 @@ RUNS_ON = "ubuntu-latest"
 MISE_JUST = "just"
 MISE_JUST_DENY = "just cargo:cargo-deny"
 MISE_JUST_NEXTEST = "just cargo:cargo-nextest"
-MISE_JUST_QUINT = "just npm:@informalsystems/quint"
+# `node` first: the `npm:` backend depends on it and mise >= 2026.8.11 enforces that
+# (jdx/mise#12234) — see .scratch/build-toolchain/issues/done/04-ci-mise-npm-backend-node-dependency.md.
+MISE_JUST_QUINT = "just node npm:@informalsystems/quint"
 # `unit-tests` runs `cargo nextest run --all`, which picks up
 # frogdb-cluster's quint_conformance test binary (see that job's comment) —
 # it needs both cargo-nextest and the quint CLI quint-connect shells out to.
-MISE_JUST_NEXTEST_QUINT = "just cargo:cargo-nextest npm:@informalsystems/quint"
+MISE_JUST_NEXTEST_QUINT = "just node cargo:cargo-nextest npm:@informalsystems/quint"
 MISE_PYTHON_WORKFLOW_GEN = "python uv just"
 MISE_PYTHON_LINT = "python uv ruff"
 MISE_HELM = "helm"
@@ -266,6 +268,18 @@ def test_workflow() -> Workflow:
                 rust_toolchain_step(),
                 libclang_step(),
                 cargo_cache_step(shared_key="stable"),
+                # The first `quint run` on a runner downloads quint's Rust evaluator
+                # into `~/.quint/rust-evaluator-<version>/`. Without this warm-up,
+                # `frogdb-replication::quint_conformance`'s tests each shell out to
+                # `quint run` in parallel under nextest, racing that download
+                # (`Error: EEXIST: file already exists, open
+                # '/home/runner/.quint/rust-evaluator-v0.6.0/quint_evaluator-x86_64-unknown-linux-gnu.tar.gz'`
+                # plus 15s timeouts queued behind it — build-toolchain issue 06/09).
+                # One serial run warms the cache; the tests then find it.
+                run_step(
+                    name="Warm quint evaluator",
+                    run="quint run specs/quint/replication_feed_gate.qnt --max-steps 0 --max-samples 1",
+                ),
                 run_step(name="Run unit tests", run="cargo nextest run --all"),
             ],
         ),

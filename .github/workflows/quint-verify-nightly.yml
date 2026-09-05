@@ -56,9 +56,11 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
-        install_args: just npm:@informalsystems/quint
+        install_args: just node npm:@informalsystems/quint
         cache: 'true'
         experimental: 'true'
     - name: Set up JVM
@@ -80,9 +82,11 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
-        install_args: just npm:@informalsystems/quint
+        install_args: just node npm:@informalsystems/quint
         cache: 'true'
         experimental: 'true'
     - name: Set up JVM
@@ -104,9 +108,11 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
-        install_args: just npm:@informalsystems/quint
+        install_args: just node npm:@informalsystems/quint
         cache: 'true'
         experimental: 'true'
     - name: Set up JVM
@@ -128,9 +134,11 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
-        install_args: just npm:@informalsystems/quint
+        install_args: just node npm:@informalsystems/quint
         cache: 'true'
         experimental: 'true'
     - name: 'Steered sampled walk: every model declaring stepSteered'

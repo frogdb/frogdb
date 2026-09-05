@@ -104,6 +104,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: just cargo:cargo-deny
@@ -137,6 +139,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: python uv just
@@ -156,9 +160,11 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
-        install_args: just npm:@informalsystems/quint
+        install_args: just node npm:@informalsystems/quint
         cache: 'true'
         experimental: 'true'
     - name: Typecheck Quint models
@@ -175,9 +181,11 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
-        install_args: just cargo:cargo-nextest npm:@informalsystems/quint
+        install_args: just node cargo:cargo-nextest npm:@informalsystems/quint
         cache: 'true'
         experimental: 'true'
     - name: Install Rust 1.92.0
@@ -188,6 +196,8 @@ jobs:
       uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
       with:
         shared-key: stable
+    - name: Warm quint evaluator
+      run: quint run specs/quint/replication_feed_gate.qnt --max-steps 0 --max-samples 1
     - name: Run unit tests
       run: cargo nextest run --all
   cmd-full-build:
@@ -200,6 +210,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: just
@@ -231,6 +243,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: just cargo:cargo-nextest
@@ -256,6 +270,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: just cargo:cargo-nextest
@@ -283,6 +299,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: just cargo:cargo-nextest
@@ -308,6 +326,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: just
@@ -333,6 +353,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: just
@@ -386,6 +408,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: just
@@ -411,6 +435,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: python uv just
@@ -428,6 +454,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: python uv just
@@ -445,6 +473,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: python uv just
@@ -470,6 +500,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: python uv just
@@ -487,6 +519,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: python uv just
@@ -504,6 +538,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: python uv just
@@ -521,6 +557,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: python uv ruff
@@ -540,6 +578,8 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      env:
+        MISE_DISABLE_TOOLS: rust
       with:
         install: 'true'
         install_args: helm

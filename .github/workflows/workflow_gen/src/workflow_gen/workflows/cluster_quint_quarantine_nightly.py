@@ -38,7 +38,10 @@ from workflow_gen.schema import Job, ScheduleTrigger, Trigger, Workflow
 # (quint-connect-0.1.2/src/trace/generator/utils.rs), so this job needs both
 # cargo-nextest (to run the test binary) and quint itself — the same gap C1
 # found and fixed in test.yml's `unit-tests` job.
-MISE_JUST_NEXTEST_QUINT = "just cargo:cargo-nextest npm:@informalsystems/quint"
+#
+# `node` first: the `npm:` backend depends on it and mise >= 2026.8.11 enforces that
+# (jdx/mise#12234) — see .scratch/build-toolchain/issues/done/04-ci-mise-npm-backend-node-dependency.md.
+MISE_JUST_NEXTEST_QUINT = "just node cargo:cargo-nextest npm:@informalsystems/quint"
 
 # GitHub-hosted standard runner: free and unmetered on public repos, same as
 # the rest of the cluster-correctness nightlies.
