@@ -1,3 +1,13 @@
+//! The shard's eviction driver: the `maxmemory` verdict, the candidate pass,
+//! and the OOM refusal when the pass cannot free enough.
+//!
+//! **Where the freed bytes show up.** The keyspace is not one of the broker's
+//! `Budget` subsystems (`frogdb-memory/src/broker.rs`), so an eviction does not
+//! credit a budget directly. What it does is drop the entry's allocations and
+//! count them on [`EvictionBytesTotal`]; the memory the broker reasons about
+//! catches up on the next arena sample, which is how ADR-0006 §3 has the
+//! keyspace report itself.
+
 use frogdb_types::metrics::definitions::{
     EvictionBytesTotal, EvictionKeysTotal, EvictionOomTotal, EvictionSamplesTotal,
     TieredBytesSpilled, TieredSpills,
@@ -466,7 +476,7 @@ mod eviction_effect_tests {
     use crate::shard::builder::ShardWorkerBuilder;
     use crate::shard::message::{ShardReceiver, ShardSender, WatchEntry};
     use crate::store::HashMapStore;
-    use crate::types::Value;
+    use crate::types::{StringValue, Value};
     use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 
     #[derive(Default)]
@@ -1007,7 +1017,20 @@ mod eviction_effect_tests {
                 Err(CommandError::OutOfMemory)
             ));
         }
-        assert_eq!(present(&w, 8), 8, "reads are still served from every key");
+        // Presence is not service: a refused write must leave the values
+        // readable, so every key is fetched and compared, not merely counted.
+        assert_eq!(present(&w, 8), 8, "every key is still there");
+        for i in 0..8 {
+            let value = w
+                .store
+                .get(format!("k{i}").as_bytes())
+                .unwrap_or_else(|| panic!("k{i} stopped reading back"));
+            assert_eq!(
+                value.as_string().map(StringValue::as_bytes),
+                Some(Bytes::from(format!("value-{i}"))),
+                "k{i} came back with the wrong value"
+            );
+        }
     }
 
     /// Every eviction is counted, in keys and in the bytes the key actually

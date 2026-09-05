@@ -130,9 +130,9 @@ pub trait ShardExecutor: Send {
     /// Launch shard `shard_id` running the body `worker` builds, and return its
     /// handle.
     ///
-    /// The constructor is called *on the thread that will poll the future* — see
-    /// [`ShardBody`] — so an implementation must never call it on the caller's
-    /// thread and move the result.
+    /// `worker` is a *constructor*, not a built future, so that the future it
+    /// returns need not be `Send`: it is built on the thread that will poll it.
+    /// See [`ShardBody`].
     ///
     /// Fails only when the shard could not be given the arena its build
     /// promises it — see [`ShardLaunchError`] and [`RealShardExecutor::launch`].

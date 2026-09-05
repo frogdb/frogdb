@@ -41,6 +41,12 @@
 //! answers rarely is not hot data, it is a segment other keys route through.
 //! Promotion requires `hits > misses` as well as a hit floor.
 //!
+//! The counters are cleared only when `reconcile` reads them, so they measure
+//! the traffic since the last time this segment was considered for eviction —
+//! not since some fixed point. A table that is never under memory pressure
+//! never reconciles, and its counters simply accumulate (saturating, so a hot
+//! segment cannot wrap back into looking cold).
+//!
 //! # Termination
 //!
 //! Selection walks a queue from the tail, and a segment it moves is stamped with

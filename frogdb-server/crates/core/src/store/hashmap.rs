@@ -1629,6 +1629,12 @@ impl Store for HashMapStore {
         // under turmoil. Only equality matters to the backend — it separates
         // "already reconsidered in this pass" from "not yet" — so wrapping
         // every ~18 hours costs a segment one deferred second chance.
+        //
+        // Epoch 0 is not special-cased even though a never-reconciled segment
+        // carries `last_touch == 0`: once every ~18 hours the wrap makes the
+        // two indistinguishable, and such a segment is skipped for that one
+        // pass. That is the same one-pass cost the wrap already imposes, and
+        // the next pass at a different epoch takes it.
         let epoch = crate::clock::system_now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |since| since.as_secs() as u16);

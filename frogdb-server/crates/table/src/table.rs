@@ -244,6 +244,14 @@ impl<V, const N: usize> Table<V, N> {
     /// eviction accounting on the read path — one non-atomic increment on a
     /// cache line the lookup already touched, and no per-key field at all
     /// (PRD R9).
+    ///
+    /// Reads are the only reference: an overwriting [`Table::insert`] bumps no
+    /// counter (a fresh one only re-admits a ghost segment). A write-only flood
+    /// therefore cannot promote the segments it lands in over the ones real
+    /// reads are hitting, which is what `hits`/`misses` are meant to separate.
+    /// It is a deliberate departure from Redis, where a write touches the key's
+    /// LRU clock like a read does; the difference is only ever which *segment*
+    /// is colder, never which key is correct.
     #[inline]
     pub fn get(&self, key: &[u8]) -> Option<&V> {
         let hash = self.hasher.hash(key);

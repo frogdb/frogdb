@@ -2,11 +2,19 @@
 //! segments), compiled only under `--features table-keyspace`.
 //!
 //! The rest of the maxmemory suite runs against whichever backend is compiled
-//! in and is the real parity net — the point of this file is the pair of
-//! promises that are *about* the backend swap rather than about a command:
-//! under pressure the segmented table nominates a victim and that eviction is
-//! observable (event + metric), and a keyspace it may not take from refuses
-//! writes without going quiet on reads.
+//! in and is the real parity net. What this file adds is the two promises that
+//! are *about* the swap rather than about a command.
+//!
+//! The first test is an end-to-end smoke on the feature build: it asserts the
+//! behaviour any backend owes — pressure evicts, and the eviction is observable
+//! as an `evicted` keyevent plus the counters — and would pass on griddle too.
+//! Its value is that it exercises the whole segmented-table server, from the
+//! socket to the victim walk, in one run.
+//!
+//! The second is the backend-specific one: `volatile-lru` against a keyspace of
+//! persistent keys is exactly the case where `Table::cold_candidates` must walk
+//! its queues, find nothing it may take, and say so — refusing writes with
+//! `-OOM` without spinning and without going quiet on reads.
 
 use crate::common::test_server::{TestClient, TestServer, TestServerConfig};
 use bytes::Bytes;
