@@ -492,10 +492,8 @@ mod tests {
         assert_eq!(defaults::CLIENT_TRACKING_BYTES, 134_217_728, "128 MiB");
         assert_eq!(defaults::TXN_BUFFER_BYTES, 536_870_912, "512 MiB");
         assert_eq!(defaults::TXN_BUFFER_MIN_BYTES, 1_048_576, "1 MiB");
-        assert!(
-            defaults::TXN_BUFFER_MIN_BYTES < defaults::TXN_BUFFER_BYTES,
-            "the floor a limit is clamped to must sit below the default"
-        );
+        // The floor a limit is clamped to must sit below the default.
+        const { assert!(defaults::TXN_BUFFER_MIN_BYTES < defaults::TXN_BUFFER_BYTES) };
     }
 
     /// The wiring path the server takes: a broker built with the stub (because

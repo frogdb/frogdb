@@ -1212,7 +1212,6 @@ mod tests {
         }
     }
 
-    #[test]
     /// The other half of the table's contribution to a shard's accounted
     /// contents: what the keys hold outside their slot words. Inline keys hold
     /// nothing, so a table of short keys must report exactly zero — a constant
