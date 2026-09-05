@@ -1,6 +1,6 @@
 # 07 — CI: `frogdb-config` golden counts are one param short on Linux (46/125 vs 47/126)
 
-Status: needs-triage
+Status: needs-info
 Type: AFK
 Size: S
 Origin: Test run on `build-toolchain/impl` @ c66fc0fb5 (https://github.com/nathanjordan/frogdb/actions/runs/33937564779); identical on the Sept 3 `main` run (76b2a6dae)
@@ -28,6 +28,18 @@ run --all` invocation as `just test`, so it is not a feature-set difference betw
 
 Not caused by `build-toolchain/impl` (no Rust changes vs its base); red on `main` since at least
 Sept 3.
+
+## Update 2026-09-05 — no longer reproduces
+
+`main`'s memory-architecture #21 (`98599d0d2`) changed the assertions to
+`ImmutableParamId::ALL.len() == 46`, `MutableParamId::ALL.len() == 80`, snapshot rows `126`.
+With that in, both platforms agree: `Unit Tests` green for these two tests on `main` run
+33936207419 (093bca862) and on `build-toolchain/impl` run 33942554391 (e6b32364c, after the
+merge); `just test frogdb-config` green locally on macOS (124/124). The one-param delta was
+never named — `98599d0d2`'s diff to the param registry is where to look if the "why" matters.
+
+**Needs a call:** close as resolved-by-#21, or keep open to name the param and decide whether the
+registry should guarantee platform-identical `CONFIG GET` (step 2 below).
 
 ## What to build
 
