@@ -1,6 +1,6 @@
 # 21: transaction buffering budget and hard cap
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Origin: memory-architecture PRD phase filing, 2026-09-01 — [PRD.md](../../PRD.md) R14
 Area: frogdb-txn + frogdb-persistence + frogdb-replication-runtime + frogdb-memory
@@ -108,3 +108,55 @@ changing replica cap defaults.
 [Issue 05](../) broker (done). Independent of phases 4–5; sequenced in phase 6 because
 it is spec-heavy and benefits from the budget seam being battle-tested by
 [issue 18](../) first.
+## Resolution
+
+Landed 2026-09-04 on `mem-arch-integration` (picks `bf3d177f`, `ad89f853`, 2 commits).
+
+What shipped: one `Subsystem::TxnBuffering` budget per shard (`Disposition::Shed`, default
+512 MiB, floor 1 MiB) minted in `init_infrastructure`, adopted by the shard worker and handed
+to the replica streamer. Three charge sites: queue-time in `frogdb-txn` (`TransactionState`
+holds one `Charge` per open `MULTI`, grown by each command's `retained_bytes`; refusal answers
+`-OOM transaction buffer limit exceeded`, `EXEC` then `-EXECABORT`, FM-TXN-054); shard
+pre-apply in `frogdb-core` `execute_transaction` (charge after every admission gate, before the
+apply loop; a refusal applies nothing — FM-PERSISTENCE-001's "unbounded staging" non-guarantee
+rewritten into FM-PERSISTENCE-062); replica pending groups in `frogdb-replication`
+(FM-REPLICATION-045). The connection releases its queue-time charge when the batch is handed
+to its shard, so the bytes are counted once. Config `memory.txn-buffer-limit` (mutable;
+`CONFIG SET` reaches every shard's budget). Website deviation note, spec mirrors,
+`spec-gen.py` AREAS entry for `memory`.
+
+Review: round 0 (1 Critical, 3 Important, 8 Minor) — the Critical was a double charge across
+`EXEC` on single-shard nodes (connection charge held through the shard round trip, shard
+charging the same refcount-shared bytes on the same budget; hidden by the 4-shard harness).
+Fix round 1: charge released before the target-shard round trip, single-shard socket test
+(proven to fail without the fix), breakdown/metrics-row tests, spec rows corrected. Re-review
+r1: all findings addressed, no new Critical/Important (one new Minor, carried below). Gates: full `frogdb-server` suite 2145/2145, workspace clippy,
+lint-spec (318 rows / 1781 refs), lint-gates, spec-gen/docs-gen checks, mutants-diff on
+frogdb-txn (7: 3 caught, 4 unviable) and frogdb-replication (7: 6 caught, 1 unviable).
+
+Deviations from the brief, for human sign-off:
+
+- **Shard-side charge site is `frogdb-core`, not `frogdb-persistence`** — the staged batch
+  lives in `frogdb-core/src/shard/execution.rs`. FM-PERSISTENCE-062's forcing tests therefore
+  sit outside the `frogdb-persistence` mutation gate (recorded at the row). This is the
+  established convention — 69 `// FM-PERSISTENCE-` tags already live in `frogdb-core`,
+  including FM-PERSISTENCE-001's own shard-side tests — so the gap is systemic to the
+  persistence area's crate boundary, not specific to this row. Options: extend the persistence
+  gate to `frogdb-core/src/shard/{execution,persistence}.rs`, or re-home the shard-side rows.
+- **Replica refusal takes the ceiling-breach path** (group abandoned, history ended, link
+  through full resync). The brief said "observable behavior must not change"; PRD R14 puts
+  replica pending groups explicitly under the hard cap, and a group the replica cannot hold
+  has only that path. Client `MULTI` pressure on a core can now trigger it — the budget is
+  per core and shared with connections homed there. Accepted with the spec row
+  (FM-REPLICATION-045) stating it; flagging for explicit sign-off.
+
+Known gaps carried (follow-up material): a `MULTI` whose commands are all deferred
+(connection-level / server-wide) with no live watches makes no shard round trip, so `EXEC`
+releases the queue-time charge and nothing re-charges the bytes while the deferred commands
+run (bounded: one in-flight `EXEC` per connection, bytes were charged at queue time);
+`frogdb_memory_budget_refusals_total{subsystem="txn_buffering"}` is not asserted end to end;
+`queued_errors` strings on a poisoned `MULTI` are
+uncharged (pre-existing in kind); `charge_transaction_buffer` repeats registry/action lookups
+under `wal-failure-policy = rollback` (cost only, non-default); `ReplicaTxnBound::with_budgets`
+rebuilds the bound (order-dependent in a builder chain, safe at current call sites);
+`retained_bytes` counts argument bytes as owned, so a shared read-buffer slice is over-counted.
