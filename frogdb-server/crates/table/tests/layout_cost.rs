@@ -140,12 +140,95 @@ fn metadata_in_the_entry_costs_fewer_bytes_per_key_than_a_third_slot_word() {
     );
 }
 
-/// The chosen layout has to hold the occupancy the issue asks for, and hold the
-/// per-entry cost under what the spike measured. The spike's `str7` run reported
-/// 0.581 occupancy and 33.6 B/entry with no displacement; displacement is what
-/// buys the difference.
+/// The three statistics of the occupancy cycle, and the per-entry cost at each.
+struct Cycle {
+    peak_occupancy: f64,
+    trough_occupancy: f64,
+    mean_occupancy: f64,
+    /// The cost at the peak — the lowest, because occupancy is the denominator.
+    best_bpe: f64,
+    /// The cost at the trough: the worst a table of this shape ever costs.
+    worst_bpe: f64,
+    mean_bpe: f64,
+    end_occupancy: f64,
+    end_bpe: f64,
+}
+
+/// Fills a table to `n` keys, sampling the cycle as it goes.
 ///
-/// # Why the peak, and not the figure at some key count
+/// Sampled, not every insert: `occupancy` and `structural_bytes_per_entry` are
+/// both O(1), but a round of splits is thousands of inserts wide, so one sample
+/// in 64 resolves the top and the bottom of a round with room to spare. The
+/// first 10 000 keys are skipped: a table with a handful of segments has not
+/// reached its steady-state cycle yet, and its early troughs are an artifact of
+/// starting from one segment rather than a property of the layout.
+fn measure_cycle(n: usize) -> Cycle {
+    let mut t: Table<ValueWord, SLOTS_PER_BUCKET> = Table::with_seed(TableSeed::from_u64(11));
+
+    let mut peak_occupancy = 0.0f64;
+    let mut trough_occupancy = f64::INFINITY;
+    let mut best_bpe = f64::INFINITY;
+    let mut worst_bpe = 0.0f64;
+    let mut occupancy_sum = 0.0f64;
+    let mut bpe_sum = 0.0f64;
+    let mut samples = 0u32;
+
+    for i in 0..n {
+        t.insert(format!("key:{i}").as_bytes(), ValueWord::from_int(i as i64));
+        if i % 64 == 0 && i > 10_000 {
+            let (occ, bpe) = (t.occupancy(), t.structural_bytes_per_entry());
+            peak_occupancy = peak_occupancy.max(occ);
+            trough_occupancy = trough_occupancy.min(occ);
+            best_bpe = best_bpe.min(bpe);
+            worst_bpe = worst_bpe.max(bpe);
+            occupancy_sum += occ;
+            bpe_sum += bpe;
+            samples += 1;
+        }
+    }
+
+    let samples = f64::from(samples);
+    Cycle {
+        peak_occupancy,
+        trough_occupancy,
+        mean_occupancy: occupancy_sum / samples,
+        best_bpe,
+        worst_bpe,
+        mean_bpe: bpe_sum / samples,
+        end_occupancy: t.occupancy(),
+        end_bpe: t.structural_bytes_per_entry(),
+    }
+}
+
+/// The chosen layout has to hold the occupancy the issue asks for, and hold the
+/// per-entry cost under what the spike measured.
+///
+/// # Which spike number is comparable to which of these
+///
+/// The spike's `str7` run reported **0.581 occupancy and 33.6 B/entry** for a
+/// *settled* table — one figure, taken at the end of a fill, with no
+/// displacement. The comparable statistic here is the settled one
+/// (`end_occupancy` / `end_bpe`) or, phase-independently, the cycle mean. The
+/// peak is **not** comparable to it: it is the top of a cycle the spike's
+/// single measurement never reported, and quoting the peak against a settled
+/// figure overstates the win. All four are printed for that reason.
+///
+/// What the honest comparison says, on the numbers this test prints:
+///
+/// - the **cycle mean** is 0.716 / 28.7 B/entry at 200 000 keys and
+///   0.685 / 30.1 at 1 M — a real but modest win over 0.581 / 33.6;
+/// - the **settled** figure at 1 M is 0.596 / 33.6, which is *indistinguishable
+///   from the spike*. At 200 000 it is 0.738 / 27.1. The difference between
+///   those two is phase, not structure;
+/// - at the **trough** the layout costs 38.9 B/entry, which is *worse* than the
+///   spike's settled 33.6. That is why no assertion below claims otherwise.
+///
+/// The win this layout is actually being kept for is the peak — 0.913, which is
+/// what bounds how much memory a shard needs to have on hand before a split —
+/// and the fact that growth is incremental at all. It is not a large steady-state
+/// bytes-per-entry win.
+///
+/// # Why there is a cycle at all
 ///
 /// Occupancy in an extendible-hash table oscillates, and the amplitude is a
 /// property of the geometry rather than of the workload. A segment holds 819
@@ -157,45 +240,125 @@ fn metadata_in_the_entry_costs_fewer_bytes_per_key_than_a_third_slot_word() {
 ///
 /// So "occupancy at 200 000 keys" measures which phase of that cycle 200 000
 /// happens to fall in — a different key count gives a different answer with no
-/// change to the structure. The peak is the phase-independent statistic and the
-/// one displacement moves: it is how full a segment gets before it is forced to
-/// split. Both figures are printed, because the trough is what a table sitting at
-/// an unlucky size actually costs.
+/// change to the structure. The peak is how full a segment gets before it is
+/// forced to split, and it is the statistic displacement moves; the trough is
+/// what a table sitting at an unlucky size actually costs; the mean is what a
+/// table of unknown size costs in expectation.
 #[test]
 fn the_chosen_layout_beats_the_spike_it_replaces() {
-    let mut t: Table<ValueWord, SLOTS_PER_BUCKET> = Table::with_seed(TableSeed::from_u64(11));
+    let c = measure_cycle(KEYS);
 
-    let mut peak_occupancy = 0.0f64;
-    let mut best_bpe = f64::INFINITY;
-    for i in 0..KEYS {
-        t.insert(format!("key:{i}").as_bytes(), ValueWord::from_int(i as i64));
-        // Sampled, not every insert: `structural_bytes_per_entry` is O(1) but the
-        // peak only needs enough resolution to catch the top of a round, and a
-        // round is thousands of inserts wide.
-        if i % 64 == 0 && i > 10_000 {
-            peak_occupancy = peak_occupancy.max(t.occupancy());
-            best_bpe = best_bpe.min(t.structural_bytes_per_entry());
-        }
-    }
-
-    let end_occupancy = t.occupancy();
-    let end_bpe = t.structural_bytes_per_entry();
-    println!("chosen layout, peak of cycle : occupancy {peak_occupancy:.3}, {best_bpe:.1} B/entry");
-    println!("chosen layout, at {KEYS} keys: occupancy {end_occupancy:.3}, {end_bpe:.1} B/entry");
-    println!("spike (no displacement)      : occupancy 0.581, 33.6 B/entry");
+    println!("chosen layout, {KEYS} keys");
+    println!(
+        "  peak of cycle    : occupancy {:.3}, {:.1} B/entry",
+        c.peak_occupancy, c.best_bpe
+    );
+    println!(
+        "  trough of cycle  : occupancy {:.3}, {:.1} B/entry",
+        c.trough_occupancy, c.worst_bpe
+    );
+    println!(
+        "  cycle average    : occupancy {:.3}, {:.1} B/entry",
+        c.mean_occupancy, c.mean_bpe
+    );
+    println!(
+        "  settled at {KEYS}: occupancy {:.3}, {:.1} B/entry",
+        c.end_occupancy, c.end_bpe
+    );
+    println!("  spike, settled, no displacement: occupancy 0.581, 33.6 B/entry");
 
     assert!(
-        peak_occupancy >= 0.85,
-        "peak occupancy {peak_occupancy:.3} is under the 0.85 the issue asks for"
+        c.peak_occupancy >= 0.85,
+        "peak occupancy {:.3} is under the 0.85 the issue asks for",
+        c.peak_occupancy
+    );
+
+    // The trough bound is measured, not aspirational. Provenance: this test's
+    // own printed line, which reports 0.515 both at 200 000 keys and at 1 M (see
+    // `the_occupancy_cycle_does_not_drift_with_the_key_count`). A round of splits
+    // halves a table's occupancy, so a trough a little over half the 0.913 peak
+    // is the structure behaving as designed. The bound is set at 0.50 — about
+    // 3 % under the measurement, enough for seed and key-count variation, tight
+    // enough to fail if displacement ever stops carrying the trough back up.
+    assert!(
+        c.trough_occupancy >= 0.50,
+        "trough occupancy {:.3} fell below the measured 0.50 floor",
+        c.trough_occupancy
+    );
+
+    // The phase-independent comparison against the spike's settled 33.6. The
+    // cycle mean is the statistic to hold: the peak beats 33.6 comfortably but
+    // is not comparable to a settled figure, and the trough (38.9 B/entry) is
+    // *worse* than the spike — asserting on either alone would be picking the
+    // flattering phase.
+    assert!(
+        c.mean_bpe < 33.6,
+        "{:.1} B/entry averaged over the cycle does not beat the spike's 33.6",
+        c.mean_bpe
+    );
+    // And the occupancy the whole displacement machinery exists to buy, on the
+    // same phase-independent footing.
+    assert!(
+        c.mean_occupancy > 0.581,
+        "cycle-average occupancy {:.3} does not beat the spike's settled 0.581",
+        c.mean_occupancy
+    );
+}
+
+/// The same three statistics an order of magnitude further out.
+///
+/// The cycle is a property of the geometry, so it must not drift with the key
+/// count — if the peak, trough and mean at 1 M keys differed materially from
+/// those at 200 000, the 200 000-key figures would be a coincidence of size
+/// rather than a description of the layout. This is the run the report's §3
+/// table quotes alongside the 200 000-key one.
+///
+/// It is also where the settled figure stops flattering the layout: settled at
+/// 1 M the table reports 0.596 / 33.6 B/entry against the spike's 0.581 / 33.6.
+/// Those are the same numbers. The 200 000-key settled figure (0.738 / 27.1)
+/// looks better only because 200 000 lands higher in the cycle.
+#[test]
+fn the_occupancy_cycle_does_not_drift_with_the_key_count() {
+    let small = measure_cycle(KEYS);
+    let large = measure_cycle(1_000_000);
+
+    println!(
+        "  1M peak    : occupancy {:.3}, {:.1} B/entry",
+        large.peak_occupancy, large.best_bpe
+    );
+    println!(
+        "  1M trough  : occupancy {:.3}, {:.1} B/entry",
+        large.trough_occupancy, large.worst_bpe
+    );
+    println!(
+        "  1M average : occupancy {:.3}, {:.1} B/entry",
+        large.mean_occupancy, large.mean_bpe
+    );
+    println!(
+        "  1M settled : occupancy {:.3}, {:.1} B/entry",
+        large.end_occupancy, large.end_bpe
+    );
+
+    assert!(
+        (large.peak_occupancy - small.peak_occupancy).abs() < 0.05,
+        "peak moved with the key count: {:.3} at {KEYS} vs {:.3} at 1M",
+        small.peak_occupancy,
+        large.peak_occupancy
     );
     assert!(
-        best_bpe < 33.6,
-        "{best_bpe:.1} B/entry does not beat the spike's 33.6"
+        (large.mean_occupancy - small.mean_occupancy).abs() < 0.05,
+        "cycle mean moved with the key count: {:.3} at {KEYS} vs {:.3} at 1M",
+        small.mean_occupancy,
+        large.mean_occupancy
     );
-    // Even caught at its worst phase the layout has to beat the spike, or the
-    // rewrite bought occupancy at one key count and nothing at another.
     assert!(
-        end_bpe < 33.6,
-        "{end_bpe:.1} B/entry at {KEYS} keys does not beat the spike's 33.6"
+        large.trough_occupancy >= 0.50,
+        "trough occupancy {:.3} at 1M fell below the measured 0.50 floor",
+        large.trough_occupancy
+    );
+    assert!(
+        large.mean_bpe < 33.6,
+        "{:.1} B/entry averaged over the 1M cycle does not beat the spike's 33.6",
+        large.mean_bpe
     );
 }

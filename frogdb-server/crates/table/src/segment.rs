@@ -6,9 +6,12 @@
 //!
 //! Placement is Dash's: a key may live in its home bucket or the one after it,
 //! and when both are full an entry already there is *displaced* to its own
-//! alternative to make room. That is what lifts occupancy from the spike's 0.581
-//! towards 0.9 — a key with two homes and a relocation rule fills far more of the
-//! array than a key with one.
+//! alternative to make room. That is what lifts *a segment's* occupancy towards
+//! 0.9 before it is forced to split — a key with two homes and a relocation rule
+//! fills far more of the array than a key with one. A whole table averages well
+//! under that, because a round of splits halves it and it climbs back; see
+//! `tests/layout_cost.rs` for the peak, trough and cycle mean, and for what each
+//! is and is not comparable to in the spike.
 //!
 //! Everything placement needs is read out of slot metadata. A split moves entries
 //! without hashing a single key: which half an entry belongs to comes from its
