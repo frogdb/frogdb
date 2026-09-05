@@ -785,7 +785,11 @@ impl<V, const N: usize> Table<V, N> {
 //    but reaching either needs a `&ValueWord`, which under `V: Send` is not
 //    reachable from a table at all. `Segment`/`Bucket` do expose owning
 //    accessors (`take`, `remove`), and they need a `&mut Segment`, which no
-//    public `Table` method hands out.
+//    public `Table` method hands out. Every `Segment`/`Bucket` slot accessor
+//    (`Bucket::{slot, slot_mut, take}`, `Segment::{alloc, slot_at, positions}`,
+//    and the test-only `Segment::bucket`) is `pub(crate)`, so this enumeration
+//    of `Table`'s public
+//    surface is the whole story rather than one route among several.
 //  - `cold_candidates` calls back with `&V` and with `&[u8]`. The first is the
 //    same borrow `get` already hands out, under the same `V: Send` bound; the
 //    second is decoded key bytes, borrowed from the slot or from a caller-owned

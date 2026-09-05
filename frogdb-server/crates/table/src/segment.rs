@@ -113,7 +113,12 @@ impl<V, const N: usize> Segment<V, N> {
     /// segment index, so they are set to [`NIL`] before the box is handed back.
     /// `q_state` needs no such fixup — [`crate::evict::QUEUE_NONE`] *is* zero, and a segment
     /// nobody has linked yet is in no queue.
-    pub fn alloc(local_depth: u8) -> Box<Segment<V, N>> {
+    ///
+    /// Crate-private: a bare segment is only sound to read through the bucket
+    /// occupancy bitmaps, and [`Table`](crate::Table) is the only thing that
+    /// maintains them. Handing one out publicly would let safe code reach an
+    /// unoccupied slot via [`Segment::slot_at`].
+    pub(crate) fn alloc(local_depth: u8) -> Box<Segment<V, N>> {
         crate::bucket::assert_bucket_layout::<V, N>();
         let layout = Layout::new::<Segment<V, N>>();
         // SAFETY: `Segment` is far from zero-sized, which is `alloc_zeroed`'s only
@@ -161,8 +166,14 @@ impl<V, const N: usize> Segment<V, N> {
     }
 
     /// Bucket `i`, home buckets first and the stash last.
+    ///
+    /// Test-only and crate-private: a `&Bucket` is a route to the crate-private
+    /// slot accessors, whose occupancy precondition is only a `debug_assert!`.
+    /// The crate's own tests inspect bucket metadata directly; nothing on the
+    /// runtime path needs a whole bucket.
+    #[cfg(test)]
     #[inline]
-    pub fn bucket(&self, i: usize) -> &Bucket<V, N> {
+    pub(crate) fn bucket(&self, i: usize) -> &Bucket<V, N> {
         &self.buckets[i]
     }
 
@@ -516,7 +527,9 @@ impl<V, const N: usize> Segment<V, N> {
     ///
     /// Bucket order is the order a SCAN cursor walks, so a caller can resume
     /// mid-segment; the stash buckets come last, after every home bucket.
-    pub fn positions(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+    ///
+    /// Crate-private: it only means anything paired with [`Segment::slot_at`].
+    pub(crate) fn positions(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
         (0..BUCKETS).flat_map(move |b| {
             let mut bits = self.buckets[b].occupied();
             std::iter::from_fn(move || {
@@ -531,8 +544,14 @@ impl<V, const N: usize> Segment<V, N> {
     }
 
     /// The entry at a position from [`Segment::positions`].
+    ///
+    /// Crate-private: `b`/`i` must name an *occupied* slot, and that is only a
+    /// `debug_assert!` in [`Bucket::slot`]. Callers outside the crate reach
+    /// entries through [`Table::iter`](crate::Table::iter) /
+    /// [`Table::scan`](crate::Table::scan), which only ever pair this with
+    /// positions from [`Segment::positions`].
     #[inline]
-    pub fn slot_at(&self, b: usize, i: usize) -> &Slot<V> {
+    pub(crate) fn slot_at(&self, b: usize, i: usize) -> &Slot<V> {
         self.buckets[b].slot(i)
     }
 

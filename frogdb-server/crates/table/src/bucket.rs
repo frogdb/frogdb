@@ -331,8 +331,13 @@ impl<V, const N: usize> Bucket<V, N> {
     }
 
     /// Slot `i`. Panics in debug builds when the slot is free.
+    ///
+    /// Crate-private: the occupancy precondition is only a `debug_assert!`, so a
+    /// release-build caller passing a free index would `assume_init_ref` an
+    /// uninitialised slot. Reaching a slot from outside the crate goes through
+    /// [`Table`](crate::Table), which only ever indexes occupied positions.
     #[inline]
-    pub fn slot(&self, i: usize) -> &Slot<V> {
+    pub(crate) fn slot(&self, i: usize) -> &Slot<V> {
         debug_assert!(self.occupied & (1 << i) != 0, "slot {i} is not occupied");
         // SAFETY: the occupancy bit is set, so `insert` initialised this slot and
         // nothing has taken it since.
@@ -340,15 +345,20 @@ impl<V, const N: usize> Bucket<V, N> {
     }
 
     /// Slot `i`, mutably.
+    ///
+    /// Crate-private for the same reason as [`Bucket::slot`].
     #[inline]
-    pub fn slot_mut(&mut self, i: usize) -> &mut Slot<V> {
+    pub(crate) fn slot_mut(&mut self, i: usize) -> &mut Slot<V> {
         debug_assert!(self.occupied & (1 << i) != 0, "slot {i} is not occupied");
         // SAFETY: as `slot`, and `&mut self` rules out an aliasing `&Slot`.
         unsafe { self.slots[i].assume_init_mut() }
     }
 
     /// Removes slot `i` and hands back what it held.
-    pub fn take(&mut self, i: usize) -> Slot<V> {
+    ///
+    /// Crate-private: as [`Bucket::slot`], and a second `take` of the same index
+    /// (or a `slot` after one) would alias a moved-out record.
+    pub(crate) fn take(&mut self, i: usize) -> Slot<V> {
         debug_assert!(self.occupied & (1 << i) != 0, "slot {i} is not occupied");
         self.occupied &= !(1 << i);
         self.probing &= !(1 << i);
