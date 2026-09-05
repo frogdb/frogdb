@@ -346,3 +346,145 @@ pub(crate) mod testing {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// A sink that reports whatever vectored capability it is built with, so a
+    /// test can tell delegation apart from a hardcoded answer.
+    struct VectoredSink {
+        vectored: bool,
+    }
+
+    impl AsyncWrite for VectoredSink {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn is_write_vectored(&self) -> bool {
+            self.vectored
+        }
+    }
+
+    // FM-REPLICATION-069
+    /// A shed fails a flush as well as a write.
+    ///
+    /// `write_all` is not the only place a session can be parked: a buffered
+    /// writer's flush is the tail of every framed write, and a guard that let
+    /// it through would keep a shed link alive for exactly as long as its peer
+    /// stayed unreadable.
+    #[tokio::test]
+    async fn a_shed_fails_the_flush_too() {
+        let (tx, rx) = oneshot::channel();
+        let (client, _server) = tokio::io::duplex(1024);
+        let mut guarded = ShedGuardedStream::new(client, rx);
+
+        tx.send("soft_limit")
+            .expect("the stream holds the receiver");
+        let error = guarded
+            .flush()
+            .await
+            .expect_err("a shed link must not report a successful flush");
+        assert!(
+            error.to_string().contains("soft_limit"),
+            "the flush must fail naming the limit that shed it; got {error}"
+        );
+    }
+
+    // FM-REPLICATION-069
+    /// Shutdown is deliberately *not* guarded, and must really reach the
+    /// socket: closing the link is how a shed is carried out, so a shutdown
+    /// that quietly succeeded without shutting anything down would leave the
+    /// replica connected to a primary that believes it dropped it.
+    #[tokio::test]
+    async fn a_guarded_shutdown_still_closes_the_socket() {
+        let (tx, rx) = oneshot::channel();
+        let (client, mut server) = tokio::io::duplex(1024);
+        let mut guarded = ShedGuardedStream::new(client, rx);
+
+        tx.send("hard_limit")
+            .expect("the stream holds the receiver");
+        guarded
+            .shutdown()
+            .await
+            .expect("a shed must not block the close it exists to cause");
+
+        let mut scratch = [0u8; 8];
+        let read =
+            tokio::time::timeout(std::time::Duration::from_secs(5), server.read(&mut scratch))
+                .await
+                .expect("the peer must see the close, not hang waiting for it")
+                .expect("a closed duplex reads clean EOF");
+        assert_eq!(read, 0, "the peer must be at end of stream");
+    }
+
+    // FM-REPLICATION-069
+    /// Vectored writes go to the inner stream, and stop when the shed fires.
+    #[tokio::test]
+    async fn vectored_writes_pass_through_and_are_guarded() {
+        let (tx, rx) = oneshot::channel();
+        let (client, mut server) = tokio::io::duplex(1024);
+        let mut guarded = ShedGuardedStream::new(client, rx);
+
+        let written = guarded
+            .write_vectored(&[io::IoSlice::new(b"frame"), io::IoSlice::new(b"tail")])
+            .await
+            .expect("an unshed stream writes");
+        assert!(
+            written > 0,
+            "a vectored write must report the bytes it actually handed to the socket"
+        );
+        let mut scratch = vec![0u8; written];
+        server
+            .read_exact(&mut scratch)
+            .await
+            .expect("what was reported written must be readable at the peer");
+        assert_eq!(
+            &scratch,
+            &b"frametail"[..written],
+            "the payload must arrive in order and unaltered"
+        );
+
+        tx.send("soft_limit")
+            .expect("the stream holds the receiver");
+        let error = guarded
+            .write_vectored(&[io::IoSlice::new(b"more")])
+            .await
+            .expect_err("a shed link must not accept another vectored write");
+        assert!(
+            error.to_string().contains("soft_limit"),
+            "the write must fail naming the limit that shed it; got {error}"
+        );
+    }
+
+    // FM-REPLICATION-069
+    /// The wrapper reports the inner stream's vectored capability rather than
+    /// an answer of its own: a `TcpStream` writes vectored and a duplex does
+    /// not, and callers pick their write path off this.
+    #[test]
+    fn the_vectored_capability_is_the_inner_stream_s() {
+        for vectored in [true, false] {
+            let (_tx, rx) = oneshot::channel();
+            let guarded = ShedGuardedStream::new(VectoredSink { vectored }, rx);
+            assert_eq!(
+                guarded.is_write_vectored(),
+                vectored,
+                "the wrapper must answer for the stream it wraps, not for itself"
+            );
+        }
+    }
+}
