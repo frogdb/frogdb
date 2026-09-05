@@ -1391,6 +1391,7 @@ mod tests {
 
     /// One call must not hand the caller the same key twice: the caller deletes
     /// what it is handed.
+    // FM-MEMORY-005
     #[test]
     fn a_single_call_never_nominates_a_key_twice() {
         let mut t = evict_table();
@@ -1404,6 +1405,7 @@ mod tests {
     /// `volatile-*` confinement, applied per slot rather than per segment: a
     /// segment mixing eligible and ineligible keys yields only the eligible
     /// ones, and never nominates a key the policy may not take.
+    // FM-MEMORY-005
     #[test]
     fn confinement_nominates_only_what_the_policy_may_take() {
         let mut t = evict_table();
@@ -1420,6 +1422,7 @@ mod tests {
 
     /// The property the OOM verdict rests on: with nothing in the candidate set,
     /// the walk reports that it cannot make progress instead of spinning.
+    // FM-MEMORY-007
     #[test]
     fn a_walk_with_nothing_to_take_reports_zero_rather_than_spinning() {
         let mut t = evict_table();
@@ -1433,6 +1436,7 @@ mod tests {
     }
 
     /// A constant epoch is legal — it freezes promotion, never nomination.
+    // FM-MEMORY-007
     #[test]
     fn a_frozen_epoch_still_makes_progress() {
         let mut t = evict_table();
@@ -1461,6 +1465,7 @@ mod tests {
     /// The queues are mutated by five unrelated paths — insert, split, the
     /// re-admission branch, reconciliation and retirement — so the invariant
     /// worth testing is that no *sequence* of them can corrupt the links.
+    // FM-MEMORY-007
     #[test]
     fn random_reference_and_growth_sequences_keep_the_queues_consistent() {
         // A deterministic generator, spelled out so a failure replays: the

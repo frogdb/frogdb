@@ -251,6 +251,11 @@ NEXTEST_CRATES = [
     "frogdb-protocol",
     "frogdb-types",
     "frogdb-net",
+    # frogdb-table carries the eviction state-machine rows of specs/memory.md
+    # (2Q over segments: candidate-set confinement inside a segment, and the
+    # victim walk's termination bound). No dependencies to speak of, so its
+    # test binary compiles in a couple of seconds.
+    "frogdb-table",
 ]
 
 # Feature-gated suites a row may also name, listed separately because their
