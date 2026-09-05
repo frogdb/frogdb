@@ -1,6 +1,6 @@
 # 23: account the replica feed under NetworkOutput (D4 second half)
 
-Status: needs-triage
+Status: ready-for-agent
 Type: AFK
 Origin: issue 18's review, 2026-09-01 — [PRD.md](../../PRD.md) D4
 Area: frogdb-replication / frogdb-replication-runtime (LOCKED) + frogdb-memory + server connection handoff
@@ -59,5 +59,7 @@ partial-sync semantics, new config knobs beyond the existing `replica` class lin
 
 ## Depends on
 
-Issue 18 landed. Check interaction with [issue 19](../) (storage must not alias network
-buffers) — if 19 reshapes feed buffer ownership, land 19 first or coordinate.
+Issue 18 landed. [Issue 19](../) landed 2026-09-03 without touching feed buffer ownership
+(triaged 2026-09-04: no coordination needed). [Issue 21](../) landed 2026-09-04 and added
+the replica-side `TxnBuffering` charge (FM-REPLICATION-045) in `apply.rs` — a different
+subsystem; this issue's `NetworkOutput` seam sits on the primary's feed path.
