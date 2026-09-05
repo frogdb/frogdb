@@ -101,4 +101,26 @@ impl Keyspace for TableKeyspace {
             let _ = visit(KeyRef::Borrowed(key), entry);
         })
     }
+
+    /// The point of the segmented table for eviction: 2Q over *segments*, so
+    /// the cold ordering costs 28 bytes per 16 KiB segment and nothing at all
+    /// per key (PRD R9).
+    ///
+    /// The keys come back copied, as everything that leaves this backend does:
+    /// a table slot holds a packed word, not a `Bytes`.
+    fn cold_candidates(
+        &mut self,
+        want: usize,
+        epoch: u16,
+        accept: impl Fn(&Entry) -> bool,
+    ) -> Option<Vec<Bytes>> {
+        let mut keys = Vec::with_capacity(want.min(self.data.len()));
+        self.data.cold_candidates(
+            want,
+            epoch,
+            |entry: &Box<Entry>| accept(entry),
+            |key| keys.push(Bytes::copy_from_slice(key)),
+        );
+        Some(keys)
+    }
 }

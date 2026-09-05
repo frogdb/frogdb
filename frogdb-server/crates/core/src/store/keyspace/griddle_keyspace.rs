@@ -124,4 +124,19 @@ impl Keyspace for GriddleKeyspace {
         }
         0
     }
+
+    /// Griddle holds no ordering by temperature — a `SwissTable` bucket index
+    /// says nothing about when the entry was last used, and the per-key
+    /// recency the store does hold (`KeyMetadata::last_access`) is what the
+    /// sampling loop already reads. So this backend declines, and the store
+    /// keeps the Redis-style sampled-LRU/LFU path it has always used: the
+    /// default build's eviction behaviour is unchanged by this seam existing.
+    fn cold_candidates(
+        &mut self,
+        _want: usize,
+        _epoch: u16,
+        _accept: impl Fn(&Entry) -> bool,
+    ) -> Option<Vec<Bytes>> {
+        None
+    }
 }

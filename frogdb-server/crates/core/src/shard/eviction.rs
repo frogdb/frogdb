@@ -7,7 +7,8 @@ use bytes::Bytes;
 
 use crate::error::CommandError;
 use crate::eviction::{
-    EvictionCandidate, EvictionPolicy, EvictionRanker, LfuRanker, LruRanker, TtlRanker,
+    CandidateSource, EvictionCandidate, EvictionPolicy, EvictionRanker, LfuRanker, LruRanker,
+    TtlRanker,
 };
 use crate::store::{SpillError, Store};
 
@@ -198,19 +199,41 @@ impl ShardWorker {
         }
     }
 
-    /// Evict the worst key for the given ranker (sample, then delete the worst).
+    /// The key this pass should take, or `None` when the policy's candidate set
+    /// is empty and the caller's next move is an OOM verdict.
+    ///
+    /// One chooser for both the delete and the spill path, so a tiered policy
+    /// spills exactly the victim a non-tiered one would have deleted — the
+    /// difference between the two is what happens to the victim, never which
+    /// key it is.
+    fn choose_victim<R: EvictionRanker>(
+        &mut self,
+        volatile_only: bool,
+        ranker: &R,
+    ) -> Option<Bytes> {
+        if self.eviction.policy().candidate_source() == CandidateSource::Cold
+            && let Some(nominated) = self.store.eviction_candidates(1, volatile_only)
+        {
+            // The keyspace has a cold ordering and has spoken. An empty answer
+            // is "nothing in the candidate set", not "ask someone else":
+            // falling through to sampling here would evict a key the ordering
+            // deliberately withheld.
+            return nominated.into_iter().next();
+        }
+
+        self.sample_with_ranker(volatile_only, ranker);
+        self.eviction.take_worst_candidate().map(|c| c.key)
+    }
+
+    /// Evict the worst key for the given ranker.
     async fn evict_with_ranker<R: EvictionRanker>(
         &mut self,
         volatile_only: bool,
         ranker: &R,
     ) -> bool {
-        self.sample_with_ranker(volatile_only, ranker);
-
-        // Get worst candidate from pool
-        if let Some(candidate) = self.eviction.take_worst_candidate() {
-            self.delete_for_eviction(&candidate.key).await
-        } else {
-            false
+        match self.choose_victim(volatile_only, ranker) {
+            Some(key) => self.delete_for_eviction(&key).await,
+            None => false,
         }
     }
 
@@ -220,13 +243,9 @@ impl ShardWorker {
         volatile_only: bool,
         ranker: &R,
     ) -> bool {
-        self.sample_with_ranker(volatile_only, ranker);
-
-        // Get worst candidate from pool
-        if let Some(candidate) = self.eviction.take_worst_candidate() {
-            self.spill_for_eviction(&candidate.key).await
-        } else {
-            false
+        match self.choose_victim(volatile_only, ranker) {
+            Some(key) => self.spill_for_eviction(&key).await,
+            None => false,
         }
     }
 
@@ -411,9 +430,12 @@ mod eviction_effect_tests {
     //! tracking; these are the red-first regression guards for that live bug.
     use super::*;
 
+    use std::collections::HashMap;
     use std::sync::Arc;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU32, AtomicU64};
+
+    use frogdb_types::traits::MetricsRecorder;
 
     use tempfile::TempDir;
     use tokio::sync::mpsc;
@@ -539,8 +561,39 @@ mod eviction_effect_tests {
         r
     }
 
+    /// Records counter increments so a test can read cumulative totals back.
+    #[derive(Default)]
+    struct RecordingRecorder {
+        counters: Mutex<HashMap<String, u64>>,
+    }
+
+    impl MetricsRecorder for RecordingRecorder {
+        fn increment_counter(&self, name: &str, value: u64, _labels: &[(&str, &str)]) {
+            *self
+                .counters
+                .lock()
+                .unwrap()
+                .entry(name.to_string())
+                .or_insert(0) += value;
+        }
+        fn record_gauge(&self, _name: &str, _value: f64, _labels: &[(&str, &str)]) {}
+        fn record_histogram(&self, _name: &str, _value: f64, _labels: &[(&str, &str)]) {}
+        fn counter_value(&self, name: &str) -> Option<u64> {
+            self.counters.lock().unwrap().get(name).copied()
+        }
+    }
+
     /// Bare (no persistence) worker with a recording broadcaster + DEL/SET.
     fn worker(bc: SharedBroadcaster) -> ShardWorker {
+        worker_with_metrics(bc, Arc::new(crate::noop::NoopMetricsRecorder::new()))
+    }
+
+    /// [`worker`], but with a caller-supplied metrics recorder so a test can
+    /// read the eviction counters back.
+    fn worker_with_metrics(
+        bc: SharedBroadcaster,
+        metrics: Arc<dyn MetricsRecorder>,
+    ) -> ShardWorker {
         let (msg_tx, msg_rx) = mpsc::channel(16);
         let (_c_tx, c_rx) = mpsc::channel(16);
         let mut w = ShardWorker::with_eviction(
@@ -551,7 +604,7 @@ mod eviction_effect_tests {
             Arc::new(vec![ShardSender::new(msg_tx)]),
             Arc::new(registry()),
             crate::eviction::EvictionConfig::default(),
-            Arc::new(crate::noop::NoopMetricsRecorder::new()),
+            metrics,
             Arc::new(AtomicU64::new(0)),
             bc,
         );
@@ -596,6 +649,7 @@ mod eviction_effect_tests {
     /// Eviction replicates a synthetic `DEL` and emits an `evicted` notification.
     /// Old `delete_for_eviction` skipped the broadcast entirely (replica keeps a
     /// key the primary evicted → divergence).
+    // FM-MEMORY-006
     #[tokio::test]
     async fn eviction_replicates_del_and_notifies() {
         let bc = Arc::new(RecordingBroadcaster::default());
@@ -627,6 +681,7 @@ mod eviction_effect_tests {
     /// The headline durability regression: an evicted **non-TTL** key must not
     /// resurrect on restart. Old `delete_for_eviction` skipped the WAL, so
     /// RocksDB kept the key's Put with no tombstone and recovery reloaded it.
+    // FM-MEMORY-006
     #[tokio::test]
     async fn eviction_is_durable_across_restart() {
         let tmp = TempDir::new().unwrap();
@@ -680,6 +735,7 @@ mod eviction_effect_tests {
     /// readable (unspills on access), so a client WATCHing the key must NOT get
     /// a spurious EXEC abort. Red before the fix: `spill_for_eviction` bumped
     /// the key's slot version, dirtying the watch even though nothing changed.
+    // FM-MEMORY-006
     #[tokio::test]
     async fn spill_preserves_watch_version() {
         let bc = Arc::new(RecordingBroadcaster::default());
@@ -728,6 +784,7 @@ mod eviction_effect_tests {
     /// A spill emits NO `evicted` keyspace notification (the value is still
     /// readable — `evicted` means gone, misleading here), while a TRUE eviction
     /// still does. Red before the fix: `spill_for_eviction` emitted `evicted`.
+    // FM-MEMORY-006
     #[tokio::test]
     async fn spill_emits_no_evicted_notification_but_true_eviction_does() {
         let bc = Arc::new(RecordingBroadcaster::default());
@@ -763,5 +820,207 @@ mod eviction_effect_tests {
             }
             other => panic!("a true eviction must still emit `evicted`, got {other:?}"),
         }
+    }
+
+    /// Fill the store with `n` small persistent keys named `k0..kn`.
+    fn fill(w: &mut ShardWorker, n: usize) {
+        for i in 0..n {
+            w.store.set(
+                Bytes::from(format!("k{i}")),
+                Value::string(format!("value-{i}")),
+            );
+        }
+    }
+
+    /// Point the shard's limit just below what it currently holds, so the next
+    /// write is over the limit and freeing *anything* gets back under.
+    fn squeeze(w: &mut ShardWorker, policy: EvictionPolicy) {
+        let used = w.store.memory_used() as u64;
+        assert!(used > 0, "the store must account for the keys it holds");
+        w.eviction
+            .update_config(crate::eviction::EvictionConfig::new(used - 1, policy), 1);
+    }
+
+    /// How many of the `k0..kn` keys are still there.
+    fn present(w: &ShardWorker, n: usize) -> usize {
+        (0..n)
+            .filter(|i| w.store.contains(format!("k{i}").as_bytes()))
+            .count()
+    }
+
+    /// Eviction is driven by the `maxmemory` verdict and nothing else: a shard
+    /// inside its limit neither evicts nor even samples, so a write there costs
+    /// the policy nothing.
+    // FM-MEMORY-004
+    #[tokio::test]
+    async fn nothing_is_evicted_while_the_shard_is_inside_its_limit() {
+        let metrics = Arc::new(RecordingRecorder::default());
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut w = worker_with_metrics(bc as SharedBroadcaster, metrics.clone());
+
+        fill(&mut w, 8);
+        let roomy = w.store.memory_used() as u64 * 16;
+        w.eviction.update_config(
+            crate::eviction::EvictionConfig::new(roomy, EvictionPolicy::AllkeysLru),
+            1,
+        );
+
+        assert!(w.check_memory_for_write().await.is_ok());
+
+        assert_eq!(present(&w, 8), 8, "no key may be taken inside the limit");
+        assert_eq!(
+            metrics.counter_value(EvictionKeysTotal::NAME),
+            None,
+            "nothing was evicted"
+        );
+        assert_eq!(
+            metrics.counter_value(EvictionSamplesTotal::NAME),
+            None,
+            "the policy must not even sample inside the limit"
+        );
+    }
+
+    /// Over the limit, the pass runs *before* the write is served: it takes
+    /// victims until the shard is back under, then reports success.
+    // FM-MEMORY-004
+    #[tokio::test]
+    async fn a_write_over_the_limit_evicts_before_it_is_served() {
+        let metrics = Arc::new(RecordingRecorder::default());
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut w = worker_with_metrics(bc as SharedBroadcaster, metrics.clone());
+
+        fill(&mut w, 8);
+        squeeze(&mut w, EvictionPolicy::AllkeysLru);
+
+        assert!(
+            w.check_memory_for_write().await.is_ok(),
+            "a policy that can free memory must let the write through"
+        );
+        assert!(present(&w, 8) < 8, "the pass must have taken a victim");
+        assert_eq!(
+            metrics.counter_value(EvictionKeysTotal::NAME),
+            Some(1),
+            "one victim is enough to get back under the limit"
+        );
+    }
+
+    /// `noeviction` refuses without touching the keyspace: the verdict is the
+    /// answer, not the first step of a pass.
+    // FM-MEMORY-004
+    #[tokio::test]
+    async fn noeviction_refuses_the_write_without_taking_a_victim() {
+        let metrics = Arc::new(RecordingRecorder::default());
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut w = worker_with_metrics(bc as SharedBroadcaster, metrics.clone());
+
+        fill(&mut w, 8);
+        squeeze(&mut w, EvictionPolicy::NoEviction);
+
+        assert!(matches!(
+            w.check_memory_for_write().await,
+            Err(CommandError::OutOfMemory)
+        ));
+        assert_eq!(present(&w, 8), 8, "noeviction must not take a key");
+        assert_eq!(metrics.counter_value(EvictionKeysTotal::NAME), None);
+        assert_eq!(metrics.counter_value(EvictionOomTotal::NAME), Some(1));
+    }
+
+    /// Asking the memory question must not answer it: the script-admission
+    /// probe reports the same OOM state without counting a refusal, so an EVAL
+    /// storm cannot inflate `frogdb_eviction_oom_total`.
+    // FM-MEMORY-004
+    #[tokio::test]
+    async fn sampling_the_oom_state_does_not_count_a_refusal() {
+        let metrics = Arc::new(RecordingRecorder::default());
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut w = worker_with_metrics(bc as SharedBroadcaster, metrics.clone());
+
+        fill(&mut w, 8);
+        squeeze(&mut w, EvictionPolicy::NoEviction);
+
+        assert!(w.sample_oom_state().await, "the shard is over its limit");
+        assert_eq!(
+            metrics.counter_value(EvictionOomTotal::NAME),
+            None,
+            "a sample is not a refusal"
+        );
+
+        assert!(w.check_memory_for_write().await.is_err());
+        assert_eq!(
+            metrics.counter_value(EvictionOomTotal::NAME),
+            Some(1),
+            "the real refusal is the one that counts"
+        );
+    }
+
+    /// Confinement, at the driver: a `volatile-*` policy against a keyspace of
+    /// persistent keys frees nothing and refuses the write, rather than
+    /// reaching outside its candidate set.
+    // FM-MEMORY-005
+    #[tokio::test]
+    async fn a_volatile_policy_never_evicts_a_persistent_key() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut w = worker(bc as SharedBroadcaster);
+
+        fill(&mut w, 8);
+        squeeze(&mut w, EvictionPolicy::VolatileLru);
+
+        assert!(matches!(
+            w.check_memory_for_write().await,
+            Err(CommandError::OutOfMemory)
+        ));
+        assert_eq!(
+            present(&w, 8),
+            8,
+            "a persistent key is outside volatile-lru's candidate set"
+        );
+    }
+
+    /// A shard that cannot free anything stays a working shard: writes are
+    /// refused in bounded time, reads keep being answered, and repeating the
+    /// attempt changes neither.
+    // FM-MEMORY-007
+    #[tokio::test]
+    async fn an_unevictable_keyspace_refuses_writes_and_still_serves_reads() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut w = worker(bc as SharedBroadcaster);
+
+        fill(&mut w, 8);
+        squeeze(&mut w, EvictionPolicy::VolatileLru);
+
+        for _ in 0..5 {
+            assert!(matches!(
+                w.check_memory_for_write().await,
+                Err(CommandError::OutOfMemory)
+            ));
+        }
+        assert_eq!(present(&w, 8), 8, "reads are still served from every key");
+    }
+
+    /// Every eviction is counted, in keys and in the bytes the key actually
+    /// held — the freed figure comes from the entry's own accounting, read
+    /// before the removal.
+    // FM-MEMORY-006
+    #[tokio::test]
+    async fn an_eviction_counts_the_keys_and_the_bytes_it_freed() {
+        let metrics = Arc::new(RecordingRecorder::default());
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut w = worker_with_metrics(bc as SharedBroadcaster, metrics.clone());
+
+        w.store.set(
+            Bytes::from_static(b"k"),
+            Value::string("a value with some heft to it"),
+        );
+        let charged = w.store.get_metadata(b"k").unwrap().memory_size as u64;
+        assert!(charged > 0, "the entry must be accounted for");
+
+        assert!(w.delete_for_eviction(b"k").await);
+
+        assert_eq!(metrics.counter_value(EvictionKeysTotal::NAME), Some(1));
+        assert_eq!(
+            metrics.counter_value(EvictionBytesTotal::NAME),
+            Some(charged),
+            "the bytes counted must be the bytes the key held"
+        );
     }
 }

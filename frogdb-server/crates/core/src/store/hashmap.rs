@@ -1609,6 +1609,23 @@ impl Store for HashMapStore {
         self.expiry_index.sample(count)
     }
 
+    fn eviction_candidates(&mut self, count: usize, volatile_only: bool) -> Option<Vec<Bytes>> {
+        // A coarse tick, off the clock seam so it is the simulation's clock
+        // under turmoil. Only equality matters to the backend — it separates
+        // "already reconsidered in this pass" from "not yet" — so wrapping
+        // every ~18 hours costs a segment one deferred second chance.
+        let epoch = crate::clock::system_now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_secs() as u16);
+        self.data.cold_candidates(count, epoch, |entry| {
+            // Warm entries are already spilled, so evicting one frees nothing.
+            // A `volatile-*` policy additionally takes only TTL'd keys, applied
+            // per entry rather than per segment: a segment mixing TTL'd and
+            // persistent keys yields the TTL'd ones and keeps the rest.
+            entry.is_hot() && (!volatile_only || entry.metadata.expires_at.is_some())
+        })
+    }
+
     fn get_metadata(&self, key: &[u8]) -> Option<KeyMetadata> {
         self.data.get(key).map(|e| e.metadata.clone())
     }

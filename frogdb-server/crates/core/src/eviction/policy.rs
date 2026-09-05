@@ -86,6 +86,27 @@ impl EvictionPolicy {
         matches!(self, EvictionPolicy::VolatileTtl)
     }
 
+    /// Where this policy's victims come from.
+    ///
+    /// The recency and frequency policies ask the keyspace for its own cold
+    /// ordering first; the random ones would gain nothing from it (a cold
+    /// ordering is precisely what `*-random` promises not to use), and
+    /// `volatile-ttl` orders by remaining TTL, which is a property of the key
+    /// rather than of how recently it was touched. Those three stay on the
+    /// sampling loop under every backend.
+    ///
+    /// A keyspace with no cold ordering answers
+    /// [`Store::eviction_candidates`](crate::store::Store::eviction_candidates)
+    /// with `None` and the sampling loop runs anyway, so this is a preference,
+    /// not a requirement.
+    pub fn candidate_source(&self) -> CandidateSource {
+        if self.uses_lru() || self.uses_lfu() {
+            CandidateSource::Cold
+        } else {
+            CandidateSource::Sampled
+        }
+    }
+
     /// Get the Redis-compatible name for this policy.
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -117,6 +138,18 @@ impl EvictionPolicy {
             "tiered-lfu",
         ]
     }
+}
+
+/// Where a policy's eviction victims are drawn from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CandidateSource {
+    /// The keyspace's own coldest-first ordering, when it has one. On the
+    /// segmented table that is 2Q over segments; on a keyspace without one the
+    /// store declines and [`CandidateSource::Sampled`] runs instead.
+    Cold,
+    /// Redis's sampled loop: draw `maxmemory-samples` keys at random and rank
+    /// them by the policy's own ranker.
+    Sampled,
 }
 
 impl fmt::Display for EvictionPolicy {
@@ -195,6 +228,42 @@ mod tests {
         assert!(!EvictionPolicy::AllkeysLru.is_tiered());
         assert!(EvictionPolicy::TieredLru.is_tiered());
         assert!(EvictionPolicy::TieredLfu.is_tiered());
+    }
+
+    /// Only the policies that order by *temperature* ask the keyspace for a
+    /// cold ordering. `*-random` promises not to use one, and `volatile-ttl`
+    /// orders by a property of the key rather than of its use, so both stay on
+    /// the sampling loop under every backend.
+    // FM-MEMORY-005
+    #[test]
+    fn only_recency_and_frequency_policies_ask_for_a_cold_ordering() {
+        for policy in [
+            EvictionPolicy::VolatileLru,
+            EvictionPolicy::AllkeysLru,
+            EvictionPolicy::TieredLru,
+            EvictionPolicy::VolatileLfu,
+            EvictionPolicy::AllkeysLfu,
+            EvictionPolicy::TieredLfu,
+        ] {
+            assert_eq!(
+                policy.candidate_source(),
+                CandidateSource::Cold,
+                "{policy} ranks by temperature, so it must prefer a cold ordering"
+            );
+        }
+
+        for policy in [
+            EvictionPolicy::NoEviction,
+            EvictionPolicy::VolatileRandom,
+            EvictionPolicy::AllkeysRandom,
+            EvictionPolicy::VolatileTtl,
+        ] {
+            assert_eq!(
+                policy.candidate_source(),
+                CandidateSource::Sampled,
+                "{policy} must not be served from a coldest-first ordering"
+            );
+        }
     }
 
     #[test]

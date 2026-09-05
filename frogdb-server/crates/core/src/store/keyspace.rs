@@ -135,6 +135,33 @@ pub(super) trait Keyspace {
     /// is Redis's: a key present for the whole walk is returned at least once.
     fn scan(&self, cursor: u64, count: usize, visit: impl FnMut(KeyRef<'_>, &Entry) -> bool)
     -> u64;
+
+    /// Nominates up to `want` keys the backend considers coldest, taking only
+    /// entries `accept` passes — or `None` when the backend has no cold
+    /// ordering and the store should fall back to sampling.
+    ///
+    /// The split of responsibility is deliberate. The backend owns *which
+    /// entries are coldest*, which is a property of how it stores them; the
+    /// store owns *which entries the policy may take*, which is a property of
+    /// `maxmemory-policy` and of the entry's own metadata. Neither knows the
+    /// other's half, so `volatile-*` confinement is a closure rather than a
+    /// flag threaded through the container.
+    ///
+    /// Nominating is not removing: the caller deletes what it is handed,
+    /// because a deletion here is also a keyspace notification, an eviction
+    /// metric, a WAL tombstone and a replicated `DEL`. `Some(vec![])` means the
+    /// backend has a cold ordering and nothing in it the policy may take —
+    /// which is an OOM verdict, not a cue to ask again.
+    ///
+    /// `epoch` is a coarse tick from the clock seam. Backends that age their
+    /// ordering use it; ones that do not ignore it. It is a parameter rather
+    /// than a clock read so the container never has a clock of its own.
+    fn cold_candidates(
+        &mut self,
+        want: usize,
+        epoch: u16,
+        accept: impl Fn(&Entry) -> bool,
+    ) -> Option<Vec<Bytes>>;
 }
 
 // Each backend is compiled only when it is the selected one: the unselected
