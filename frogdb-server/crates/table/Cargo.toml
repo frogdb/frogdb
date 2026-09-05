@@ -6,6 +6,10 @@ license.workspace = true
 publish = false
 description = "Segmented extendible-hash keyspace table — tagged 8-byte slot words, Dashtable-shaped segments, split-stable SCAN cursors"
 
+# Bench targets are declared below rather than auto-detected: `benches/workload.rs`
+# is a module the two benches share, not a bench of its own.
+autobenches = false
+
 # Deliberately narrow: the table is a data structure, not a subsystem. It knows
 # about hashing and allocation and nothing else, so it can be miri-tested and
 # fuzzed without a runtime. Memory accounting is *reported* (`structural_bytes`)
@@ -18,3 +22,11 @@ rand.workspace = true
 criterion.workspace = true
 griddle.workspace = true
 rand.workspace = true
+
+[[bench]]
+name = "lookup"
+harness = false
+
+[[bench]]
+name = "split"
+harness = false
