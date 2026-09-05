@@ -150,4 +150,4 @@ crate (not path-checked, CI-neutral).
 generator/docs jobs green but Lint, Unit Tests, Quint, Turmoil and Shuttle still failing in the
 mise step under the pinned `2026.8.16`. The pin's premise was wrong — the `cargo:` backend
 check dates from mise `2026.8.11` and was masked by `jdx/mise-action` cache hits. Follow-up:
-[03](../open/03-ci-mise-cargo-backend-rust-dependency.md).
+[03](03-ci-mise-cargo-backend-rust-dependency.md).

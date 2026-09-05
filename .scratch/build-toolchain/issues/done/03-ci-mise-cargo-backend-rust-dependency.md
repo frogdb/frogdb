@@ -1,6 +1,6 @@
 # 03 — CI mise step still red: `cargo:` backend demands a mise-managed `rust`; the 2026.8.16 pin from 02 does not help
 
-Status: ready-for-agent
+Status: done
 
 ## Summary
 
@@ -104,3 +104,11 @@ run `mise install`, which installs `rust` first.
 ## Blocked by
 
 None. Supersedes the mise-pin half of 02; the rest of 02 stands.
+
+## Resolution
+
+Landed on `build-toolchain/impl` at merge `1b928e9fa` (2026-09-04), one commit `43c86f60e`:
+`mise_setup_step()` emits `env: MISE_DISABLE_TOOLS: rust` on every generated mise step and
+drops `MISE_VERSION`/`version:`; the hand-written testbox workflow matches; 15 workflows
+regenerated. Review clean (0 findings). Gate green on the merged branch. The Lint job itself
+is proven only by a CI run of the branch — see the PR.
