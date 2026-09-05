@@ -23,10 +23,10 @@ temp dir. Several files here are load-bearing — `scripts/coverage-depth.py` wr
 | [hardening](hardening/) | active | 2 | 37 | foundation-hardening campaign, **exited 2026-08-05** — all four areas locked; specs remain the contract |
 | [naming-cleanup](naming-cleanup/) | active | 1 | 4 | canonical terminology; decisions now canon in `CONTEXT.md` files |
 | [testing-improvements](testing-improvements/) | archive-of-record | 1 | 18 | round-1 testing-gap audit. **Do not delete** — live write target + inbound refs |
-| [build-toolchain](build-toolchain/) | active | 3 | 4 | build/CI-toolchain/release-path defects, where dev builds stay green but a shipping or gating path is broken; opened 2026-09-02 with `just cross-build` failing on usearch under zig; 02 filed 2026-09-04 for `main` CI red on seven jobs, landed same day on `build-toolchain/impl`; 03 filed 2026-09-04 when that branch's CI run showed the mise pin from 02 ineffective, landed same day; 04–07 filed 2026-09-04 from the first full CI run after 03 (npm-backend node dependency, h2 advisory, 15 s nextest timeouts, config golden counts on Linux); 01 landed 2026-09-04 (target-scoped CXXFLAGS + `AR="zig ar"` for autoconf jemalloc); 04 landed 2026-09-04 (`node` ahead of the `npm:` quint tool) |
+| [build-toolchain](build-toolchain/) | active | 2 | 5 | build/CI-toolchain/release-path defects, where dev builds stay green but a shipping or gating path is broken; opened 2026-09-02 with `just cross-build` failing on usearch under zig; 02 filed 2026-09-04 for `main` CI red on seven jobs, landed same day on `build-toolchain/impl`; 03 filed 2026-09-04 when that branch's CI run showed the mise pin from 02 ineffective, landed same day; 04–07 filed 2026-09-04 from the first full CI run after 03 (npm-backend node dependency, h2 advisory, 15 s nextest timeouts, config golden counts on Linux); 01 landed 2026-09-04 (target-scoped CXXFLAGS + `AR="zig ar"` for autoconf jemalloc); 04 landed 2026-09-04 (`node` ahead of the `npm:` quint tool); 05 landed 2026-09-04 (h2 0.4.19, RUSTSEC-2026-0258) |
 | [roadmap](roadmap/) | active | — | — | roadmap + unfinished/follow-up items (migrated from the retired `todo/`); not an issue tracker |
 
-Totals: **111 open, 118 done**. `done/` holds only closed issues still referenced from
+Totals: **110 open, 119 done**. `done/` holds only closed issues still referenced from
 tracked files; unreferenced closed issues are pruned — git history is the archive.
 
 ## Conventions

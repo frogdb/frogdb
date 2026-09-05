@@ -1,6 +1,6 @@
 # 05 — CI: `cargo deny` fails on RUSTSEC-2026-0258 (h2 0.4.13, unbounded empty DATA frames)
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Size: XS
 Origin: Test run on `build-toolchain/impl` @ c66fc0fb5 (https://github.com/nathanjordan/frogdb/actions/runs/33937564779), first run where the Lint job got past mise
@@ -60,3 +60,14 @@ None.
 ## Decisions
 
 None — routine dependency bump.
+
+## Resolution
+
+Landed on `build-toolchain/impl` at merge `8ae16cf63` (2026-09-04). One commit, `75faab1ab`:
+`h2` 0.4.13 → 0.4.19 in both `Cargo.lock` and `frogdb-operator/Cargo.lock` — the only crate whose
+version changed. Root lock also carries edge-only `windows-sys` repoints (all versions already
+present). Operator lock additionally caught up to path-dependency manifests it was stale against
+(`frogdb-memory`, `tikv-jemalloc-ctl`, `paste`, `hashbrown 0.16.1` edges — all already declared
+in the crate manifests at the base commit; review verified). No `Cargo.toml` or `deny.toml`
+change. `just deny` green (advisories/bans/licenses/sources), `just check` green, operator
+`cargo check` green.
