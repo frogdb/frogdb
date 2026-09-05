@@ -1,8 +1,8 @@
-# 26: slot-handoff drain/prepare budget derived from the heartbeat interval, not a fixed 50 ms
+# 35: slot-handoff drain/prepare budget derived from the heartbeat interval, not a fixed 50 ms
 
 Status: needs-triage
 Type: AFK
-Origin: issue 24 investigation + build-toolchain D5, 2026-09-04
+Origin: issue 33 investigation + build-toolchain D5, 2026-09-04
 Area: frogdb-cluster (LOCKED, gate 0.80) + frogdb-server `slot_migration` finalizer; `specs/cluster.md`
 Phase: 5 — regression fix
 Size: M
@@ -10,7 +10,7 @@ Size: M
 ## Parent
 
 `.scratch/build-toolchain/PRD.md` (D2, D5); investigation record in
-[issue 24](../done/24-cluster-tests-regressed-after-output-buffer-series.md).
+[issue 33](../done/33-cluster-tests-regressed-after-output-buffer-series.md).
 
 ## Why
 
@@ -20,7 +20,7 @@ its own prepare to become visible and for the source's drain confirmation with a
 `HANDOFF_POLL_INTERVAL_MS = 2`. That constant was sized against a quiet-machine residual, not
 against Raft round-trip latency. Under nextest's `cluster` group (`max-threads = 2`) a debug
 Raft round trip routinely exceeds 50 ms, so a *slow but live* source is treated like a wedged
-one: `TRYAGAIN … source did not drain in 50ms`, then `SETSLOT NODE failed`. Issue 24 bisected
+one: `TRYAGAIN … source did not drain in 50ms`, then `SETSLOT NODE failed`. Issue 33 bisected
 the tipping point to `e67002d6f` and showed the cost is cumulative — no revert fixes it.
 
 ## Decision (D5)
@@ -69,7 +69,7 @@ must also cover prepare RTT + shard drain + confirm RTT + complete RTT. The deri
 recovers the tail whose total fits inside the barrier; a tail that does not will move from
 the `did not drain` arm to the `handoff barrier window elapsed` arm. If after the change the
 diagnostic run below still fails on that third arm, report the counts per arm — raising the
-barrier is a new ruling (issue 24 "open rulings"; both CockroachDB and FoundationDB derive
+barrier is a new ruling (issue 33 "open rulings"; both CockroachDB and FoundationDB derive
 the window too), not something to do here.
 
 ## Acceptance criteria
@@ -95,7 +95,7 @@ the window too), not something to do here.
 ## Blocked by
 
 [23](23-replica-feed-networkoutput-accounting.md) — no file overlap; sequenced after it so the
-cluster suite's green is attributable to one change. Issue 25 stays separate.
+cluster suite's green is attributable to one change. Issue 34 stays separate.
 
 ## Decisions
 

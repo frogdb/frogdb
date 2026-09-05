@@ -13,7 +13,7 @@ use tracing::{info, warn};
 
 use crate::cluster::failure_detector::FailureDetector;
 use crate::config::{Config, JsonConfigExt};
-use crate::net::{ShardHandle, ShardPlacement};
+use crate::net::{ShardHandle, ShardPlacement, shard_body};
 use crate::runtime_config::ConfigManager;
 use frogdb_telemetry::ShardArenaRegistry;
 
@@ -355,11 +355,17 @@ pub(super) fn spawn_shard_workers(ctx: ShardSpawnContext) -> anyhow::Result<Spaw
         // that has arenas and refused this shard one: the shard's broker would
         // then take its `maxmemory` verdicts with nothing measuring the core
         // (`frogdb_net::RealShardExecutor::launch`).
+        // The body is *built* on the shard's own thread (`ShardBody`), so the
+        // worker only has to be `Send` — it is moved to that thread — and not
+        // `Sync`, which constructing the future here would have required of
+        // every piece of shard-local state it borrows across an await.
         let handle = executor.launch(
             shard_id,
-            Box::pin(monitor.instrument(async move {
-                worker.run().await;
-            })),
+            shard_body(move || {
+                monitor.instrument(async move {
+                    worker.run().await;
+                })
+            }),
         )?;
 
         shard_handles.push((shard_id, handle));

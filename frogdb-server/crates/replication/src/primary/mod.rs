@@ -28,6 +28,7 @@ use tokio::sync::broadcast;
 
 use crate::BoxedStream;
 use crate::ReplicationBroadcaster;
+use crate::feed_account::SharedFeedAccount;
 use crate::feed_gate::ReplicaFeedGate;
 use crate::frame::{CONTROL_SHARD, ReplconfCodec, ReplicationFrame, serialize_command_to_resp};
 use crate::fullsync::ShardCoverage;
@@ -751,6 +752,14 @@ impl PrimaryReplicationHandler {
     /// placeholder identity (FM-REPLICATION-049). Its `version` is also the
     /// input to the compatibility gate below, which is the one consumer that
     /// can refuse this handshake outright (FM-REPLICATION-064).
+    ///
+    /// `feed` is what accounts for the bytes this session holds for the replica
+    /// (FM-REPLICATION-069). It comes from the caller because it is the
+    /// *connection's* account, carried across the `PSYNC` handoff rather than
+    /// opened here: the charge and the `client-output-buffer-limit` class that
+    /// governed the replica while it was still a client keep governing it once
+    /// it is a feed, with no instant in between in which its bytes are charged
+    /// to nothing.
     pub async fn handle_psync(
         self: &Arc<Self>,
         mut stream: BoxedStream,
@@ -758,6 +767,7 @@ impl PrimaryReplicationHandler {
         replication_id: &str,
         offset: i64,
         announcement: ReplicaAnnouncement,
+        feed: SharedFeedAccount,
     ) -> io::Result<()> {
         // Refuse once the shutdown drain has started: a session opened now
         // would stream past the drain that was meant to end them all.
@@ -881,7 +891,7 @@ impl PrimaryReplicationHandler {
                 }
             }
         };
-        session.run(stream, sync_kind, self.clone()).await
+        session.run(stream, sync_kind, self.clone(), feed).await
     }
 
     pub fn broadcast_frame(&self, frame: ReplicationFrame) {

@@ -312,6 +312,17 @@ test-browser:
 bench:
     {{dyld-env}} {{rocksdb-env}} cargo bench -p frogdb-benches
 
+# Keyspace table vs the incumbent griddle::HashMap on lookup, at hasher parity.
+# The measurement the segmented-table swap decision turns on; read it on a
+# testbox, not a laptop — a macOS run is an upper bound on the ratio.
+bench-table *args:
+    cargo bench -p frogdb-table --bench lookup -- {{args}}
+
+# Split-stall distribution over one 1 M-key fill: the p50 that has to beat the
+# spike's 44 375 ns, plus the scanned/moved/rehashed counters behind it.
+bench-table-split:
+    cargo bench -p frogdb-table --bench split
+
 # =============================================================================
 # Locked core areas (see CLAUDE.md "Locked core areas")
 # =============================================================================

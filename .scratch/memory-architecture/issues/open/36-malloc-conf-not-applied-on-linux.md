@@ -1,4 +1,4 @@
-# 27: `_rjem_malloc_conf` is not applied on Linux CI, and the ALL_ARENAS decay sentinel is accepted there
+# 36: `_rjem_malloc_conf` is not applied on Linux CI, and the ALL_ARENAS decay sentinel is accepted there
 
 Status: needs-triage
 Type: AFK
@@ -65,4 +65,4 @@ differences between the two platforms' builds.
 
 ## Depends on
 
-Nothing. Independent of 25 and 26.
+Nothing. Independent of 34 and 35.

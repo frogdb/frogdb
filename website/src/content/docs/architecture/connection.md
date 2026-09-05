@@ -145,9 +145,15 @@ Client stops reading responses
 
 The effect is self-limiting: a stuck client cannot force unbounded buffering, but
 it can add latency for other connections whose work routes through the same shard.
-FrogDB does **not** implement per-client `client-output-buffer-limit` thresholds.
-Memory pressure from clients is instead handled by `maxmemory-clients` client
-eviction (a separate mechanism; a connection can opt out with `CLIENT NO-EVICT`).
+
+On top of that, FrogDB enforces per-client `client-output-buffer-limit` thresholds
+over the `normal`, `replica` and `pubsub` classes: the bytes a connection has
+buffered are charged to the `NetworkOutput` memory budget, reported as `omem` in
+`CLIENT LIST`, and judged against its class's hard limit and soft window. For a
+replica the account crosses the `PSYNC` handoff with the socket, so the `replica`
+triple also bounds what the primary stages for that replica afterwards. Client
+memory pressure is additionally handled by `maxmemory-clients` client eviction (a
+separate mechanism; a connection can opt out with `CLIENT NO-EVICT`).
 
 ---
 

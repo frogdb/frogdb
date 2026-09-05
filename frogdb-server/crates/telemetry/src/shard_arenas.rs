@@ -472,6 +472,7 @@ fn shard_arena_of_current_thread(registry: &ShardArenaRegistry) -> Option<u32> {
 mod tests {
     use super::*;
 
+    // FM-MEMORY-008
     #[test]
     fn an_empty_registry_reports_nothing_rather_than_zero() {
         let registry = ShardArenaRegistry::empty();
@@ -483,6 +484,7 @@ mod tests {
         assert_eq!(registry.total_allocated_upper_bound_bytes(), 0);
     }
 
+    // FM-MEMORY-008
     #[test]
     fn a_shard_without_an_arena_is_absent_not_zero() {
         // Shard 1 has no arena (a sim shard, or a build with no arenas): it is
@@ -495,6 +497,7 @@ mod tests {
         assert!(registry.sample(1).is_none());
     }
 
+    // FM-MEMORY-008
     #[test]
     fn an_unsampled_slot_says_so_instead_of_reporting_an_empty_shard() {
         let registry = ShardArenaRegistry::new([(0, 7)]);
@@ -548,6 +551,7 @@ mod tests {
     /// `hz × arenas × epoch-cost`, so the rate has to come down as the arena
     /// count goes up. Mocked arena counts — no allocator involved, this is
     /// arithmetic.
+    // FM-MEMORY-008
     #[test]
     fn the_sample_rate_is_budgeted_against_the_arena_count() {
         // Small servers are unaffected: the configured rate fits underneath.
@@ -620,6 +624,7 @@ mod tests {
 
     /// A registry bigger than the cap refreshes in strides, and a full sweep of
     /// ticks leaves every slot sampled.
+    // FM-MEMORY-008
     #[test]
     #[cfg(not(target_env = "msvc"))]
     fn a_strided_sweep_eventually_samples_every_shard() {
@@ -646,6 +651,7 @@ mod tests {
     /// The sampler on a utility thread is the normal case, and it must not
     /// trip the guard — the release-build counter stays at zero and the debug
     /// assertion does not fire.
+    // FM-MEMORY-008
     #[test]
     #[cfg(not(target_env = "msvc"))]
     fn the_guard_passes_on_a_thread_that_is_not_a_shard() {
@@ -668,6 +674,7 @@ mod tests {
 
     /// And the guard actually catches the condition it exists for: a thread
     /// bound to a shard's arena *is* that shard's thread.
+    // FM-MEMORY-008
     #[test]
     #[cfg(not(target_env = "msvc"))]
     fn the_guard_catches_a_tick_running_on_a_shard_thread() {
@@ -706,6 +713,7 @@ mod tests {
         .expect("shard-shaped thread");
     }
 
+    // FM-MEMORY-008
     #[tokio::test]
     async fn the_sampler_declines_to_run_when_there_is_nothing_to_sample() {
         let registry = Arc::new(ShardArenaRegistry::empty());
@@ -724,6 +732,7 @@ mod tests {
     /// End to end on a real thread: a shard-shaped thread binds its arena, keeps
     /// a known volume live, and the sampler's tick makes that volume visible
     /// through the registry. This is the shape `frogdb-server` wires.
+    // FM-MEMORY-008
     #[tokio::test(flavor = "multi_thread")]
     #[cfg(not(target_env = "msvc"))]
     async fn the_sampler_makes_a_bound_threads_bytes_visible_per_shard() {
@@ -790,6 +799,7 @@ mod tests {
     /// Real threads, not turmoil: under simulation every shard allocates from
     /// one thread's arena and this invariant is vacuously true — which is why
     /// [`specs/memory.md`] forbids forcing it from a simulated test.
+    // FM-MEMORY-008
     #[test]
     #[cfg(not(target_env = "msvc"))]
     fn each_arena_reports_its_own_shards_bytes_and_no_others() {
@@ -877,6 +887,7 @@ mod tests {
     /// `INFO memory` has always called — is a different function and is
     /// deliberately out of scope: this issue changed neither its behavior nor
     /// its callers.
+    // FM-MEMORY-008
     #[test]
     fn arena_sampling_is_not_on_a_command_path() {
         let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -1,6 +1,6 @@
 # 19: zero-copy parse path
 
-Status: ready-for-human
+Status: done
 Type: AFK
 Origin: memory-architecture PRD phase filing, 2026-09-01 — [PRD.md](../../PRD.md) R12
 Area: frogdb-protocol (command.rs) + frogdb-server (connection/, dispatch)
@@ -106,16 +106,8 @@ COPY'd sibling", so a `debug_assert` would misfire on legitimately shared values
 forcing test is `install_detaches_args_that_alias_a_shared_read_buffer`; adding a
 variant does not compile until its arm — and therefore its copy/detach story — is written.
 
-Remaining — needs the Linux rig and a human decision, hence ready-for-human:
-
-- [ ] **Fan-out width cap** (~4 concurrent foreign-core waves, config-capped, with the
-      spike's ~6 µs/core and 11× p99.9 provenance in the doc comment). Touches the LOCKED
-      vll/txn dispatch path (gate 0.90) and needs an atomicity ruling: bounded-width waves
-      change when a wide command's locks are requested, which interacts with wound-retry
-      fairness. Spec-first work.
-- [ ] Bench vs [issue 04](../) baselines: large-value SET/GET throughput improves or
-      holds; cross-thread p99.9 at 512 clients does not regress. Needs the issue-04 Linux
-      rig; this session ran in local (macOS) mode.
+Not landed — the fan-out width cap and the Linux bench are carried verbatim in
+[issue 32](../open/32-fan-out-width-cap-and-linux-bench.md) (ready-for-human).
 
 ## Test boundary
 
@@ -138,3 +130,14 @@ RESP protocol changes.
 [Issue 18](../) — hard: the pool lease with
 refcount handoff is the foundation. [Issue 02](../) pinning (done) — per-core pools
 assume it.
+
+## Resolution
+
+Closed 2026-09-05 at campaign close (whole-branch review finding 4). Everything in
+"What to build" §1, §2 and §4 landed as `FM-MEMORY-003` in `specs/memory.md` with its 17
+forcing tests, all present at head and named above; the spec is LOCKED since issue 22 and
+the row's bug ref now points here. §3's hop batching landed
+(`a_scatter_over_k_shards_sends_exactly_k_lock_messages`); §3's width cap and the bench
+against the issue-04 baselines need the Linux rig and an atomicity ruling on the locked
+vll/txn dispatch path, so they moved to [issue 32](../open/32-fan-out-width-cap-and-linux-bench.md)
+rather than hold this issue open.

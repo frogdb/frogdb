@@ -65,14 +65,36 @@ use std::pin::Pin;
 
 // ---------------------------------------------------------- shard placement ---
 
-/// The body of one shard worker, type-erased so [`ShardExecutor`] can be an
-/// object.
+/// How to *build* one shard worker's future, type-erased so [`ShardExecutor`]
+/// can be an object.
 ///
-/// This is exactly what the server hands to [`spawn`] today (the instrumented
-/// `worker.run()` future), boxed. It is `Send + 'static` because the future has
-/// to be movable to whatever the executor decides to run it on — today the
-/// ambient runtime, and (issue 02) a dedicated shard thread.
-pub type ShardBody = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+/// A constructor, not a future: `Send` is required of the closure — which
+/// crosses to the shard's thread — and deliberately **not** of the future it
+/// returns, because the future is built on the shard's own thread and is polled
+/// only there. A shard's state is thread-local by construction (ADR-0006 §1
+/// thread-per-core), so a body that holds `&State` across an await would
+/// otherwise force `State: Sync` for a sharing that never happens. Constructing
+/// the future on the supervisor thread was what imposed that bound; building it
+/// where it runs removes it.
+///
+/// Build one with [`shard_body`] rather than by hand.
+pub type ShardBody = Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = ()>>> + Send + 'static>;
+
+/// Wrap an async block as a [`ShardBody`].
+///
+/// Takes the *closure* that produces the shard's future, so the future itself is
+/// created on the thread that will poll it:
+///
+/// ```ignore
+/// executor.launch(shard_id, shard_body(move || async move { worker.run().await }))?;
+/// ```
+pub fn shard_body<F, Fut>(build: F) -> ShardBody
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: Future<Output = ()> + 'static,
+{
+    Box::new(move || Box::pin(build()))
+}
 
 /// A launched shard's handle: what the supervisor joins (and, on failure,
 /// classifies) to notice a dead shard.
@@ -105,7 +127,12 @@ pub type ShardHandle = JoinHandle<()>;
 /// In this issue both implementations do the same thing — `spawn` on the
 /// ambient runtime — because the seam lands as a no-op over today's behavior.
 pub trait ShardExecutor: Send {
-    /// Launch shard `shard_id` running `worker`, and return its handle.
+    /// Launch shard `shard_id` running the body `worker` builds, and return its
+    /// handle.
+    ///
+    /// `worker` is a *constructor*, not a built future, so that the future it
+    /// returns need not be `Send`: it is built on the thread that will poll it.
+    /// See [`ShardBody`].
     ///
     /// Fails only when the shard could not be given the arena its build
     /// promises it — see [`ShardLaunchError`] and [`RealShardExecutor::launch`].
@@ -569,8 +596,12 @@ impl ShardExecutor for RealShardExecutor {
                 // nothing. Catch it here and re-raise it in the bridging task
                 // below so the panic reaches `FailStopHandler` with its payload
                 // intact.
+                // `worker()` runs here, on the shard's thread: the future it
+                // builds is created and polled by the same thread and never
+                // crosses one, which is what lets a shard's state be `Send`
+                // without also being `Sync` ([`ShardBody`]).
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    runtime.block_on(worker);
+                    runtime.block_on(worker());
                 }));
                 let _ = done_tx.send(outcome.err());
             })
@@ -627,7 +658,7 @@ impl ShardExecutor for RealShardExecutor {
 
 /// Simulation shard placement.
 ///
-/// Shards run as tokio tasks on the *caller's* runtime — under turmoil that is
+/// Shards run as local tasks on the *caller's* runtime — under turmoil that is
 /// the single thread the sim host owns, so every shard stays scheduled by the
 /// simulation and keeps seeing simulated time. Arena binding is a no-op and
 /// [`ShardExecutor::arena_of`] reports no arena rather than a fake one.
@@ -649,12 +680,19 @@ impl SimShardExecutor {
 impl ShardExecutor for SimShardExecutor {
     /// Infallible: there is no arena to bind under simulation, so there is
     /// nothing here that can refuse.
+    ///
+    /// `spawn_local`, not `spawn`: a shard body is built and polled on one
+    /// thread and is not required to be `Send` ([`ShardBody`]). The sim host is
+    /// that one thread — turmoil drives its host software inside a
+    /// [`tokio::task::LocalSet`] — so the shard keeps being scheduled by the
+    /// simulation exactly as before. A caller outside a `LocalSet` (a plain
+    /// `#[tokio::test]`) must wrap the body of the test in one.
     fn launch(
         &mut self,
         _shard_id: usize,
         worker: ShardBody,
     ) -> Result<ShardHandle, ShardLaunchError> {
-        Ok(tokio::spawn(worker))
+        Ok(tokio::task::spawn_local(worker()))
     }
 
     fn arena_of(&self, _shard_id: usize) -> Option<u32> {
@@ -795,7 +833,7 @@ mod shard_executor_tests {
             handles.push(
                 exec.launch(
                     shard_id,
-                    Box::pin(async move {
+                    shard_body(move || async move {
                         let _ = shard_id;
                     }),
                 )
@@ -814,15 +852,22 @@ mod shard_executor_tests {
     /// host thread cannot actually own (ADR-0006 §1).
     #[tokio::test]
     async fn sim_executor_reports_no_arena_for_any_shard() {
-        let mut exec = SimShardExecutor::new();
-        launch_all(&mut exec).await;
-        for shard_id in 0..SHARDS {
-            assert_eq!(
-                exec.arena_of(shard_id),
-                None,
-                "sim executor must never report an arena (shard {shard_id})"
-            );
-        }
+        // The sim executor spawns *local* tasks, because a shard body is not
+        // required to be `Send` (`ShardBody`). Under turmoil the `LocalSet` is
+        // the sim host's; a plain tokio test has to provide one.
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let mut exec = SimShardExecutor::new();
+                launch_all(&mut exec).await;
+                for shard_id in 0..SHARDS {
+                    assert_eq!(
+                        exec.arena_of(shard_id),
+                        None,
+                        "sim executor must never report an arena (shard {shard_id})"
+                    );
+                }
+            })
+            .await;
     }
 
     /// A [`ShardArenaSource`] that hands out arenas from a counter and records
@@ -946,7 +991,7 @@ mod shard_executor_tests {
         let handle = exec
             .launch(
                 0,
-                Box::pin(async move {
+                shard_body(move || async move {
                     let _ = tx.send(observer.binds().len());
                 }),
             )
@@ -989,7 +1034,7 @@ mod shard_executor_tests {
             let error = exec
                 .launch(
                     3,
-                    Box::pin(async move {
+                    shard_body(move || async move {
                         launched.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }),
                 )
@@ -1056,7 +1101,7 @@ mod shard_executor_tests {
         let mut handles = Vec::new();
         for shard_id in 0..SHARDS {
             handles.push(
-                exec.launch(shard_id, Box::pin(std::future::ready(())))
+                exec.launch(shard_id, shard_body(|| std::future::ready(())))
                     .expect("shard launch"),
             );
         }
@@ -1096,7 +1141,7 @@ mod shard_executor_tests {
             handles.push(
                 exec.launch(
                     shard_id,
-                    Box::pin(async move {
+                    shard_body(move || async move {
                         seen.lock().unwrap().push(std::thread::current().id());
                     }),
                 )
@@ -1131,7 +1176,7 @@ mod shard_executor_tests {
         let handle = exec
             .launch(
                 0,
-                Box::pin(async move {
+                shard_body(move || async move {
                     let _ = body_tx.send(std::thread::current().id());
                     let _ = stop_rx.await;
                 }),
@@ -1162,7 +1207,7 @@ mod shard_executor_tests {
     async fn a_panicking_shard_thread_surfaces_as_a_panicking_handle() {
         let mut exec = RealShardExecutor::new();
         let handle = exec
-            .launch(0, Box::pin(async { panic!("shard 0 boom") }))
+            .launch(0, shard_body(|| async { panic!("shard 0 boom") }))
             .expect("shard launch");
         let err = handle.await.expect_err("handle must report the panic");
         let payload = err.try_into_panic().expect("must be a panic, not a cancel");
@@ -1210,9 +1255,13 @@ mod shard_executor_tests {
     /// every shard. `ShardPlacement::is_pinned` is what the accept path logs.
     #[tokio::test]
     async fn placement_reflects_the_executor_that_produced_it() {
-        let mut sim = SimShardExecutor::new();
-        launch_all(&mut sim).await;
-        let sim_placement = ShardPlacement::collect(&sim, SHARDS);
+        let sim_placement = tokio::task::LocalSet::new()
+            .run_until(async {
+                let mut sim = SimShardExecutor::new();
+                launch_all(&mut sim).await;
+                ShardPlacement::collect(&sim, SHARDS)
+            })
+            .await;
         assert!(!sim_placement.is_pinned());
         assert!(sim_placement.runtime_for(0).is_none());
 
@@ -1220,7 +1269,7 @@ mod shard_executor_tests {
         let mut handles = Vec::new();
         for shard_id in 0..SHARDS {
             handles.push(
-                real.launch(shard_id, Box::pin(std::future::ready(())))
+                real.launch(shard_id, shard_body(|| std::future::ready(())))
                     .expect("shard launch"),
             );
         }

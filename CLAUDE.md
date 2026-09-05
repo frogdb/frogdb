@@ -195,11 +195,12 @@ Examples:
 
 ### Locked core areas
 
-Four core areas are **locked** behind failure-mode specs and mutation gates: **txn**
+Five core areas are **locked** behind failure-mode specs and mutation gates: **txn**
 (`frogdb-txn` + `frogdb-vll`, gate 0.90), **persistence** (`frogdb-persistence` +
 `frogdb-recovery`, 0.85), **replication** (`frogdb-replication` +
 `frogdb-replication-runtime`, 0.85), **cluster** (`frogdb-cluster` +
-`frogdb-cluster-runtime`, 0.80). Boundary ADRs: `adr/0002`–`0004`.
+`frogdb-cluster-runtime`, 0.80), **memory** (`frogdb-memory` + `frogdb-table`, 0.85).
+Boundary ADRs: `adr/0002`–`0004`, `adr/0006`.
 
 - The specs (`specs/<area>.md`, header `Status: LOCKED`)
   are the contract: behavior changes are **spec-first** (failure-mode row → failing test →

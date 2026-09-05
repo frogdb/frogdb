@@ -28,7 +28,7 @@ mod pool;
 mod ranker;
 
 pub use lfu::{lfu_decay, lfu_log_incr};
-pub use policy::EvictionPolicy;
+pub use policy::{CandidateSource, EvictionPolicy};
 pub use pool::{EvictionCandidate, EvictionPool};
 pub use ranker::{EvictionRanker, LfuRanker, LruRanker, RankKey, TtlRanker};
 

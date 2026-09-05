@@ -18,6 +18,7 @@
 //! ```
 
 mod hashmap;
+mod keyspace;
 mod timeseries_labels;
 mod typed;
 mod warm_tier;
@@ -729,6 +730,20 @@ pub trait Store: Send {
     fn sample_volatile_keys(&self, count: usize) -> Vec<Bytes> {
         let _ = count;
         vec![]
+    }
+
+    /// Nominate up to `count` eviction candidates from the keyspace's own cold
+    /// ordering, or `None` when it has none and the caller should sample.
+    ///
+    /// `Some(vec![])` is not the same answer: it means the keyspace *has* an
+    /// ordering and holds nothing this policy may take, which is the OOM
+    /// verdict rather than a reason to sample instead. Nominating does not
+    /// remove — the caller still deletes or spills each key through the one
+    /// path that emits the event, the metric, the WAL record and the
+    /// replicated `DEL`.
+    fn eviction_candidates(&mut self, count: usize, volatile_only: bool) -> Option<Vec<Bytes>> {
+        let _ = (count, volatile_only);
+        None
     }
 
     /// Get metadata for a key (for eviction decision making).

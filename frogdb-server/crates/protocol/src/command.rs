@@ -37,6 +37,13 @@ use crate::ProtocolError;
 /// those args are only ever borrowed (the slow log always copies what it
 /// logs; the hot-key sampler takes `&[u8]`), never moved into a retention
 /// point.
+///
+/// One conservative case: `Bytes::from_static` inputs are copied. `is_unique()`
+/// is false for the static vtable, so a `&'static [u8]` takes the copy arm even
+/// though it aliases nothing that can be reallocated. Only internally minted
+/// commands (synthetic `DEL`s, recovery replay, tests) carry static payloads, so
+/// this costs nothing on the connection path and is not worth a second
+/// discriminator.
 #[inline]
 pub fn detach_bytes(bytes: Bytes) -> Bytes {
     if bytes.is_unique() {

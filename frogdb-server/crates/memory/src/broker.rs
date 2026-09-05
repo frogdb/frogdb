@@ -409,6 +409,105 @@ mod tests {
         );
     }
 
+    /// Adopting files the pool under the *budget's own* subsystem and reports
+    /// it without minting a second pool: the adopted budget and the one the
+    /// broker hands back are the same allowance, so a charge taken through
+    /// either shows up once.
+    // FM-MEMORY-002
+    #[test]
+    fn adopting_reports_an_existing_pool_without_minting_a_second_one() {
+        let mut broker = MemoryBroker::detached(0);
+        let existing = Budget::new(Subsystem::Persistence, Disposition::Backpressure, 1_000);
+        let _held = existing.charge(250).unwrap();
+
+        assert!(!broker.is_open(Subsystem::Persistence), "not adopted yet");
+        broker.adopt(existing.clone());
+
+        assert!(broker.is_open(Subsystem::Persistence));
+        let row = broker.breakdown().get(Subsystem::Persistence).clone();
+        assert_eq!(
+            row.charged_bytes, 250,
+            "the adopted pool's charge is reported"
+        );
+        assert_eq!(row.limit_bytes, 1_000);
+        assert_eq!(row.disposition, Disposition::Backpressure);
+
+        // Same pool, not a copy: a charge taken through the broker's handle is
+        // visible on the budget the caller still holds.
+        let _more = broker.budget(Subsystem::Persistence).charge(100).unwrap();
+        assert_eq!(existing.charged(), 350);
+        assert_eq!(broker.total_charged_bytes(), 350);
+    }
+
+    /// The slot is chosen from the budget's own subsystem, never from the
+    /// caller's opinion, so an adopted pool cannot be filed under a breakdown
+    /// row that does not describe it.
+    // FM-MEMORY-002
+    #[test]
+    fn adopting_files_the_pool_under_the_budgets_own_subsystem() {
+        let mut broker = MemoryBroker::detached(0);
+        broker.adopt(Budget::new(
+            Subsystem::Persistence,
+            Disposition::Backpressure,
+            1_000,
+        ));
+
+        assert!(broker.is_open(Subsystem::Persistence));
+        for other in Subsystem::ALL {
+            if other != Subsystem::Persistence {
+                assert!(
+                    !broker.is_open(other),
+                    "adopting {other} would be filing the pool under the wrong row"
+                );
+            }
+        }
+    }
+
+    /// Refusals taken before adoption are history, not news: the delta counter
+    /// starts at the budget's own count so the first drain reports only what
+    /// happened while this broker was watching.
+    // FM-MEMORY-002
+    #[test]
+    fn adopting_does_not_replay_refusals_taken_before_the_broker_saw_the_pool() {
+        let mut broker = MemoryBroker::detached(0);
+        let existing = Budget::new(Subsystem::Persistence, Disposition::Backpressure, 10);
+        assert!(existing.charge(11).is_err());
+        assert!(existing.charge(11).is_err());
+
+        broker.adopt(existing.clone());
+        assert!(
+            broker.drain_refusals().is_empty(),
+            "two pre-adoption refusals are not this broker's to report"
+        );
+
+        assert!(existing.charge(11).is_err());
+        assert_eq!(broker.drain_refusals(), vec![(Subsystem::Persistence, 1)]);
+    }
+
+    /// `txn-buffer-limit`'s shipped size and its floor, which is what an
+    /// operator inherits when they configure nothing. Both numbers are the
+    /// contract of [txn.md FM-TXN-054] — the per-core 512 MiB default and the
+    /// floor a `CONFIG SET` is clamped to — so they are pinned here rather than
+    /// left to arithmetic nobody reads.
+    ///
+    /// [txn.md FM-TXN-054]: ../../../../specs/txn.md
+    // FM-TXN-054
+    #[test]
+    fn the_txn_buffer_defaults_are_the_documented_sizes() {
+        assert_eq!(defaults::TXN_BUFFER_BYTES, 536_870_912, "512 MiB");
+        assert_eq!(defaults::TXN_BUFFER_MIN_BYTES, 1_048_576, "1 MiB");
+        // The floor a limit is clamped to must sit below the default.
+        const { assert!(defaults::TXN_BUFFER_MIN_BYTES < defaults::TXN_BUFFER_BYTES) };
+    }
+
+    /// The client-tracking byte budget underneath Redis's key-count ceiling.
+    /// No spec row contracts it yet — nothing charges the budget — so this pins
+    /// the shipped size and nothing more.
+    #[test]
+    fn the_client_tracking_default_is_the_documented_size() {
+        assert_eq!(defaults::CLIENT_TRACKING_BYTES, 134_217_728, "128 MiB");
+    }
+
     /// The wiring path the server takes: a broker built with the stub (because
     /// the crate that builds it cannot name the arena registry) has the real
     /// reading installed before the shard runs.

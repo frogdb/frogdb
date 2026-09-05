@@ -29,6 +29,7 @@ frogdb-types = { path = "../../frogdb-server/crates/types" }
 frogdb-replication = { path = "../../frogdb-server/crates/replication" }
 frogdb-search = { path = "../../frogdb-server/crates/search" }
 frogdb-core = { path = "../../frogdb-server/crates/core" }
+frogdb-table = { path = "../../frogdb-server/crates/table" }
 # The dispatch/pipeline/restore fuzz targets build the production registry via
 # `register_all`; fuzzing the reduced core profile would leave whole families
 # unexercised, so they always take the full command surface.
@@ -211,4 +212,9 @@ doc = false
 [[bin]]
 name = "restore_payload"
 path = "fuzz_targets/restore_payload.rs"
+doc = false
+
+[[bin]]
+name = "table_ops"
+path = "fuzz_targets/table_ops.rs"
 doc = false

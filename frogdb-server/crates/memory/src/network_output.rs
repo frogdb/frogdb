@@ -92,6 +92,21 @@ mod tests {
         assert_eq!(b.charged(), 0);
     }
 
+    /// The per-core ceiling is not configurable, so this constant *is* the
+    /// contract — there is no config key an operator could read it back from.
+    // FM-MEMORY-002
+    #[test]
+    fn the_per_core_ceiling_is_the_documented_size() {
+        assert_eq!(NETWORK_OUTPUT_BYTES, 536_870_912, "512 MiB");
+        assert_eq!(
+            current().limit(),
+            NETWORK_OUTPUT_BYTES,
+            "the thread-local budget opens at the ceiling"
+        );
+        assert_eq!(current().disposition(), Disposition::Shed);
+        assert_eq!(current().subsystem(), Subsystem::NetworkOutput);
+    }
+
     // FM-MEMORY-002
     #[test]
     fn budgets_do_not_cross_cores() {

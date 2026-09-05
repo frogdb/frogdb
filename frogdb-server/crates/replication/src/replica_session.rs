@@ -46,6 +46,7 @@ use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::broadcast;
 
 use crate::BoxedStream;
+use crate::feed_account::{FeedVerdict, SharedFeedAccount, ShedGuardedStream};
 use crate::feed_sequencer::{FeedAction, FeedInput, FeedSequencer};
 use crate::frame::{ReplconfCodec, ReplicationFrame};
 use crate::fullsync::{
@@ -687,13 +688,24 @@ impl ReplicaSession {
     /// Regardless of where the sync exits — a `?` out of any effect, or a link
     /// that simply ended — the exit step runs: checkpoint cleanup, the departure
     /// record, registry removal, and the disconnect log.
+    ///
+    /// The account's out-of-band shed is armed over the socket before anything
+    /// else touches it (FM-REPLICATION-069). Doing it here, once, covers the
+    /// full sync and both halves of the stream `start_streaming` splits, and it
+    /// reaches a session parked inside a `write_all` on a replica that has
+    /// stopped reading — which no code path of this session's own ever would.
     pub async fn run(
         self: Arc<Self>,
         stream: BoxedStream,
         sync_kind: SyncKind,
         handler: Arc<PrimaryReplicationHandler>,
+        feed: SharedFeedAccount,
     ) -> io::Result<()> {
-        let mut driver = SessionDriver::new(self.clone(), stream, sync_kind, &handler);
+        let stream: BoxedStream = match feed.take_shed_signal() {
+            Some(shed) => Box::new(ShedGuardedStream::new(stream, shed)),
+            None => stream,
+        };
+        let mut driver = SessionDriver::new(self.clone(), stream, sync_kind, &handler, feed);
         let result = driver.drive().await;
 
         // The exit step reads the phase the sync left off on — sampled by the
@@ -955,6 +967,7 @@ impl ReplicaSession {
         handler: &Arc<PrimaryReplicationHandler>,
         replay_from: u64,
         resume: ResumeSource,
+        feed: SharedFeedAccount,
     ) -> io::Result<ReplicaDeparture> {
         // `Phase::Streaming` is already published and the previous generation's
         // departure already cleared — both are steps of the transition that got
@@ -1021,9 +1034,23 @@ impl ReplicaSession {
         if resume == ResumeSource::PartialGrant {
             handler.tracker.record_sync_outcome(SyncOutcome::PartialOk);
         }
+        // The tail is now materialized in this primary's memory, in full, and
+        // stays there until it is written — so it is charged in full before a
+        // byte of it goes out, and the charge comes down frame by frame as it
+        // drains (FM-REPLICATION-069). Charging the whole tail up front is what
+        // lets the hard limit refuse a window this primary cannot afford to
+        // stage, rather than discovering it one frame at a time.
+        let mut held_bytes: u64 = tail
+            .iter()
+            .map(|(_, _, payload)| payload.len() as u64)
+            .sum();
+        report_feed(&feed, held_bytes, "the backlog handoff tail")?;
         for (offset, shard_id, payload) in tail {
+            let payload_bytes = payload.len() as u64;
             let encoded = ReplicationFrame::new_on_shard(offset, shard_id, payload).encode()?;
             stream.write_all(&encoded).await?;
+            held_bytes = held_bytes.saturating_sub(payload_bytes);
+            report_feed(&feed, held_bytes, "the backlog handoff tail")?;
             // The backlog-replay lane of the frame lane (hardening issue 29):
             // a resumed replica's tail is real bytes on the wire, written
             // directly here rather than through `forward_frame`, so it needs
@@ -1080,6 +1107,7 @@ impl ReplicaSession {
         let write_timeout = frame_write_timeout(handler.write_timeout_ms);
 
         let feed_gate = handler.feed_gate.clone();
+        let feed_account = feed.clone();
         // The handoff lane is behind us: the barrier released and the tail is on
         // the wire up to `resume_offset`. From here the sequencer decides and
         // this task performs.
@@ -1114,6 +1142,33 @@ impl ReplicaSession {
                     FeedAction::End(departure) => break departure,
                 };
                 action = sequencer.step(input);
+
+                // What the barrier is holding is the third and last of the
+                // feed's buffers (FM-REPLICATION-069). Reported after every
+                // step because every step is where the figure can change — a
+                // frame held, a frame flushed — and reported even when it is
+                // zero, because that is what releases the charge of a barrier
+                // that has just lifted.
+                //
+                // Acting on the verdict here rather than feeding it back into
+                // the sequencer is deliberate: what the sequencer decides is
+                // *sequencing* — when a frame may go on the wire — and it owns
+                // no clock and no memory. "This link costs more than it is
+                // allowed to" is neither, and folding it in would mean new
+                // inputs to a model-checked machine to express a resource
+                // decision it cannot make.
+                if let FeedVerdict::Shed { reason } =
+                    feed_account.set_buffered(sequencer.buffered_bytes())
+                {
+                    tracing::warn!(
+                        replica_id = lag_replica_id,
+                        reason,
+                        held_frames = sequencer.held_frames(),
+                        held_bytes = sequencer.buffered_bytes(),
+                        "Replica feed exceeded its client-output-buffer-limit; ending the link"
+                    );
+                    break ReplicaDeparture::Lost;
+                }
             }
         });
 
@@ -1145,6 +1200,24 @@ impl ReplicaSession {
             }
         };
         Ok(departure)
+    }
+}
+
+/// Tell the feed's account how much it is holding, and turn a shed verdict
+/// into the error that ends the sync.
+///
+/// The one place the replication crate converts a
+/// `client-output-buffer-limit` decision into control flow
+/// (FM-REPLICATION-069). `holding` names the buffer for the operator reading
+/// the log of a link that died: which of the feed's three buffers was over,
+/// not just that something was.
+fn report_feed(feed: &SharedFeedAccount, total_bytes: u64, holding: &str) -> io::Result<()> {
+    match feed.set_buffered(total_bytes) {
+        FeedVerdict::Keep => Ok(()),
+        FeedVerdict::Shed { reason } => Err(io::Error::other(format!(
+            "replica feed exceeded its client-output-buffer-limit ({reason}) holding \
+             {total_bytes} bytes of {holding}"
+        ))),
     }
 }
 
@@ -1182,6 +1255,11 @@ struct SessionDriver<'a> {
     /// lapsed first — and the coverage travels on into the trailer written by
     /// [`Effect::SendCheckpoint`] / [`Effect::SendLiveDataset`].
     capture: Option<FullSyncCapture>,
+    /// What accounts for the replica-bound bytes this session holds
+    /// (FM-REPLICATION-069). Shared with the spawned write task, which reports
+    /// what the slot-handoff barrier is holding; released once, in
+    /// [`Self::exit`].
+    feed: SharedFeedAccount,
 }
 
 impl<'a> SessionDriver<'a> {
@@ -1201,6 +1279,7 @@ impl<'a> SessionDriver<'a> {
         stream: BoxedStream,
         sync_kind: SyncKind,
         handler: &'a Arc<PrimaryReplicationHandler>,
+        feed: SharedFeedAccount,
     ) -> Self {
         let sync = match sync_kind {
             SyncKind::Partial { replay_from } => BeginSync::Partial {
@@ -1219,6 +1298,7 @@ impl<'a> SessionDriver<'a> {
             stream: Some(stream),
             blobs: None,
             capture: None,
+            feed,
         }
     }
 
@@ -1277,6 +1357,10 @@ impl<'a> SessionDriver<'a> {
     async fn exit(&mut self, outcome: LinkOutcome) {
         let Transition { phase, effects } = step(&self.view(), &SessionEvent::Ended(outcome));
         self.session.commit_phase(phase);
+        // The single release point (FM-REPLICATION-069). Every way this session
+        // can end — a departure out of `drive`, or a `?` out of any effect —
+        // arrives here, so nothing the feed held stays charged after the link.
+        self.feed.release();
         for effect in effects {
             match effect {
                 Effect::CleanCheckpointDir => self.clean_checkpoint_dir().await,
@@ -1433,11 +1517,19 @@ impl<'a> SessionDriver<'a> {
                 // Published before the phase moves on, exactly as they were when
                 // this ran inline, so `progress_percent` never reports the
                 // previous sync's totals against this one's transfer.
-                self.session.inner.write().sync_total_bytes =
-                    blobs.iter().map(|b| b.len() as u64).sum();
+                let staged: u64 = blobs.iter().map(|b| b.len() as u64).sum();
+                self.session.inner.write().sync_total_bytes = staged;
                 self.session
                     .sync_bytes_transferred
                     .store(0, Ordering::Release);
+                // The whole payload is in this primary's memory from here until
+                // `SendLiveDataset` has written it — the largest single thing a
+                // feed ever holds, and what Redis's `slave` class is for
+                // (FM-REPLICATION-069). Charged before it is stored, so a
+                // dataset the limit will not pay for is dropped here instead of
+                // being held for the length of a transfer that is going to be
+                // refused anyway.
+                report_feed(&self.feed, staged, "the exported live dataset")?;
                 self.blobs = Some(blobs);
                 Ok(Next::Event(SessionEvent::DatasetExported))
             }
@@ -1464,6 +1556,22 @@ impl<'a> SessionDriver<'a> {
                 session
                     .stream_live_dataset(stream, handler, &blobs, &replication_id, offset, coverage)
                     .await?;
+                // The payload is on the wire and `blobs` dies with this arm, so
+                // the feed stops paying for it now rather than at the end of a
+                // link that may stream for hours (FM-REPLICATION-069).
+                drop(blobs);
+                // No `?`: a report of zero is `Keep` under every limit
+                // (`set_buffered(0)` cannot breach a hard, soft or budget
+                // bound), so this is a release, not a shed path — propagating
+                // would suggest a way this line can end the link, and there is
+                // none. The call is bound rather than inlined into the assert
+                // because `debug_assert!` drops its argument in release builds,
+                // and the release of the feed's charge must still happen there.
+                let verdict = report_feed(&self.feed, 0, "the written live dataset");
+                debug_assert!(
+                    verdict.is_ok(),
+                    "reporting zero buffered bytes must be FeedVerdict::Keep, got {verdict:?}"
+                );
                 Ok(Next::Event(SessionEvent::PayloadSent))
             }
 
@@ -1517,10 +1625,11 @@ impl<'a> SessionDriver<'a> {
                     .stream
                     .take()
                     .ok_or_else(|| io::Error::other("session stream already handed off"))?;
+                let feed = self.feed.clone();
                 let departure = self
                     .session
                     .clone()
-                    .start_streaming(stream, self.handler, replay_from, resume)
+                    .start_streaming(stream, self.handler, replay_from, resume, feed)
                     .await?;
                 Ok(Next::Ended(departure))
             }
@@ -1810,6 +1919,7 @@ mod tests {
     //! pre-refactor code, a `?`-propagated error from inside `handle_full_sync`
     //! left the replica registered as `Syncing` until process restart.
     use super::*;
+    use crate::feed_account::testing::RecordingFeedAccount;
     use crate::frame::serialize_command_to_resp;
     use crate::net_bytes::NetByteCountersSnapshot;
     use crate::primary::BacklogConfig;
@@ -2388,6 +2498,7 @@ mod tests {
                             replication_id: repl_id,
                         },
                         handler,
+                        RecordingFeedAccount::unlimited(),
                     )
                     .await
             }
@@ -2461,7 +2572,12 @@ mod tests {
             let server: BoxedStream = Box::new(server);
             async move {
                 session
-                    .run(server, SyncKind::Partial { replay_from: off1 }, handler)
+                    .run(
+                        server,
+                        SyncKind::Partial { replay_from: off1 },
+                        handler,
+                        RecordingFeedAccount::unlimited(),
+                    )
                     .await
             }
         });
@@ -2523,7 +2639,12 @@ mod tests {
             let server: BoxedStream = Box::new(server);
             async move {
                 session
-                    .run(server, SyncKind::Partial { replay_from: off1 }, handler)
+                    .run(
+                        server,
+                        SyncKind::Partial { replay_from: off1 },
+                        handler,
+                        RecordingFeedAccount::unlimited(),
+                    )
                     .await
             }
         });
@@ -2602,7 +2723,12 @@ mod tests {
             let server: BoxedStream = Box::new(server);
             async move {
                 session
-                    .run(server, SyncKind::Partial { replay_from: held }, handler)
+                    .run(
+                        server,
+                        SyncKind::Partial { replay_from: held },
+                        handler,
+                        RecordingFeedAccount::unlimited(),
+                    )
                     .await
             }
         });
@@ -2674,6 +2800,7 @@ mod tests {
                             replication_id: repl_id,
                         },
                         handler,
+                        RecordingFeedAccount::unlimited(),
                     )
                     .await
             }
@@ -2726,7 +2853,12 @@ mod tests {
             let server: BoxedStream = Box::new(server);
             async move {
                 session
-                    .run(server, SyncKind::Partial { replay_from: 0 }, handler)
+                    .run(
+                        server,
+                        SyncKind::Partial { replay_from: 0 },
+                        handler,
+                        RecordingFeedAccount::unlimited(),
+                    )
                     .await
             }
         });
@@ -2768,6 +2900,7 @@ mod tests {
                 server,
                 SyncKind::Partial { replay_from: 0 },
                 handler.clone(),
+                RecordingFeedAccount::unlimited(),
             )
             .await;
 
@@ -2819,6 +2952,7 @@ mod tests {
                             replication_id: repl_id.clone(),
                         },
                         handler,
+                        RecordingFeedAccount::unlimited(),
                     )
                     .await
             }
@@ -2907,6 +3041,7 @@ mod tests {
                             replication_id: repl_id,
                         },
                         handler,
+                        RecordingFeedAccount::unlimited(),
                     )
                     .await
             }
@@ -2957,6 +3092,7 @@ mod tests {
                         replication_id: repl_id,
                     },
                     &handler,
+                    RecordingFeedAccount::unlimited(),
                 )
                 .drive()
                 .await
@@ -3017,6 +3153,7 @@ mod tests {
                             replication_id: repl_id,
                         },
                         handler,
+                        RecordingFeedAccount::unlimited(),
                     )
                     .await
             }
@@ -3135,6 +3272,7 @@ mod tests {
                         replication_id: repl_id,
                     },
                     &handler,
+                    RecordingFeedAccount::unlimited(),
                 )
                 .drive()
                 .await
@@ -3220,6 +3358,7 @@ mod tests {
                         replication_id: repl_id,
                     },
                     &handler,
+                    RecordingFeedAccount::unlimited(),
                 )
                 .drive()
                 .await
@@ -3289,6 +3428,7 @@ mod tests {
                         replication_id: repl_id,
                     },
                     &handler,
+                    RecordingFeedAccount::unlimited(),
                 )
                 .drive()
                 .await
@@ -3387,6 +3527,7 @@ mod tests {
                         replication_id: repl_id,
                     },
                     &handler,
+                    RecordingFeedAccount::unlimited(),
                 )
                 .drive()
                 .await
@@ -3499,6 +3640,7 @@ mod tests {
                         replication_id: repl_id,
                     },
                     &handler,
+                    RecordingFeedAccount::unlimited(),
                 )
                 .drive()
                 .await
@@ -3589,6 +3731,7 @@ mod tests {
                             replication_id: repl_id,
                         },
                         handler,
+                        RecordingFeedAccount::unlimited(),
                     )
                     .await
             }
@@ -3756,6 +3899,7 @@ mod tests {
                         replication_id: repl_id,
                     },
                     &handler,
+                    RecordingFeedAccount::unlimited(),
                 )
                 .drive()
                 .await
@@ -4167,6 +4311,7 @@ mod tests {
                             replication_id: repl_id,
                         },
                         handler,
+                        RecordingFeedAccount::unlimited(),
                     )
                     .await
             }
@@ -4282,6 +4427,7 @@ mod tests {
                         &repl_id,
                         resume_point as i64,
                         ReplicaAnnouncement::default(),
+                        RecordingFeedAccount::unlimited(),
                     )
                     .await
             }
@@ -4330,6 +4476,7 @@ mod tests {
                         &repl_id,
                         resume_point as i64,
                         ReplicaAnnouncement::default(),
+                        RecordingFeedAccount::unlimited(),
                     )
                     .await
             }
@@ -4383,6 +4530,7 @@ mod tests {
                 &repl_id,
                 resume_point as i64,
                 ReplicaAnnouncement::default(),
+                RecordingFeedAccount::unlimited(),
             )
             .await
             .expect_err("PSYNC must not be served once the drain has started");
@@ -4439,6 +4587,7 @@ mod tests {
                 &repl_id,
                 resume_point as i64,
                 announced_version(their_version),
+                RecordingFeedAccount::unlimited(),
             )
             .await
             .expect_err("a replica on another major must not be served");
@@ -4486,7 +4635,14 @@ mod tests {
             let announcement = announced_version(&their_version);
             async move {
                 handler
-                    .handle_psync(server, addr(), &repl_id, resume_point as i64, announcement)
+                    .handle_psync(
+                        server,
+                        addr(),
+                        &repl_id,
+                        resume_point as i64,
+                        announcement,
+                        RecordingFeedAccount::unlimited(),
+                    )
                     .await
             }
         });
@@ -4530,7 +4686,14 @@ mod tests {
             let announcement = announced_version("not-a-version");
             async move {
                 handler
-                    .handle_psync(server, addr(), &repl_id, resume_point as i64, announcement)
+                    .handle_psync(
+                        server,
+                        addr(),
+                        &repl_id,
+                        resume_point as i64,
+                        announcement,
+                        RecordingFeedAccount::unlimited(),
+                    )
                     .await
             }
         });
@@ -4579,6 +4742,7 @@ mod tests {
                         &repl_id,
                         500,
                         ReplicaAnnouncement::default(),
+                        RecordingFeedAccount::unlimited(),
                     )
                     .await
             }
@@ -4659,6 +4823,7 @@ mod tests {
                         &repl_id,
                         evicted_point as i64,
                         ReplicaAnnouncement::default(),
+                        RecordingFeedAccount::unlimited(),
                     )
                     .await
             }
@@ -4824,6 +4989,7 @@ mod tests {
                         &replication_id,
                         offset,
                         ReplicaAnnouncement::default(),
+                        RecordingFeedAccount::unlimited(),
                     )
                     .await
             }
@@ -4863,7 +5029,14 @@ mod tests {
             let repl_id = repl_id.clone();
             async move {
                 handler
-                    .handle_psync(server, addr(), &repl_id, resume_point as i64, announcement)
+                    .handle_psync(
+                        server,
+                        addr(),
+                        &repl_id,
+                        resume_point as i64,
+                        announcement,
+                        RecordingFeedAccount::unlimited(),
+                    )
                     .await
             }
         });
@@ -5176,6 +5349,7 @@ mod tests {
                     &replication_id,
                     offset,
                     ReplicaAnnouncement::default(),
+                    RecordingFeedAccount::unlimited(),
                 )
                 .await
         })
@@ -5399,6 +5573,7 @@ mod tests {
                             replication_id: repl_id,
                         },
                         handler,
+                        RecordingFeedAccount::unlimited(),
                     )
                     .await
             }
@@ -5445,6 +5620,365 @@ mod tests {
         assert_eq!(
             tracker.last_streaming_departure(),
             Some(ReplicaDeparture::Graceful)
+        );
+    }
+
+    // ── FM-REPLICATION-069: the feed's memory accounting ─────────────────────
+
+    /// Like [`spawn_psync`] but with the test's own account, so a test can see
+    /// what the feed reported and decide what to answer.
+    fn spawn_psync_with_feed(
+        handler: Arc<PrimaryReplicationHandler>,
+        stream: BoxedStream,
+        replication_id: String,
+        offset: i64,
+        feed: Arc<RecordingFeedAccount>,
+    ) -> tokio::task::JoinHandle<io::Result<()>> {
+        tokio::spawn(async move {
+            handler
+                .handle_psync(
+                    stream,
+                    addr(),
+                    &replication_id,
+                    offset,
+                    ReplicaAnnouncement::default(),
+                    feed,
+                )
+                .await
+        })
+    }
+
+    /// A primary with a backlog holding `writes` commands, and the offset a
+    /// replica would resume from to receive all but the first of them.
+    fn primary_with_backlog(
+        tracker: &Arc<ReplicationTrackerImpl>,
+        dir: &TempDir,
+        writes: usize,
+    ) -> (Arc<PrimaryReplicationHandler>, String, u64) {
+        let handler = make_handler_with_backlog(tracker.clone(), None, dir.path().to_path_buf());
+        let repl_id = handler.state.read().replication_id.clone();
+        let resume_point =
+            handler.broadcast_control_command("SET", &[Bytes::from("k0"), Bytes::from("v0")]);
+        for n in 1..writes {
+            handler.broadcast_control_command(
+                "SET",
+                &[
+                    Bytes::from(format!("k{n}")),
+                    Bytes::from("v".repeat(4 * 1024)),
+                ],
+            );
+        }
+        (handler, repl_id, resume_point)
+    }
+
+    // FM-REPLICATION-069
+    /// The backlog handoff tail is materialized in the primary's memory before a
+    /// byte of it is written, and on a resumed replica with a long window that
+    /// is the largest thing the feed holds. It must be charged as what it is —
+    /// and the charge must come *down* as the tail drains, or a feed would be
+    /// condemned for bytes it had already let go of.
+    #[tokio::test]
+    async fn feed_charges_the_backlog_handoff_tail_and_drains_it() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let (handler, repl_id, resume_point) = primary_with_backlog(&tracker, &dir, 4);
+
+        let feed = RecordingFeedAccount::unlimited();
+        let (mut client, server) = tokio::io::duplex(256 * 1024);
+        let task = spawn_psync_with_feed(
+            handler,
+            Box::new(server),
+            repl_id,
+            resume_point as i64,
+            feed.clone(),
+        );
+
+        let frames = read_continue_then_frames(&mut client, 3).await;
+        assert_eq!(frames.len(), 3, "the whole tail is replayed");
+        drop(client);
+        let _ = task.await.unwrap();
+
+        let tail_bytes: u64 = frames.iter().map(|f| f.payload.len() as u64).sum();
+        assert!(
+            feed.peak() >= tail_bytes,
+            "the tail the primary staged must be charged in full: peak {} < tail {tail_bytes}",
+            feed.peak()
+        );
+        let reports = feed.reports();
+        let peak_at = reports.iter().position(|&r| r == feed.peak()).unwrap();
+        assert!(
+            reports[peak_at..].contains(&0),
+            "the charge must fall back to zero as the tail is written, got {reports:?}"
+        );
+    }
+
+    // FM-REPLICATION-069
+    /// A tail over the `replica` class's hard limit is not written. The feed is
+    /// dropped where the bytes are, before they go on the wire — which is the
+    /// whole point of a hard limit on staged output.
+    #[tokio::test]
+    async fn feed_over_the_hard_limit_drops_the_link_at_the_handoff_tail() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let (handler, repl_id, resume_point) = primary_with_backlog(&tracker, &dir, 4);
+
+        // Any tail at all is over this limit.
+        let feed = RecordingFeedAccount::shedding_at(1, "hard_limit");
+        let (mut client, server) = tokio::io::duplex(256 * 1024);
+        let task = spawn_psync_with_feed(
+            handler,
+            Box::new(server),
+            repl_id,
+            resume_point as i64,
+            feed.clone(),
+        );
+
+        let line = read_response_line(&mut client).await;
+        assert!(line.starts_with("+CONTINUE"), "got: {line:?}");
+        let err = task
+            .await
+            .unwrap()
+            .expect_err("a feed over its hard limit must not be served");
+        assert!(
+            err.to_string().contains("hard_limit"),
+            "the shed reason travels into the error the link dies of: {err}"
+        );
+        assert_eq!(
+            tracker.get_all_replicas().len(),
+            0,
+            "the shed session is gone from the registry"
+        );
+        assert_eq!(feed.releases(), 1, "and its charge was released");
+    }
+
+    // FM-REPLICATION-069
+    /// The soft window is a *second* verdict on a feed the first one kept. The
+    /// feed must act on it exactly as it acts on a hard limit — a link that
+    /// survived its first report and is dropped on a later one is the shape
+    /// `client-output-buffer-limit`'s soft seconds produce.
+    #[tokio::test]
+    async fn feed_over_the_soft_window_drops_the_link() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let (handler, repl_id, resume_point) = primary_with_backlog(&tracker, &dir, 4);
+
+        // Over the mark from the first report, shed on the second: the window
+        // expiring, without a clock.
+        let feed = RecordingFeedAccount::shedding_after(1, 1, "soft_limit");
+        let (mut client, server) = tokio::io::duplex(256 * 1024);
+        let task = spawn_psync_with_feed(
+            handler,
+            Box::new(server),
+            repl_id,
+            resume_point as i64,
+            feed.clone(),
+        );
+
+        let line = read_response_line(&mut client).await;
+        assert!(line.starts_with("+CONTINUE"), "got: {line:?}");
+        let err = task
+            .await
+            .unwrap()
+            .expect_err("a feed past its soft window must not be served");
+        assert!(
+            err.to_string().contains("soft_limit"),
+            "the link must die of the window it actually breached: {err}"
+        );
+        assert!(
+            feed.reports().len() >= 2,
+            "the window can only expire on a report after the first, got {:?}",
+            feed.reports()
+        );
+    }
+
+    // FM-REPLICATION-069
+    /// The failure mode `client-output-buffer-limit`'s soft window exists for is
+    /// a replica that has *stopped*: it stalls mid-full-sync, the primary parks
+    /// inside `write_all` holding the whole staged dataset, and no further
+    /// report is ever made on that link — so no later verdict can drop it. The
+    /// account's out-of-band shed has to reach the session where it is actually
+    /// parked, and it does that by being armed over the session's socket.
+    #[tokio::test]
+    async fn a_shed_signal_drops_a_feed_parked_inside_a_write() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let handler = make_handler(tracker.clone(), None, dir.path().to_path_buf());
+        // Far more than the socket will take, so the write cannot complete.
+        let value = "x".repeat(256 * 1024);
+        with_live_dataset(&handler, vec![dataset_blob(&[("alpha", value.as_str())])]);
+        let repl_id = handler.state.read().replication_id.clone();
+
+        let feed = RecordingFeedAccount::with_shed_signal();
+        let (mut client, server) = tokio::io::duplex(1024);
+        let task = spawn_psync_with_feed(handler, Box::new(server), repl_id, -1, feed.clone());
+
+        let line = read_response_line(&mut client).await;
+        assert!(line.starts_with("+FULLRESYNC"), "got: {line:?}");
+
+        // The replica reads no further. The session is now parked inside the
+        // dataset write and will not run another line of its own code.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(
+            !task.is_finished(),
+            "the session must still be parked on the stalled socket"
+        );
+        let reports_before = feed.reports().len();
+
+        feed.shed_now("soft_limit");
+
+        let err = tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .expect("the shed must reach a session parked inside a write")
+            .unwrap()
+            .expect_err("a shed feed must not keep its link");
+        assert!(
+            err.to_string().contains("soft_limit"),
+            "the link dies naming the shed reason: {err}"
+        );
+        assert_eq!(
+            feed.reports().len(),
+            reports_before,
+            "the drop must not depend on a report the stalled feed never makes"
+        );
+        assert_eq!(
+            feed.releases(),
+            1,
+            "and the shed link still releases its charge exactly once"
+        );
+    }
+
+    // FM-REPLICATION-069
+    /// A full sync to a persistence-disabled primary stages the whole dataset in
+    /// memory before it is written. That is the largest single thing a feed ever
+    /// holds and the one Redis's `slave` class exists for, so it is charged.
+    #[tokio::test]
+    async fn feed_charges_the_staged_live_dataset() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let handler = make_handler(tracker.clone(), None, dir.path().to_path_buf());
+        let blob = dataset_blob(&[("alpha", "one"), ("beta", "two")]);
+        let staged = blob.len() as u64;
+        with_live_dataset(&handler, vec![blob]);
+        let repl_id = handler.state.read().replication_id.clone();
+
+        let feed = RecordingFeedAccount::unlimited();
+        let (mut client, server) = tokio::io::duplex(256 * 1024);
+        let task = spawn_psync_with_feed(handler, Box::new(server), repl_id, -1, feed.clone());
+
+        let line = read_response_line(&mut client).await;
+        assert!(line.starts_with("+FULLRESYNC"), "got: {line:?}");
+        let (blobs, _meta) = drain_live_dataset(&mut client).await;
+        assert_eq!(blobs.len(), 1);
+        drop(client);
+        let _ = task.await.unwrap();
+
+        assert_eq!(
+            feed.peak(),
+            staged,
+            "the staged dataset is charged at its real size, got {:?}",
+            feed.reports()
+        );
+    }
+
+    // FM-REPLICATION-069
+    /// ...and stops being charged the moment it has been written, rather than
+    /// staying on the books until the link ends. A full sync followed by hours
+    /// of streaming must not carry the dataset's charge for all of them.
+    #[tokio::test]
+    async fn feed_releases_the_staged_live_dataset_once_it_is_written() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let handler = make_handler(tracker.clone(), None, dir.path().to_path_buf());
+        let blob = dataset_blob(&[("alpha", "one"), ("beta", "two")]);
+        let staged = blob.len() as u64;
+        with_live_dataset(&handler, vec![blob]);
+        let repl_id = handler.state.read().replication_id.clone();
+
+        let feed = RecordingFeedAccount::unlimited();
+        let (mut client, server) = tokio::io::duplex(256 * 1024);
+        let task = spawn_psync_with_feed(handler, Box::new(server), repl_id, -1, feed.clone());
+
+        let line = read_response_line(&mut client).await;
+        assert!(line.starts_with("+FULLRESYNC"), "got: {line:?}");
+        let _ = drain_live_dataset(&mut client).await;
+        drop(client);
+        let _ = task.await.unwrap();
+
+        let reports = feed.reports();
+        let staged_at = reports
+            .iter()
+            .position(|&r| r == staged)
+            .expect("the dataset was charged");
+        assert!(
+            reports[staged_at..].contains(&0),
+            "the charge is dropped when the payload is, not when the link is: {reports:?}"
+        );
+    }
+
+    // FM-REPLICATION-069
+    /// A dataset the `replica` class will not pay for is refused before it goes
+    /// on the wire: the sync fails, the replica reconnects, and the primary is
+    /// not left holding a payload for a peer it was never going to serve.
+    #[tokio::test]
+    async fn feed_over_the_hard_limit_abandons_the_full_sync() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let handler = make_handler(tracker.clone(), None, dir.path().to_path_buf());
+        let blob = dataset_blob(&[("alpha", "one"), ("beta", "two")]);
+        with_live_dataset(&handler, vec![blob]);
+        let repl_id = handler.state.read().replication_id.clone();
+
+        let feed = RecordingFeedAccount::shedding_at(1, "hard_limit");
+        let (mut client, server) = tokio::io::duplex(256 * 1024);
+        let task = spawn_psync_with_feed(handler, Box::new(server), repl_id, -1, feed.clone());
+
+        let line = read_response_line(&mut client).await;
+        assert!(line.starts_with("+FULLRESYNC"), "got: {line:?}");
+        let err = task
+            .await
+            .unwrap()
+            .expect_err("a dataset over the hard limit must not be streamed");
+        assert!(
+            err.to_string().contains("hard_limit"),
+            "the sync fails naming what refused it: {err}"
+        );
+        assert_eq!(
+            tracker.get_all_replicas().len(),
+            0,
+            "and the session leaves no registry entry behind"
+        );
+    }
+
+    // FM-REPLICATION-069
+    /// Whatever a feed was holding, it stops being charged when the link ends.
+    /// The release is on the session's single exit path, so it happens for a
+    /// clean departure exactly as for a failed sync.
+    #[tokio::test]
+    async fn feed_charge_is_released_when_the_link_ends() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let (handler, repl_id, resume_point) = primary_with_backlog(&tracker, &dir, 2);
+
+        let feed = RecordingFeedAccount::unlimited();
+        let (mut client, server) = tokio::io::duplex(256 * 1024);
+        let task = spawn_psync_with_feed(
+            handler,
+            Box::new(server),
+            repl_id,
+            resume_point as i64,
+            feed.clone(),
+        );
+
+        let line = read_response_line(&mut client).await;
+        assert!(line.starts_with("+CONTINUE"), "got: {line:?}");
+        assert_eq!(feed.releases(), 0, "a live link holds its charge");
+
+        drop(client);
+        task.await.unwrap().unwrap();
+        assert_eq!(
+            feed.releases(),
+            1,
+            "the exit path releases exactly once, however the link ended"
         );
     }
 }

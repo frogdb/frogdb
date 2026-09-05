@@ -63,8 +63,8 @@ anything on `build-toolchain/impl` (no Rust changes vs its base at the time of e
 The remaining FAILs in runs 33941010778 / 33942554391 are tracked elsewhere:
 `cluster_handoff_barrier` × 2 / × 3 and
 `cluster_migration::test_blocking_command_during_migration_gets_moved` (TRYAGAIN, "source did
-not drain in 50ms") → memory-architecture/26; `frogdb-config` golden counts × 2 (first run only)
-→ build-toolchain/07; jemalloc × 2 → memory-architecture/27.
+not drain in 50ms") → memory-architecture/35; `frogdb-config` golden counts × 2 (first run only)
+→ build-toolchain/07; jemalloc × 2 → memory-architecture/36.
 `cluster_slots::test_cluster_redirect_outranks_the_link_down_stale_gate` failed twice and passed
 on retry (counted flaky, not failed).
 

@@ -278,12 +278,18 @@ impl Value {
     /// Rebuild this value's representation from its own contents, choosing the
     /// encoding afresh from the same thresholds a write would.
     ///
-    /// This is a *compaction*, not a conversion: it reclaims the slack that
-    /// in-place churn leaves behind — a listpack buffer that grew and shrank,
-    /// and a hash or set that a burst promoted to a map and that has since
-    /// fallen back under the threshold without ever demoting (mutation only
-    /// ever promotes). The contents, and every observable answer about them,
-    /// are unchanged.
+    /// This is a *compaction*, not a conversion: it reclaims what in-place churn
+    /// leaves behind — a hash or set that a burst promoted to a map and that has
+    /// since fallen back under the threshold without ever demoting (mutation
+    /// only ever promotes). The contents, and every observable answer about
+    /// them, are unchanged.
+    ///
+    /// A listpack buffer that grew and shrank is *not* something this shows up
+    /// in the accounting: `Listpack::byte_len` is `buf.len()`, so that slack was
+    /// never counted by `memory_size` in the first place and `DEBUG RE-ENCODE`'s
+    /// before/after figures cannot move because of it. Reclaiming it is real
+    /// (the allocation does shrink), just invisible to the budget until
+    /// listpack-backed sizing moves to capacity — memory-architecture issue 30.
     ///
     /// Returns whether the value has an encoding choice to remake at all.
     /// Everything but hashes and sets has a single representation, so there is

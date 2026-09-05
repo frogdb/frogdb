@@ -78,6 +78,21 @@ turmoil = ["dep:turmoil", "frogdb-cluster-runtime/turmoil", "frogdb-config/turmo
 causal-profile = ["dep:tokio-coz"]
 profiling = ["dep:tracing-flame"]
 
+# Swap the keyspace container from griddle to the segmented extendible-hash
+# table (memory-architecture issues 11/12). A passthrough only — the choice is
+# `frogdb-core`'s, and the default build is still griddle. It exists so the
+# server's end-to-end suite can be run against the other backend
+# (`just test frogdb-server --features table-keyspace <pattern>`), which
+# recompiles frogdb-core upward: a gate-time run, not an iteration loop.
+#
+# The segmented table is deliberately `Send`-and-not-`Sync` (raw key words in
+# its slots, `Cell` counters in its segment headers), so the shard body under
+# this feature is `!Sync`. `ShardExecutor::launch` therefore takes a *body
+# constructor* that is `Send` and builds the future on the shard thread, where
+# it never has to cross one — see `frogdb_net::shard_body`. Don't reintroduce a
+# `Send` bound on the future itself; it would put `ShardWorker: Sync` back.
+table-keyspace = ["frogdb-core/table-keyspace"]
+
 # Command-family mirrors of `frogdb-commands`' feature set (see that crate's
 # lib.rs). `cmd-core` is a marker: `frogdb-commands`' own default already is
 # `core-profile`, so the default server build compiles the always-on families

@@ -24,7 +24,15 @@ pub struct MemoryConfig {
 
     /// Eviction policy when maxmemory is reached.
     /// Options: noeviction, volatile-lru, allkeys-lru, volatile-lfu, allkeys-lfu,
-    ///          volatile-random, allkeys-random, volatile-ttl
+    ///          volatile-random, allkeys-random, volatile-ttl, tiered-lru, tiered-lfu
+    ///
+    /// The policy names and their candidate sets are Redis's. How the coldest
+    /// key is *found* depends on the keyspace container: the default one uses
+    /// Redis's sampled approximation (see `maxmemory-samples`), while the
+    /// segmented container ranks 16 KiB segments with a 2Q queue and takes the
+    /// victim from the coldest one, which costs no per-key recency field. Both
+    /// are approximations of true LRU/LFU, and both confine themselves to the
+    /// policy's candidate set — `volatile-*` never takes a key without a TTL.
     #[serde(default = "default_maxmemory_policy")]
     #[param(mutable)]
     pub maxmemory_policy: String,

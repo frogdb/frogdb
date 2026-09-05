@@ -17,6 +17,7 @@ members = [
     "frogdb-server/crates/commands",
     "frogdb-server/crates/core",
     "frogdb-server/crates/memory",
+    "frogdb-server/crates/table",
     "frogdb-server/crates/shard-harness",
     "frogdb-server/crates/net",
     "frogdb-server/crates/server",
@@ -72,6 +73,11 @@ parking_lot = "0.12"
 dashmap = "6"
 smallvec = "1"
 hashbrown = "0.16"
+# Keyed hasher for the segmented keyspace table. Same family griddle/hashbrown
+# default to, so table-vs-griddle lookup comparisons are at hasher parity; taken
+# directly (not through griddle) because the table needs `with_seeds` to key the
+# hash per shard against HashDoS and to replay bit-identically under sim.
+ahash = "0.8"
 
 # Property-based testing
 proptest = "1"
@@ -154,6 +160,7 @@ frogdb-config = { path = "frogdb-server/crates/config" }
 frogdb-config-derive = { path = "frogdb-server/crates/config-derive" }
 frogdb-core = { path = "frogdb-server/crates/core" }
 frogdb-memory = { path = "frogdb-server/crates/memory" }
+frogdb-table = { path = "frogdb-server/crates/table" }
 frogdb-debug = { path = "frogdb-server/crates/debug" }
 frogdb-telemetry = { path = "frogdb-server/crates/telemetry" }
 frogdb-metrics-derive = { path = "frogdb-server/crates/metrics-derive" }

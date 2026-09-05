@@ -251,14 +251,22 @@ NEXTEST_CRATES = [
     "frogdb-protocol",
     "frogdb-types",
     "frogdb-net",
+    # frogdb-table carries the eviction state-machine rows of specs/memory.md
+    # (2Q over segments: candidate-set confinement inside a segment, and the
+    # victim walk's termination bound). No dependencies to speak of, so its
+    # test binary compiles in a couple of seconds.
+    "frogdb-table",
 ]
 
 # Feature-gated suites a row may also name, listed separately because their
 # tests do not exist in the default feature resolution. The turmoil simulations
 # (`frogdb-server/crates/server/tests/simulation.rs`) are the end-to-end forcing
-# tests for the replication wire contracts.
+# tests for the replication wire contracts; the segmented keyspace backend
+# (`store/keyspace/table_keyspace.rs`) is only compiled under `table-keyspace`,
+# and carries the store-side half of the memory eviction rows.
 NEXTEST_FEATURE_VARIANTS = [
     ("frogdb-server", "turmoil"),
+    ("frogdb-core", "table-keyspace"),
 ]
 
 # `## FM-TXN-001 — title`

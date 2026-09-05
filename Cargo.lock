@@ -1820,6 +1820,7 @@ dependencies = [
  "frogdb-replication",
  "frogdb-scripting",
  "frogdb-search",
+ "frogdb-table",
  "frogdb-types",
  "frogdb-vll",
  "futures",
@@ -2119,6 +2120,16 @@ dependencies = [
  "proptest",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "frogdb-table"
+version = "0.1.0"
+dependencies = [
+ "ahash 0.8.12",
+ "criterion",
+ "griddle",
+ "rand 0.10.0",
 ]
 
 [[package]]
