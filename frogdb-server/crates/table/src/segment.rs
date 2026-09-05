@@ -76,7 +76,6 @@ impl<V, const N: usize> Segment<V, N> {
     /// zeroes is a valid empty segment — every bitmap and counter is zero, and no
     /// uninitialised slot is readable while `occupied` is zero.
     pub fn alloc(local_depth: u8) -> Box<Segment<V, N>> {
-        crate::layout::assert_geometry();
         crate::bucket::assert_bucket_layout::<V, N>();
         let layout = Layout::new::<Segment<V, N>>();
         // SAFETY: `Segment` is far from zero-sized, which is `alloc_zeroed`'s only

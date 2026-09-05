@@ -47,9 +47,11 @@ struct Header {
 /// needs_send(frogdb_table::Record::new(b"nope"));
 /// ```
 ///
-/// `repr(transparent)` is load-bearing: [`crate::word`] stores a record handle
-/// *as* a slot word and reads it back by reinterpreting that word, which is only
-/// sound because a `Record` is laid out exactly like the pointer it wraps.
+/// `repr(transparent)` keeps a handle exactly one pointer wide, which is what
+/// lets [`crate::word`] keep a record in a single 8-byte slot word. The word
+/// stores the pointer's *address*, not the handle's bytes, and rebuilds a handle
+/// from it with [`Record::from_raw`] — see that module for why the round trip
+/// goes through exposed provenance.
 #[repr(transparent)]
 pub struct Record {
     ptr: NonNull<u8>,

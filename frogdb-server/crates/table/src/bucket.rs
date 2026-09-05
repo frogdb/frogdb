@@ -184,10 +184,13 @@ impl<V, const N: usize> Bucket<V, N> {
         const LANE_BITS: [u8; 16] = [1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128];
         // SAFETY: NEON is baseline on aarch64, so the intrinsics are always
         // available. Both loads read 16 bytes: one from `LANE_BITS`, one from the
-        // start of a 256-byte bucket whose first 16 bytes are `fp` followed by
-        // `route` — in bounds, and `vld1q_u8` has no alignment requirement.
+        // start of the bucket, whose first 16 bytes are `fp` followed by `route`.
+        // The pointer is derived from the whole bucket rather than from `fp` —
+        // `fp` is only `N` bytes, so a pointer into it may not be read past its
+        // end — and `assert_bucket_layout` pins the bucket at 16 bytes or more.
+        // `vld1q_u8` has no alignment requirement.
         unsafe {
-            let block: uint8x16_t = vld1q_u8(self.fp.as_ptr());
+            let block: uint8x16_t = vld1q_u8(std::ptr::from_ref(self).cast::<u8>());
             let eq = vceqq_u8(block, vdupq_n_u8(fp));
             let bits = vandq_u8(eq, vld1q_u8(LANE_BITS.as_ptr()));
             // Two rounds of pairwise add fold 16 lanes into 4 bytes; the low two
@@ -206,10 +209,13 @@ impl<V, const N: usize> Bucket<V, N> {
             _mm_cmpeq_epi8, _mm_loadu_si128, _mm_movemask_epi8, _mm_set1_epi8,
         };
         // SAFETY: SSE2 is guaranteed by the `target_feature` gate above (and is
-        // baseline on x86_64). `_mm_loadu_si128` is an unaligned 16-byte read
-        // from the start of a 256-byte bucket, so it stays in bounds.
+        // baseline on x86_64). `_mm_loadu_si128` is an unaligned 16-byte read from
+        // the start of the bucket, whose first 16 bytes are `fp` followed by
+        // `route`. The pointer is derived from the whole bucket rather than from
+        // `fp` — `fp` is only `N` bytes, so a pointer into it may not be read past
+        // its end — and `assert_bucket_layout` pins the bucket at 16 bytes or more.
         unsafe {
-            let block = _mm_loadu_si128(self.fp.as_ptr().cast());
+            let block = _mm_loadu_si128(std::ptr::from_ref(self).cast());
             _mm_movemask_epi8(_mm_cmpeq_epi8(block, _mm_set1_epi8(fp as i8))) as u16
         }
     }

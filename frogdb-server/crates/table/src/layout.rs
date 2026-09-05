@@ -13,8 +13,8 @@
 //! ```
 //!
 //! 63 buckets split 59 regular + 4 stash, keeping Dashtable's 14:1 ratio. The
-//! numbers are `const`, and [`assert_geometry`] pins every relation a
-//! `debug_assert`-free hot path relies on.
+//! numbers are `const`, and the compile-time assertions at the foot of this
+//! module pin every relation a `debug_assert`-free hot path relies on.
 //!
 //! [spike follow-up 5]: `.scratch/memory-architecture/spike-report-table.md`
 
@@ -63,23 +63,23 @@ pub const SEGMENT_BYTES: usize = HEADER_BYTES + BUCKETS * BUCKET_BYTES;
 /// split's cost is.
 pub const ROUTE_BITS: u32 = 16;
 
-/// Panics unless the geometry holds together. Called once per table, and by the
-/// layout test, so a bad edit to any constant above fails loudly rather than
+/// Every relation the geometry rests on, checked at compile time: each constant
+/// above is concrete, so a bad edit to any of them fails the build rather than
 /// silently costing a size class.
-pub fn assert_geometry() {
+const _: () = {
     assert!(
         SEGMENT_BYTES <= SEGMENT_CLASS_BYTES,
-        "segment {SEGMENT_BYTES} B overshoots its {SEGMENT_CLASS_BYTES} B size class"
+        "segment overshoots its allocator size class"
     );
     assert!(
         SEGMENT_BYTES + BUCKET_BYTES > SEGMENT_CLASS_BYTES,
-        "another bucket fits inside the size class — {BUCKETS} buckets wastes it"
+        "another bucket fits inside the size class — this bucket count wastes it"
     );
     assert!(
         REGULAR_BUCKETS > 1,
         "a home bucket needs a distinct neighbour"
     );
-}
+};
 
 #[cfg(test)]
 mod tests {
@@ -87,12 +87,11 @@ mod tests {
 
     #[test]
     fn segment_fills_its_size_class() {
-        assert_geometry();
         assert_eq!(BUCKETS, 63);
         assert_eq!(REGULAR_BUCKETS, 59);
         assert_eq!(SEGMENT_BYTES, 16_192);
         // The slack is what the class round-up costs; it must stay under one
-        // bucket or `assert_geometry` would have rejected the count.
+        // bucket or the compile-time assertions would have rejected the count.
         assert_eq!(SEGMENT_CLASS_BYTES - SEGMENT_BYTES, 192);
     }
 

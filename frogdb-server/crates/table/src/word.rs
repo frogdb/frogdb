@@ -12,8 +12,12 @@
 //! ```
 //!
 //! A record pointer is 8-aligned, so its low three bits are already the `PTR`
-//! tag: a pointer word **is** the pointer and the lookup fast path does no
-//! masking.
+//! tag: a pointer word **is** the pointer's address and the lookup fast path does
+//! no masking. The word stores that address through
+//! [`expose_provenance`](std::ptr::expose_provenance) and rebuilds a handle from
+//! it with [`with_exposed_provenance_mut`](std::ptr::with_exposed_provenance_mut),
+//! which is what keeps a tagged-integer pointer dereferenceable under Miri and
+//! the strict-provenance rules it models.
 //!
 //! Two word types, because keys and values are not the same question. [`KeyWord`]
 //! carries byte strings only (a Redis key is bytes). [`ValueWord`] carries byte
@@ -21,6 +25,7 @@
 //! own their record and free it on drop, so a slot is dropped by dropping its
 //! fields — there is no manual free path to get wrong.
 
+use std::mem::ManuallyDrop;
 use std::ptr::NonNull;
 
 use crate::record::Record;
@@ -84,7 +89,7 @@ impl KeyWord {
         } else {
             // SAFETY: the tag says `PTR`, so the word is a live record pointer
             // this word owns; the borrow is tied to `&self`.
-            unsafe { record_ref(&self.0).as_bytes() }
+            unsafe { record_bytes(&self.0) }
         }
     }
 
@@ -96,7 +101,7 @@ impl KeyWord {
             unpack_inline_str(self.0, &mut buf) == other
         } else {
             // SAFETY: as `bytes`.
-            unsafe { record_ref(&self.0).as_bytes() == other }
+            unsafe { record_bytes(&self.0) == other }
         }
     }
 
@@ -107,7 +112,7 @@ impl KeyWord {
             0
         } else {
             // SAFETY: as `bytes`.
-            unsafe { record_ref(&self.0).requested_bytes() }
+            unsafe { record_handle(self.0) }.requested_bytes()
         }
     }
 }
@@ -127,7 +132,8 @@ impl Clone for KeyWord {
             KeyWord(self.0)
         } else {
             // SAFETY: as `bytes`.
-            KeyWord(pack_record(unsafe { record_ref(&self.0) }.clone()))
+            let record = unsafe { record_handle(self.0) };
+            KeyWord(pack_record(Record::clone(&record)))
         }
     }
 }
@@ -186,7 +192,7 @@ impl ValueWord {
             TAG_STR => Decoded::Bytes(unpack_inline_str(self.0, buf)),
             // SAFETY: the remaining tag is `PTR`, so the word is a live record
             // pointer this word owns.
-            _ => Decoded::Bytes(unsafe { record_ref(&self.0).as_bytes() }),
+            _ => Decoded::Bytes(unsafe { record_bytes(&self.0) }),
         }
     }
 
@@ -197,32 +203,43 @@ impl ValueWord {
             0
         } else {
             // SAFETY: as `decode`.
-            unsafe { record_ref(&self.0).requested_bytes() }
+            unsafe { record_handle(self.0) }.requested_bytes()
         }
     }
 
-    /// The record behind an out-of-line value, for COW: the caller clones it to
-    /// hand a snapshot the current bytes, or `make_mut`s it to write.
+    /// Runs `f` on the record behind an out-of-line value — the COW hook: `f`
+    /// clones the handle to hand a snapshot the current bytes, or `make_mut`s it
+    /// to write. `None` when the value is inline.
+    ///
+    /// A closure rather than a `&mut Record`, because the handle lives in the
+    /// word as a bare address: it has to be rebuilt for the call and written back
+    /// afterwards, since `make_mut` may move the record.
     #[inline]
-    pub fn record_mut(&mut self) -> Option<&mut Record> {
+    pub fn with_record_mut<R>(&mut self, f: impl FnOnce(&mut Record) -> R) -> Option<R> {
         if self.is_inline() {
             return None;
         }
-        // SAFETY: the tag says `PTR`. A `Record` is `repr`-compatible with the
-        // word only in that the word *is* the pointer, so the reference is
-        // produced by reinterpreting the word's storage as the handle it holds —
-        // exactly what `pack_record` wrote there. `&mut self` rules out aliasing.
-        Some(unsafe { &mut *(std::ptr::from_mut(&mut self.0).cast::<Record>()) })
+        // SAFETY: the tag says `PTR`, so the word is a live record pointer this
+        // word owns, and `&mut self` rules out any other handle to it here.
+        let mut record = unsafe { record_handle(self.0) };
+        let out = f(&mut record);
+        // The word still owns the reference the handle was rebuilt from, but
+        // `make_mut` may have replaced the record with a private copy, so the word
+        // follows the handle rather than keeping a stale address.
+        self.0 = pack_record(ManuallyDrop::into_inner(record));
+        Some(out)
     }
 
-    /// The record behind an out-of-line value, shared.
+    /// Runs `f` on the record behind an out-of-line value, shared. `None` when
+    /// the value is inline.
     #[inline]
-    pub fn record(&self) -> Option<&Record> {
+    pub fn with_record<R>(&self, f: impl FnOnce(&Record) -> R) -> Option<R> {
         if self.is_inline() {
             return None;
         }
-        // SAFETY: as `record_mut`, with a shared borrow.
-        Some(unsafe { record_ref(&self.0) })
+        // SAFETY: as `with_record_mut`, with a shared borrow.
+        let record = unsafe { record_handle(self.0) };
+        Some(f(&record))
     }
 }
 
@@ -241,7 +258,8 @@ impl Clone for ValueWord {
             ValueWord(self.0)
         } else {
             // SAFETY: as `decode`.
-            ValueWord(pack_record(unsafe { record_ref(&self.0) }.clone()))
+            let record = unsafe { record_handle(self.0) };
+            ValueWord(pack_record(Record::clone(&record)))
         }
     }
 }
@@ -278,24 +296,49 @@ fn unpack_inline_str(word: u64, buf: &mut InlineBuf) -> &[u8] {
 
 #[inline]
 fn pack_record(record: Record) -> u64 {
-    let ptr = record.into_raw().as_ptr() as usize as u64;
+    // `expose_provenance`, not a plain `as` cast: the word is an integer, and a
+    // pointer rebuilt from an integer is only dereferenceable if the address it
+    // came from was exposed. Skipping this is undefined behaviour that no test
+    // can see and Miri catches immediately.
+    let ptr = record.into_raw().as_ptr().expose_provenance() as u64;
     debug_assert_eq!(ptr & TAG_MASK, TAG_PTR, "record pointer must be 8-aligned");
     ptr
 }
 
+/// The pointer a `PTR` word holds, with the provenance [`pack_record`] exposed.
+#[inline]
+fn record_ptr(word: u64) -> NonNull<u8> {
+    debug_assert_eq!(word & TAG_MASK, TAG_PTR);
+    NonNull::new(std::ptr::with_exposed_provenance_mut::<u8>(word as usize))
+        .expect("record pointer is never null")
+}
+
+/// Rebuilds the handle a `PTR` word holds **without** taking its reference: the
+/// word still owns it, so the handle is [`ManuallyDrop`] and must not escape.
+///
 /// # Safety
 /// `word`'s tag must be `PTR` and its record must still be live.
-///
-/// Takes the word **by reference**: the returned `&Record` borrows the word's own
-/// storage, so tying it to a temporary would hand back a dangling reference.
 #[inline]
-unsafe fn record_ref(word: &u64) -> &Record {
-    debug_assert_eq!(*word & TAG_MASK, TAG_PTR);
-    // SAFETY: `Record` is `repr(transparent)` over `NonNull<u8>`, so a word whose
-    // tag is `PTR` is bit-identical to the handle `pack_record` moved into it.
-    // Reading it back as a reference is the inverse of that move, and the
-    // lifetime is the word's.
-    unsafe { &*(std::ptr::from_ref(word).cast::<Record>()) }
+unsafe fn record_handle(word: u64) -> ManuallyDrop<Record> {
+    // SAFETY: the caller guarantees the tag and liveness, and `pack_record`
+    // exposed this address, so the pointer is dereferenceable. The handle is
+    // `ManuallyDrop` because dropping it would release the word's reference.
+    ManuallyDrop::new(unsafe { Record::from_raw(record_ptr(word)) })
+}
+
+/// A record word's payload, borrowed for as long as the word that owns it.
+///
+/// # Safety
+/// As [`record_handle`].
+#[inline]
+unsafe fn record_bytes(word: &u64) -> &[u8] {
+    // SAFETY: the caller guarantees the tag and liveness.
+    let record = unsafe { record_handle(*word) };
+    let bytes = record.as_bytes();
+    // SAFETY: the payload lives in the record's allocation, which the word owns a
+    // reference to and so outlives the word's borrow. Only the handle is
+    // temporary, so the slice is re-formed to borrow from the word instead of it.
+    unsafe { std::slice::from_raw_parts(bytes.as_ptr(), bytes.len()) }
 }
 
 /// # Safety
@@ -306,10 +349,9 @@ unsafe fn drop_record(word: u64) {
     if word & TAG_MASK != TAG_PTR {
         return;
     }
-    let ptr = NonNull::new(word as usize as *mut u8).expect("record pointer is never null");
     // SAFETY: the word owns the reference `pack_record` put there; rebuilding
     // the handle and dropping it releases exactly that one reference.
-    drop(unsafe { Record::from_raw(ptr) });
+    drop(unsafe { Record::from_raw(record_ptr(word)) });
 }
 
 #[cfg(test)]
@@ -394,9 +436,9 @@ mod tests {
     fn cloning_an_out_of_line_word_shares_one_record() {
         let a = ValueWord::from_bytes(b"a long enough value to need a record");
         let b = a.clone();
-        assert_eq!(a.record().unwrap().ref_count(), 2);
+        assert_eq!(a.with_record(Record::ref_count), Some(2));
         drop(b);
-        assert_eq!(a.record().unwrap().ref_count(), 1);
+        assert_eq!(a.with_record(Record::ref_count), Some(1));
     }
 
     /// The COW forcing test at the word level: a snapshot word keeps the old
@@ -406,7 +448,8 @@ mod tests {
         let mut live = ValueWord::from_bytes(b"the original payload");
         let snapshot = live.clone();
 
-        live.record_mut().unwrap().make_mut()[4..12].copy_from_slice(b"REWRITTE");
+        live.with_record_mut(|r| r.make_mut()[4..12].copy_from_slice(b"REWRITTE"))
+            .expect("the value is out of line");
 
         let mut buf: InlineBuf = [0; 16];
         let mut snap_buf: InlineBuf = [0; 16];
@@ -418,13 +461,16 @@ mod tests {
             live.decode(&mut buf),
             Decoded::Bytes(b"the REWRITTE payload")
         );
-        assert!(live.record().unwrap().is_unique());
-        assert!(snapshot.record().unwrap().is_unique());
+        assert_eq!(live.with_record(Record::is_unique), Some(true));
+        assert_eq!(snapshot.with_record(Record::is_unique), Some(true));
     }
 
     #[test]
     fn inline_words_have_no_record_to_share() {
-        assert!(ValueWord::from_int(7).record().is_none());
-        assert!(ValueWord::from_bytes(b"tiny").record().is_none());
+        assert_eq!(ValueWord::from_int(7).with_record(Record::ref_count), None);
+        assert_eq!(
+            ValueWord::from_bytes(b"tiny").with_record(Record::ref_count),
+            None
+        );
     }
 }
