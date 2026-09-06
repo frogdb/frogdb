@@ -22,8 +22,9 @@ dep-info file, so every unit looks dirty.
               every tracked file that is unchanged since the seed sha to
               `stamp` (older than every fingerprint file in the seed, so cargo
               sees it as fresh). Changed, untracked, and
-              `env!("CARGO_MANIFEST_DIR")`-bearing files keep their checkout
-              mtime and rebuild.
+              `env!("CARGO_MANIFEST_DIR")`-bearing files (other than the
+              relocating helper in frogdb-types) keep their checkout mtime and
+              rebuild.
     status    one line for the SessionStart hook: seed sha, age, commits
               behind the local `main`.
     maybe-refresh
@@ -54,6 +55,11 @@ import time
 from pathlib import Path
 
 MANIFEST_DIR_MACRO = 'env!("CARGO_MANIFEST_DIR")'
+# The one file allowed to spell the macro (`lint-manifest-dir` pins it). It bakes
+# the *compile-time* workspace root in precisely so `resolve()` can rebase onto
+# the runtime one, so a seeded copy is correct in any checkout — exempt it, or
+# frogdb-types (a root of the crate graph) would rebuild on every apply.
+MANIFEST_DIR_HELPER = "frogdb-server/crates/types/src/manifest_dir.rs"
 # What a seed carries. Top level: only the host debug profile (agents build
 # debug) and cxxbridge (usearch's generated C++, path-independent). Foreign
 # triples, release/, mutants/, tmp/, coverage/, probe/ are dropped.
@@ -76,10 +82,10 @@ def seed_root() -> Path:
     return Path(os.environ.get("FROGDB_SEED_DIR") or Path.home() / ".cache" / "frogdb" / "seed")
 
 
-def git(*args: str, cwd: Path | None = None) -> str:
-    return subprocess.run(
-        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
-    ).stdout.strip()
+def git(*args: str, cwd: Path | None = None, strip: bool = True) -> str:
+    out = subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout
+    # Porcelain status lines start with a significant space (" M path"): never strip those.
+    return out.strip() if strip else out
 
 
 def read_seed(root: Path) -> dict | None:
@@ -229,13 +235,15 @@ def changed_since(sha: str, cwd: Path) -> set[str]:
     """Tracked paths that may differ from the seed's sources.
 
     diff seed..HEAD (committed changes), status (uncommitted + untracked), and
-    every file that bakes CARGO_MANIFEST_DIR in at compile time: a seeded
-    binary built in another checkout would carry that checkout's path, so
-    those units must rebuild here regardless of content.
+    every file that bakes CARGO_MANIFEST_DIR in at compile time other than the
+    relocating helper: a seeded binary built in another checkout would carry
+    that checkout's path, so those units must rebuild here regardless of
+    content. (`lint-manifest-dir` keeps that set empty; this is the backstop.)
     """
     changed: set[str] = set()
     changed.update(git("diff", "--no-renames", "--name-only", sha, "HEAD", cwd=cwd).splitlines())
-    for line in git("status", "--porcelain", "--untracked-files=all", cwd=cwd).splitlines():
+    status = git("status", "--porcelain", "--untracked-files=all", cwd=cwd, strip=False)
+    for line in status.splitlines():
         path = line[3:]
         if " -> " in path:
             path = path.split(" -> ", 1)[1]
@@ -246,7 +254,7 @@ def changed_since(sha: str, cwd: Path) -> set[str]:
         capture_output=True,
         text=True,
     ).stdout.splitlines()
-    changed.update(macro_hits)
+    changed.update(p for p in macro_hits if p != MANIFEST_DIR_HELPER)
     return changed
 
 

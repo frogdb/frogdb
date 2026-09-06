@@ -63,3 +63,16 @@ pre-commit:
       glob:
         - ".scratch/**/*.md"
       run: just scratch-check
+
+# Keep the worktree build seed (scripts/seed-target.py, `just seed-refresh`) close to main:
+# after a merge or checkout in the main checkout, rebuild the seed in the background when it
+# is older than 30 minutes and no rustc/cargo is running. Everywhere else this exits at once.
+post-merge:
+  jobs:
+    - name: seed-refresh
+      run: ./scripts/seed-target.py maybe-refresh
+
+post-checkout:
+  jobs:
+    - name: seed-refresh
+      run: ./scripts/seed-target.py maybe-refresh

@@ -20,3 +20,7 @@ testbox = offload heavy compute via \`just tb-run\`; see the blacksmith-testbox 
 
 Subagents inherit the session mode — state it explicitly in every dispatch prompt.
 EOF
+
+# Worktree build seed (scripts/seed-target.py): a missing target/ is cloned from it before the
+# first build, so a stale seed means a partial rebuild, never a wrong one.
+"$(dirname "$0")"/seed-target.py status 2>/dev/null || true
