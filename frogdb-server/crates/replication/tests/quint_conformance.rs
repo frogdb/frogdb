@@ -335,10 +335,10 @@ impl FeedStateQ {
 // ---------------------------------------------------------------------------
 
 fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    frogdb_types::manifest_dir!()
         .join("../../..")
         .canonicalize()
-        .expect("resolve repo root from CARGO_MANIFEST_DIR")
+        .expect("resolve repo root from the crate manifest dir")
 }
 
 fn spec_path() -> PathBuf {

@@ -890,7 +890,7 @@ mod tests {
     // FM-MEMORY-008
     #[test]
     fn arena_sampling_is_not_on_a_command_path() {
-        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        let crates = frogdb_types::manifest_dir!()
             .parent()
             .expect("crates directory")
             .to_path_buf();

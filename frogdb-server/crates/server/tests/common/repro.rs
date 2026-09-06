@@ -67,9 +67,8 @@ fn profile_slug(profile: Profile) -> String {
 /// (`frogdb-server/crates/server`), not the repo root, so a CWD-relative `target/...` path
 /// silently resolves to `frogdb-server/crates/server/target/concurrency-repros` — a directory
 /// nothing else reads or uploads. Honor `CARGO_TARGET_DIR` if the build was configured with a
-/// custom target dir; otherwise derive the workspace root from this crate's
-/// `CARGO_MANIFEST_DIR`, which `rustc` bakes in at compile time and is therefore independent of
-/// the runtime CWD.
+/// custom target dir; otherwise derive the workspace root from this crate's manifest dir, which
+/// is independent of the runtime CWD.
 fn concurrency_repro_dir() -> PathBuf {
     match std::env::var_os("CARGO_TARGET_DIR") {
         Some(dir) => PathBuf::from(dir).join("concurrency-repros"),
@@ -77,13 +76,16 @@ fn concurrency_repro_dir() -> PathBuf {
     }
 }
 
-/// The workspace root: `CARGO_MANIFEST_DIR` for this crate is
+/// The workspace root: this crate's manifest dir is
 /// `<workspace-root>/frogdb-server/crates/server`, so the workspace root is three ancestors up.
+///
+/// Via [`frogdb_types::manifest_dir!`] rather than a bare `env!`, so a test binary compiled in
+/// one checkout and run from another writes repros into the checkout it is running in.
 fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+    frogdb_types::manifest_dir!()
         .ancestors()
         .nth(3)
-        .expect("CARGO_MANIFEST_DIR (frogdb-server/crates/server) has at least 3 ancestors")
+        .expect("manifest dir (frogdb-server/crates/server) has at least 3 ancestors")
         .to_path_buf()
 }
 
