@@ -68,7 +68,7 @@ pub(crate) fn unbounded_txn_budget() -> Budget {
 }
 
 /// One [`unbounded_txn_budget`] per shard.
-#[cfg(test)]
+#[cfg(all(test, not(feature = "turmoil")))]
 pub(crate) fn unbounded_txn_budgets(num_shards: usize) -> Arc<Vec<Budget>> {
     Arc::new((0..num_shards).map(|_| unbounded_txn_budget()).collect())
 }

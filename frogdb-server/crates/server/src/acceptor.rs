@@ -87,6 +87,7 @@ pub struct Acceptor {
     /// Empty for executors that do not own dedicated runtimes (turmoil, and any
     /// future in-process executor), in which case connections stay on the
     /// acceptor's runtime exactly as before.
+    #[cfg(not(feature = "turmoil"))]
     shard_placement: ShardPlacement,
 
     /// Current connection count for this port (shared across every connection
@@ -229,6 +230,7 @@ impl Acceptor {
         Self {
             listener: spec.listener,
             assigner: RoundRobinAssigner::new(num_shards),
+            #[cfg(not(feature = "turmoil"))]
             shard_placement: ctx.shard_placement,
             current_connections: Arc::new(AtomicI64::new(0)),
             max_clients: ctx.max_clients,
