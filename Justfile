@@ -83,15 +83,21 @@ vscode-setup:
 _cargo *args:
     {{dyld-env}} {{rocksdb-env}} cargo {{args}}
 
+# A worktree with no target/debug gets one cloned from the clean-main seed before its first
+# build (scripts/seed-target.py; `just seed-refresh` makes the seed). No seed → plain cold build.
+# Dependency of the recipes an agent's first commands hit: check, build, test, lint, mutants*.
+_ensure-target:
+    @[ -d target/debug ] || ./scripts/seed-target.py apply
+
 # Type-check the workspace or a specific crate
-check crate="":
+check crate="": _ensure-target
     {{dyld-env}} {{rocksdb-env}} cargo check {{ if crate != "" { "-p " + crate } else { "" } }} --all-targets
 
 # Alias: short form of check
 alias c := check
 
 # Build debug
-build:
+build: _ensure-target
     {{dyld-env}} {{rocksdb-env}} cargo build
 
 # Build with full debug info (for lldb/gdb variable inspection)
@@ -109,7 +115,7 @@ release:
 # =============================================================================
 
 # Run tests (optionally for a specific crate and/or matching a pattern)
-test crate="" pattern="":
+test crate="" pattern="": _ensure-target
     #!/usr/bin/env bash
     set -euo pipefail
     if [ "{{crate}}" = "frogctl" ]; then
@@ -386,12 +392,12 @@ core-test-e2e area:
     {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-server -E "$filter"
 
 # Mutation-test one crate (testbox-class workload; config in .cargo/mutants.toml)
-mutants crate *args:
+mutants crate *args: _ensure-target
     mkdir -p target/mutants/{{crate}}
     {{dyld-env}} {{rocksdb-env}} cargo mutants -p {{crate}} --output target/mutants/{{crate}} {{args}}
 
 # Mutate only this branch's diff vs origin/main (PR-viable cost)
-mutants-diff crate:
+mutants-diff crate: _ensure-target
     mkdir -p target/mutants/{{crate}}-diff
     git diff $(git merge-base origin/main HEAD) > target/mutants-diff.patch
     {{dyld-env}} {{rocksdb-env}} cargo mutants -p {{crate}} --in-diff target/mutants-diff.patch --output target/mutants/{{crate}}-diff
@@ -834,7 +840,7 @@ fmt-check crate="":
 # `lint-keyspace-notify-routing` and `lint-script-gate` ran in `lint-gates` but
 # not in `lint`, contradicting agents/seam-lints.md). One list, so `lint` is
 # always a superset of `lint-gates`.
-lint crate="": lint-gates lint-turmoil-features lint-turmoil lint-spec quint-check
+lint crate="": _ensure-target lint-gates lint-turmoil-features lint-turmoil lint-spec quint-check
     {{dyld-env}} {{rocksdb-env}} cargo clippy {{ if crate != "" { "-p " + crate } else { "--all-targets" } }} -- -D warnings
 
 # Gate: the compile-free subset of the seam-lint family — every `lint-*` gate
@@ -1493,6 +1499,25 @@ clean-worktrees:
             cargo sweep --time 0 "$dir"
         fi
     done
+
+# Build (check, build, nextest --no-run) at the current clean commit and snapshot target/ as the
+# seed every new worktree's target/ is cloned from (~/.cache/frogdb/seed; FROGDB_SEED_DIR overrides).
+# Run in the main checkout; the lefthook post-merge/post-checkout job does it in the background
+# when the seed is stale and nothing is compiling. `--no-build` snapshots what is there.
+seed-refresh *args:
+    ./scripts/seed-target.py refresh {{args}}
+
+# Clone the seed into this worktree's missing target/ (what _ensure-target does before a build)
+seed-target:
+    ./scripts/seed-target.py apply
+
+# Seed commit, age, and how far main has moved since (also printed by the SessionStart hook)
+seed-status:
+    ./scripts/seed-target.py status
+
+# Unit tests for seed-target.py (apply/stamp rules against a scratch repo and seed)
+test-seed-target:
+    ./scripts/tests/test_seed_target.py
 
 # List (default) or remove (`just worktree-prune yes`) worktrees under .claude/worktrees whose
 # branch is already merged into main. Never touches the main checkout, detached HEADs, or dirty trees.

@@ -106,8 +106,64 @@ Two more hash inputs matter in practice (both from the same `generate_hash_key`)
   break. `rocksdb-env` stays the single definition, reached through `_cargo`.
 - **Testbox-by-default for agents**: valid, costs a box per agent; user chose local-mode fixes.
 
-## Tier 2 (seed a new worktree's `target/` from a clean-main snapshot)
+## Tier 2 (seed a new worktree's `target/` from a clean-main snapshot) — GO, landed
 
-Spike-gated; status recorded here when it runs. Prerequisite: runtime `CARGO_MANIFEST_DIR`
-resolution (`frogdb_types::manifest_dir!`) so a fingerprint-fresh binary built in main never
-reads/writes main's paths from a worktree.
+Spike run 2026-09-06 against a `git worktree add --detach` scratch worktree at the seed's
+commit, on the laptop (local mode). Verdict: go; everything below is what shipped.
+
+### How it works
+
+`scripts/seed-target.py` (`just seed-refresh` / `just seed-target` / `just seed-status`;
+background in the script's docstring):
+
+- **refresh** (main checkout, clean tree): `just check`, `just build`, nextest `--no-run --all`
+  — through `just`, so `rocksdb-env`/sccache/rustflags match what a worktree build hashes —
+  then an APFS `clonefile(2)` of `target/debug` (minus `incremental/`) + `cxxbridge/` into
+  `~/.cache/frogdb/seed/target.<sha>` and a `seed.json` with `{sha, stamp}`, `stamp` = min
+  mtime over `debug/.fingerprint` − 1 s. Refuses while `target/debug/.cargo-lock` is held.
+- **apply** (any checkout with no `target/debug`; `_ensure-target` runs it before `check`,
+  `build`, `test`, `lint`, `mutants*`): clone the seed in, then `utime` every tracked file that
+  is unchanged since the seed sha (`git diff --name-only <sha> HEAD` ∪ `git status`) to
+  `stamp`. Cargo's freshness rule for path crates is "any listed source newer than the unit's
+  dep-info ⇒ dirty", and every seeded dep-info is newer than `stamp` by construction, so
+  unchanged units are fresh and changed ones rebuild from their checkout mtime.
+- The one compile-time path that would survive relocation, `env!("CARGO_MANIFEST_DIR")`, now
+  goes through `frogdb_types::manifest_dir!()` (rebases onto the running checkout's workspace
+  root); `lint-manifest-dir` keeps it that way, and `apply` still leaves any other file bearing
+  the literal at checkout mtime as a backstop.
+- Staleness: lefthook `post-merge`/`post-checkout` run `maybe-refresh` (main checkout, on
+  `main`, clean, seed > 30 min old, no rustc/cargo running ⇒ detached `refresh`, log in
+  `~/.cache/frogdb/seed/refresh.log`); the SessionStart hook prints `seed-status`. A stale seed
+  costs a rebuild proportional to how foundational the changed crates are, never correctness.
+
+### Spike measurements
+
+| step | result |
+|---|---|
+| `seed-refresh` at `419bacf6` (warm main) | build 127.5 s, clone 1.7 s, seed 13 GB (CoW: no extra disk until main diverges) |
+| `seed-target` in the scratch worktree | 1.7 s total (clone 1.1 s, stamp 0.4 s over 2538 tracked files) |
+| `CARGO_LOG=…fingerprint=info just check` | 0.8 s, **0 Compiling / 0 Checking**, no `dirty:` reasons |
+| `just build` | 1.0 s, 0 compiles |
+| `just test frogdb-core hotkeys` | 5 passed; 3 units compiled (`dashmap`, `frogdb-acl`, `frogdb-core`) — `-p` feature unification differs from `--all`, identical on main after a whole-suite build; not a seed effect |
+| `just test '' encoding_golden` / `wire_golden` (`--all`) | 0 compiles, 3 + 5 passed on the seeded binaries |
+| corrupt one `testdata/encoding/*.json` in the worktree, rerun | 0 compiles, golden test **fails** ⇒ the seeded binary reads the worktree's fixtures (relocation works) |
+| `touch frogdb-table/src/lib.rs` → `just check` | 1.1 s, only `frogdb-table` re-checked |
+| append a line to `frogdb-types/src/lib.rs` → `just check` | 34 s, 24 crates re-checked, 0 compiles |
+| … → `just build` + `just test frogdb-types manifest_dir` | 30 s, 23 units compiled, linked clean; 9 passed, 0 further compiles |
+
+Untouched unseeded baseline for comparison: a fresh worktree's first `just check` compiles every
+`frogdb-*` crate plus whatever registry deps sccache misses (minutes), and a first `just test`
+relinks every test binary (~2 min of the 127 s refresh above is that).
+
+### Caveats / follow-ups
+
+- Feature unification: the seed is built with `--all`; a `just test <crate>` that unifies
+  features differently recompiles that closure (67 units for `-p frogdb-cluster`, ~20 s). If
+  that bites, add the hot per-crate `--no-run` builds to `REFRESH_BUILDS`.
+- The seed is for the host debug profile only. `release`, foreign triples, `mutants/`,
+  `coverage/` are not carried; `incremental/` is dropped (rustc keys it on absolute paths, and
+  it is 57 % of a target dir).
+- Under an agent sandbox, `utime` is denied for a few dozen tracked files under `.claude/`
+  (skills, settings) — reported as "unwritable" by `apply`; none are Rust sources.
+- `maybe-refresh` never runs while a build is live (`ps` scan for rustc/cargo/nextest), so a
+  busy machine can carry a stale seed for a while; `just seed-refresh` forces one.
