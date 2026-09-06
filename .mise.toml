@@ -38,7 +38,10 @@ ruff     = "latest"     # Python formatter/linter (invoked via uvx today; shim a
 "cargo:cargo-mutants"  = "27.1.0"  # mutation testing for the hardening campaign
 
 # Prebuilt GitHub-release binaries via the ubi backend
-"ubi:mozilla/sccache" = "latest"
+# sccache is pinned (not "latest"): the Justfile resolves it via `mise which
+# sccache` (the real binary, not the shim — the shim can't resolve a version
+# from cargo's registry-crate cwd).
+"ubi:mozilla/sccache" = "0.17.0"
 "ubi:mstange/samply"  = "latest"
 
 # npm-backed CLI tools

@@ -151,27 +151,27 @@ failures so they're always re-tested.
 
 ## sccache
 
-The Justfile auto-detects sccache via `which sccache` and sets `RUSTC_WRAPPER` automatically.
+sccache is mise-managed (`.mise.toml`, pinned `0.17.0`). The Justfile sets `RUSTC_WRAPPER` to
+the *real* binary via `mise which sccache` — never point `RUSTC_WRAPPER` at
+`~/.local/share/mise/shims/sccache`. Cargo runs rustc for registry crates from
+`~/.cargo/registry/src/<crate>/`, where the shim finds no `.mise.toml` and fails with
+`No version is set for shim: sccache`, so every fresh build dies on its first registry crate.
+That failure is what the old per-recipe `RUSTC_WRAPPER=""` bypasses were papering over
+(issue `.scratch/concurrency-testing/issues/19`, closed).
 
-### When sccache causes problems
+### What it caches
 
-If you see errors like:
-- `"Operation not permitted (os error 1)"`
-- `"sccache: error: ..."`
-- `"failed to execute rustc"`
-- Any unexplained build failure that works on retry
+Registry deps and C/C++ objects (cc-rs) hit across worktrees. Workspace crates never hit
+across worktrees — sccache hashes the compile cwd and skips incremental units. Full write-up:
+`.scratch/build-cache/README.md`.
 
-**Fix:** Bypass sccache for that command:
+### Symptom / fix
 
-```bash
-RUSTC_WRAPPER="" just <recipe>
-```
-
-### Root cause
-
-Homebrew-installed sccache (precompiled bottle) can fail on macOS Sequoia 15.5 due to
-codesigning/SIP restrictions. Installing from source (`cargo install sccache`) produces a
-locally-compiled binary at `~/.cargo/bin/sccache` that works without issues.
+| Symptom | Fix |
+|---------|-----|
+| `No version is set for shim: sccache` | Confirm the Justfile resolves via `mise which sccache` (see above) / `mise install` |
+| `Compile requests 0` in `just sccache-stats` right after a build | Server had exited (10-min idle timeout) and stats reset — not a miss |
+| Need to rule sccache out for one run | `RUSTC_WRAPPER="" just <recipe>` |
 
 ### Useful commands
 

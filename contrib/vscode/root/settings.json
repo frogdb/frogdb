@@ -40,5 +40,28 @@
     },
     "python.analysis.exclude": [
         "**/.claude/worktrees/**"
-    ]
+    ],
+    // macOS/Homebrew values of the Justfile's cargo env prelude (see `_cargo` /
+    // `rocksdb-env` in the Justfile). Without these, rust-analyzer's first check
+    // in a fresh worktree builds vendored RocksDB from source (~10 min CPU,
+    // ~1.5GB in target/). On Linux drop ROCKSDB_LIB_DIR, SNAPPY_LIB_DIR, and
+    // DYLD_LIBRARY_PATH, and set LIBCLANG_PATH to /usr/lib/llvm-18/lib.
+    "rust-analyzer.cargo.extraEnv": {
+        "LIBCLANG_PATH": "/opt/homebrew/opt/llvm/lib",
+        "DYLD_LIBRARY_PATH": "/opt/homebrew/opt/llvm/lib",
+        "ROCKSDB_LIB_DIR": "/opt/homebrew/lib",
+        "SNAPPY_LIB_DIR": "/opt/homebrew/lib"
+    },
+    "rust-analyzer.check.extraEnv": {
+        "LIBCLANG_PATH": "/opt/homebrew/opt/llvm/lib",
+        "DYLD_LIBRARY_PATH": "/opt/homebrew/opt/llvm/lib",
+        "ROCKSDB_LIB_DIR": "/opt/homebrew/lib",
+        "SNAPPY_LIB_DIR": "/opt/homebrew/lib"
+    },
+    "rust-analyzer.runnables.extraEnv": {
+        "LIBCLANG_PATH": "/opt/homebrew/opt/llvm/lib",
+        "DYLD_LIBRARY_PATH": "/opt/homebrew/opt/llvm/lib",
+        "ROCKSDB_LIB_DIR": "/opt/homebrew/lib",
+        "SNAPPY_LIB_DIR": "/opt/homebrew/lib"
+    }
 }
