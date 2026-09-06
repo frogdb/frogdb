@@ -82,9 +82,11 @@ just fmt-py                             # format Python code
   `just test frogdb-server test_name`
 - Never call `cargo` directly, not even for a one-off: the Justfile's `_cargo` recipe (and
   `scripts/cargo_env.py` for Python) carry the RocksDB/libclang env — without it the first build
-  in a worktree compiles vendored RocksDB from source (~10 min, 1.5 GB). `just seed-target`
-  seeds a fresh worktree's `target/` from main's; `just worktree-prune` lists merged worktrees to
-  remove. Background: `.scratch/build-cache/README.md`.
+  in a worktree compiles vendored RocksDB from source (~10 min, 1.5 GB). A worktree's missing
+  `target/` is cloned from the clean-main seed before its first `just check/build/test/lint`
+  (`just seed-target` does it by hand; `just seed-refresh` in the main checkout rebuilds the
+  seed); `just worktree-prune` lists merged worktrees to remove. Background:
+  `.scratch/build-cache/README.md`.
 
 ### Execution mode: local (default) or testbox
 

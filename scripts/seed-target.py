@@ -258,22 +258,24 @@ def changed_since(sha: str, cwd: Path) -> set[str]:
     return changed
 
 
-def stamp_tracked(stamp: float, skip: set[str], cwd: Path) -> tuple[int, int]:
+def stamp_tracked(stamp: float, skip: set[str], cwd: Path) -> tuple[int, int, int]:
+    """Returns (stamped, skipped, unwritable): unwritable files keep their mtime
+    (an agent sandbox denies utime under .claude/skills etc.; none are Rust sources)."""
     out = subprocess.run(["git", "ls-files", "-z"], cwd=cwd, check=True, capture_output=True).stdout
-    stamped = kept = 0
+    stamped = skipped = unwritable = 0
     for raw in out.split(b"\0"):
         if not raw:
             continue
         rel = raw.decode("utf-8", "surrogateescape")
         if rel in skip:
-            kept += 1
+            skipped += 1
             continue
         try:
             os.utime(cwd / rel, (stamp, stamp))
             stamped += 1
         except OSError:
-            kept += 1
-    return stamped, kept
+            unwritable += 1
+    return stamped, skipped, unwritable
 
 
 def cmd_apply(args: argparse.Namespace) -> int:
@@ -309,11 +311,12 @@ def cmd_apply(args: argparse.Namespace) -> int:
         tmp.rename(dst)
     t1 = time.time()
     changed = changed_since(sha, repo)
-    stamped, kept = stamp_tracked(info["stamp"], changed, repo)
+    stamped, skipped, unwritable = stamp_tracked(info["stamp"], changed, repo)
     behind = git("rev-list", "--count", f"{sha}..HEAD", cwd=repo)
+    extra = f", {unwritable} unwritable" if unwritable else ""
     print(
         f"seed-target: seeded target/ from {sha[:12]} (HEAD is {behind} commit(s) ahead): "
-        f"{stamped} files marked fresh, {kept} changed/untracked/manifest-dir files left to rebuild; "
+        f"{stamped} files marked fresh, {skipped} changed/untracked left to rebuild{extra}; "
         f"clone {t1 - t0:.1f}s, stamp {time.time() - t1:.1f}s"
     )
     return 0
