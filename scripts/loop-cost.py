@@ -21,13 +21,14 @@ is comparing rows across those transitions.
 from __future__ import annotations
 
 import argparse
-import os
-import platform
 import statistics
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from cargo_env import cargo_env  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 METRICS = REPO / ".scratch/hardening/metrics/loop-cost.md"
@@ -68,18 +69,6 @@ HEADER = (
 )
 
 
-def build_env() -> dict[str, str]:
-    env = os.environ.copy()
-    if platform.system() == "Darwin":
-        env.setdefault("LIBCLANG_PATH", "/opt/homebrew/opt/llvm/lib")
-        env.setdefault("DYLD_LIBRARY_PATH", "/opt/homebrew/opt/llvm/lib")
-        if env.get("FROGDB_SYSTEM_ROCKSDB", "1") != "":
-            lib = env.get("FROGDB_LIB_DIR", "/opt/homebrew/lib")
-            env.setdefault("ROCKSDB_LIB_DIR", lib)
-            env.setdefault("SNAPPY_LIB_DIR", lib)
-    return env
-
-
 def run(cmd: list[str], env: dict[str, str], capture: bool = False) -> str:
     res = subprocess.run(
         cmd,
@@ -107,7 +96,7 @@ def main() -> None:
     if not touch.exists():
         sys.exit(f"touch target missing (update AREAS?): {touch_file}")
 
-    env = build_env()
+    env = cargo_env()
     check_cmd = ["cargo", "check", "-p", crate, *extra, "--all-targets"]
     list_cmd = ["cargo", "nextest", "list", "-p", crate, *extra]
 

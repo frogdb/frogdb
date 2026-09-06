@@ -1,6 +1,6 @@
 # 19 — `just lint-spec` bypasses sccache; concurrent full recompile starves sim suites
 
-Status: ready-for-agent
+Status: done
 Type: bug
 Origin: memory-architecture drain session (2026-09-01) — running `just lint-spec` while
 turmoil sim suites were executing produced phantom 120s nextest timeouts (fresh test
@@ -35,11 +35,11 @@ its artifacts don't populate the shared cache for later builds.
 
 ## Acceptance criteria
 
-- [ ] Root cause of the `RUSTC_WRAPPER=""` bypass identified and written down (commit
+- [x] Root cause of the `RUSTC_WRAPPER=""` bypass identified and written down (commit
       message or recipe comment).
-- [ ] Either the bypass is removed and `just lint-spec` passes cold+warm with cache hits,
+- [x] Either the bypass is removed and `just lint-spec` passes cold+warm with cache hits,
       or the serialize guard/doc rule is in place.
-- [ ] `loop-cost.py` / fuzz recipes checked for the same stale workaround (fix or justify
+- [x] `loop-cost.py` / fuzz recipes checked for the same stale workaround (fix or justify
       in place).
 
 ## Files likely touched
@@ -47,3 +47,19 @@ its artifacts don't populate the shared cache for later builds.
 - Justfile
 - scripts/spec-lint.py
 - CLAUDE.md (only if the doc-rule branch is taken)
+
+## Resolution (2026-09-06)
+
+Root cause: the bypasses were hiding a broken `RUSTC_WRAPPER`, not an sccache limitation.
+Since sccache moved to mise (2026-04-10) the Justfile's `which sccache` resolved to the mise
+**shim**. cargo invokes rustc for registry crates from `~/.cargo/registry/src/<crate>/`, where
+the shim finds no `.mise.toml` and dies with `mise ERROR No version is set for shim: sccache`
+on the first registry crate of every fresh build. `RUSTC_WRAPPER=""` made the recipes work
+again at the cost of a full uncached recompile — the starvation this issue reports.
+
+Fix: `RUSTC_WRAPPER` now comes from `mise which sccache` (the real binary, cwd-independent);
+every bypass is gone (`lint-spec`, `loop-cost`, `spec-lint.py`, `coverage-depth.py`, fuzz
+recipes). Verified with the real binary: `-C instrument-coverage` compiles hit sccache
+(27/27 on the warm run); `cargo +nightly fuzz build` runs through it. The seam lint
+`lint-cargo-env` keeps a second copy of the env prelude — and a new bypass — from creeping
+back in. Full write-up: `.scratch/build-cache/README.md`.

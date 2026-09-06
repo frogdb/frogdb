@@ -80,6 +80,11 @@ just fmt-py                             # format Python code
 
 - When running a single test, target the owning crate to avoid rebuilding the entire workspace:
   `just test frogdb-server test_name`
+- Never call `cargo` directly, not even for a one-off: the Justfile's `_cargo` recipe (and
+  `scripts/cargo_env.py` for Python) carry the RocksDB/libclang env — without it the first build
+  in a worktree compiles vendored RocksDB from source (~10 min, 1.5 GB). `just seed-target`
+  seeds a fresh worktree's `target/` from main's; `just worktree-prune` lists merged worktrees to
+  remove. Background: `.scratch/build-cache/README.md`.
 
 ### Execution mode: local (default) or testbox
 

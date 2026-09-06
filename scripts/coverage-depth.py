@@ -58,6 +58,9 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from cargo_env import cargo_env  # noqa: E402
+
 REPO = Path(__file__).resolve().parent.parent
 
 # Dedicated target dir: instrumented artifacts must not poison the normal
@@ -128,17 +131,16 @@ def llvm_bin_dir() -> Path:
 
 
 def build_env(extra: dict[str, str] | None = None) -> dict[str, str]:
-    """Cargo environment mirroring the Justfile's dyld/rocksdb prelude."""
-    env = dict(os.environ)
-    env.setdefault("LIBCLANG_PATH", "/opt/homebrew/opt/llvm/lib")
-    if sys.platform == "darwin":
-        env["DYLD_LIBRARY_PATH"] = "/opt/homebrew/opt/llvm/lib"
-        env.setdefault("ROCKSDB_LIB_DIR", "/opt/homebrew/lib")
-        env.setdefault("SNAPPY_LIB_DIR", "/opt/homebrew/lib")
-    # sccache does not cache instrumented builds usefully and is disabled on
-    # macOS in this repo anyway.
-    env["RUSTC_WRAPPER"] = ""
-    env["CARGO_TARGET_DIR"] = str(COV_TARGET)
+    """Cargo environment for the instrumented build.
+
+    The shared cargo env (scripts/cargo_env.py) plus this pipeline's own
+    dedicated target dir and coverage RUSTFLAGS.
+    """
+    env = cargo_env()
+    # The target dir is passed as `--target-dir` (see TARGET_DIR_ARGS), never as the
+    # CARGO_TARGET_DIR env var: sccache hashes every CARGO_* variable into a Rust
+    # compile's cache key, so an absolute worktree path there defeats the cross-worktree
+    # hits registry crates would otherwise get (.scratch/build-cache/README.md).
     env["CARGO_INCREMENTAL"] = "0"
     env["RUSTFLAGS"] = (env.get("RUSTFLAGS", "") + " -C instrument-coverage").strip()
     if extra:
@@ -195,9 +197,20 @@ def cargo_scope(crate: str | None) -> list[str]:
     return ["-p", crate] if crate else ["--all"]
 
 
+TARGET_DIR_ARGS = ["--target-dir", str(COV_TARGET)]
+
+
 def build_instrumented(crate: str | None, env: dict[str, str]) -> list[Path]:
     """Build test binaries with instrumentation; return the executables."""
-    cmd = ["cargo", "test", *cargo_scope(crate), "--no-run", "--message-format", "json"]
+    cmd = [
+        "cargo",
+        "test",
+        *TARGET_DIR_ARGS,
+        *cargo_scope(crate),
+        "--no-run",
+        "--message-format",
+        "json",
+    ]
     print(f"  $ {' '.join(cmd)}", flush=True)
     proc = subprocess.Popen(cmd, cwd=REPO, env=env, stdout=subprocess.PIPE, text=True, bufsize=1)
     executables: list[Path] = []
@@ -272,7 +285,7 @@ def prevalidate(executables: list[Path], env: dict[str, str]) -> None:
 
 
 def nextest(crate: str | None, pattern: str | None, env: dict[str, str]) -> int:
-    cmd = ["cargo", "nextest", "run", *cargo_scope(crate)]
+    cmd = ["cargo", "nextest", "run", *TARGET_DIR_ARGS, *cargo_scope(crate)]
     if pattern:
         cmd += ["-E", f"test(/{pattern}/)"]
     proc = run(cmd, env=env, check=False)

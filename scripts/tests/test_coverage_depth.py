@@ -28,6 +28,9 @@ from types import SimpleNamespace
 _SCRIPT = Path(__file__).resolve().parent.parent / "coverage-depth.py"
 _spec = importlib.util.spec_from_file_location("coverage_depth", _SCRIPT)
 assert _spec and _spec.loader
+# The script imports its sibling cargo_env module; when it is exec'd from here
+# rather than run directly, scripts/ is not already sys.path[0].
+sys.path.insert(0, str(_SCRIPT.parent))
 cd = importlib.util.module_from_spec(_spec)
 # Register before exec so @dataclass can resolve annotations against the module.
 sys.modules["coverage_depth"] = cd

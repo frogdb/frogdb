@@ -69,12 +69,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import os
 import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from cargo_env import cargo_env  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 SPEC_DIR = REPO / "specs"
@@ -875,23 +877,6 @@ def check_model_links(
         )
 
     return links, len(claimed), len(excused)
-
-
-def cargo_env() -> dict[str, str]:
-    """Environment for `cargo nextest`, mirroring the Justfile's build vars."""
-    env = dict(os.environ)
-    # sccache is deliberately off on macOS (see the Justfile); an inherited
-    # wrapper would only thrash the cache this script shares with `just`.
-    env["RUSTC_WRAPPER"] = env.get("RUSTC_WRAPPER", "")
-    libclang = Path("/opt/homebrew/opt/llvm/lib")
-    if libclang.is_dir():
-        env.setdefault("DYLD_LIBRARY_PATH", str(libclang))
-    # System RocksDB, same condition as the Justfile: only where it exists.
-    lib_dir = Path(os.environ.get("FROGDB_LIB_DIR", "/opt/homebrew/lib"))
-    if (lib_dir / "librocksdb.a").exists() or (lib_dir / "librocksdb.dylib").exists():
-        env.setdefault("ROCKSDB_LIB_DIR", str(lib_dir))
-        env.setdefault("SNAPPY_LIB_DIR", str(lib_dir))
-    return env
 
 
 def run_listing(cmd: list[str]) -> str:

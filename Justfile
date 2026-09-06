@@ -25,10 +25,25 @@ system-lib-dir := env("FROGDB_LIB_DIR", "/opt/homebrew/lib")
 # on macOS the zstd compilation is fast so we don't bother).
 rocksdb-env := if use-system-rocksdb != "" { "ROCKSDB_LIB_DIR=" + system-lib-dir + " SNAPPY_LIB_DIR=" + system-lib-dir } else { "" }
 
-# sccache: automatically use as rustc wrapper if installed (speeds up clean builds, branch/worktree switches)
-# Disable with: RUSTC_WRAPPER="" just <recipe>
-sccache-default := `which sccache 2>/dev/null || echo ""`
+# sccache: automatically use as rustc wrapper if installed (mise-managed, see .mise.toml).
+# What it can and cannot cache across the parallel worktrees under .claude/worktrees is
+# written up in .scratch/build-cache/README.md — short version: registry deps and C/C++
+# objects hit; workspace crates never do (sccache hashes the compile cwd and refuses
+# incremental units), so the per-worktree `target/` seeding below is what covers those.
+# Disable for one run with: RUSTC_WRAPPER="" just <recipe>
+#
+# Resolve the real binary, never the mise shim: cargo runs rustc for a registry
+# crate from that crate's directory under ~/.cargo/registry, where the shim finds
+# no .mise.toml and dies with "No version is set for shim: sccache" — every fresh
+# build then fails on its first registry crate (the failure behind the per-recipe
+# `RUSTC_WRAPPER=""` bypasses that .scratch/concurrency-testing/issues/19 removed).
+# A non-mise sccache on PATH (cargo install) is fine; a shim is treated as absent.
+sccache-default := `mise which sccache 2>/dev/null || (command -v sccache 2>/dev/null | grep -v '/mise/shims/') || echo ""`
 export RUSTC_WRAPPER := env("RUSTC_WRAPPER", sccache-default)
+# The cache holds one copy of every registry dep for every profile/feature/rustflags
+# combination the worktrees build; the 10G default evicts a working set that size.
+# Picked up when the server starts — `sccache --stop-server` after changing it.
+export SCCACHE_CACHE_SIZE := env("SCCACHE_CACHE_SIZE", "40G")
 
 # quint (mise-managed, see .mise.toml) is only on PATH once a contributor has
 # mise's shims dir there or has run `mise activate` in their shell — `mise
@@ -58,6 +73,15 @@ vscode-setup:
 # =============================================================================
 # Rust: Build & Check
 # =============================================================================
+
+# The one cargo entry point for recipes that do not spell the env prelude out
+# themselves. Every `cargo` in this file must carry `{{rocksdb-env}}` on its line
+# or go through here (dependency call: `foo: (_cargo "run -p foo")`) — without
+# ROCKSDB_LIB_DIR the first `cargo` in a fresh worktree builds vendored RocksDB
+# from source (~10 min CPU, 1.5GB of objects that stay in target/ forever).
+# Enforced by `lint-cargo-env` (agents/seam-lints.md).
+_cargo *args:
+    {{dyld-env}} {{rocksdb-env}} cargo {{args}}
 
 # Type-check the workspace or a specific crate
 check crate="":
@@ -128,6 +152,10 @@ coverage-calibrate crate:
 # Unit tests for the coverage-depth pipeline (monomorphization dedupe, etc.)
 test-coverage-depth:
     ./scripts/tests/test_coverage_depth.py
+
+# Unit tests for the shared cargo build environment (scripts/cargo_env.py)
+test-cargo-env:
+    ./scripts/tests/test_cargo_env.py
 
 # Unit tests for the continuation-lock gate's Rust scanners (arm/variant parsing)
 test-continuation-lock-gate:
@@ -301,8 +329,7 @@ test-all: test concurrency
 # Run tokio-coz causal profiler tests (requires tokio_unstable, set workspace-wide in
 # .cargo/config.toml — this recipe no longer exports its own RUSTFLAGS, which used to fork a
 # second copy of the build cache and made the `cargo sweep` bracketing necessary)
-test-coz:
-    cargo test -p tokio-coz
+test-coz: (_cargo "test -p tokio-coz")
 
 # Run browser integration tests (requires chromedriver running on port 9515)
 test-browser:
@@ -315,21 +342,21 @@ bench:
 # Keyspace table vs the incumbent griddle::HashMap on lookup, at hasher parity.
 # The measurement the segmented-table swap decision turns on; read it on a
 # testbox, not a laptop — a macOS run is an upper bound on the ratio.
-bench-table *args:
-    cargo bench -p frogdb-table --bench lookup -- {{args}}
+bench-table *args: (_cargo "bench -p frogdb-table --bench lookup --" args)
 
 # Split-stall distribution over one 1 M-key fill: the p50 that has to beat the
 # spike's 44 375 ns, plus the scanned/moved/rehashed counters behind it.
-bench-table-split:
-    cargo bench -p frogdb-table --bench split
+bench-table-split: (_cargo "bench -p frogdb-table --bench split")
 
 # =============================================================================
 # Locked core areas (see CLAUDE.md "Locked core areas")
 # =============================================================================
 
-# Record an area's warm inner-loop cost (check + test-binary build medians)
+# Record an area's warm inner-loop cost (check + test-binary build medians).
+# Warm incremental units never hit sccache anyway, so the wrapper costs nothing
+# and stays on (issue: .scratch/concurrency-testing/issues/19).
 loop-cost area:
-    RUSTC_WRAPPER="" ./scripts/loop-cost.py {{area}}
+    ./scripts/loop-cost.py {{area}}
 
 # Run one hardening area's crate tests (core command profile).
 # Crate lists grow as extraction phases land (frogdb-txn, frogdb-recovery, ...).
@@ -389,7 +416,7 @@ regression-check:
 # vocabulary check only in the passing direction, so the failing directions
 # (dangling / cross-area `INV-*`) are pinned separately, in under a second.
 lint-spec: test-spec-lint
-    {{dyld-env}} {{rocksdb-env}} RUSTC_WRAPPER="" ./scripts/spec-lint.py
+    ./scripts/spec-lint.py
 
 # Unit tests for the spec lint's fixture-pinned checks
 test-spec-lint:
@@ -817,7 +844,7 @@ lint crate="": lint-gates lint-turmoil-features lint-turmoil lint-spec quint-che
 # second (see agents/seam-lints.md) and is cheap enough to run
 # unconditionally on every commit, unlike `lint` (clippy compiles the
 # workspace). Wired into lefthook pre-commit with no CLAUDECODE skip.
-lint-gates: lint-budget-growth lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-durable-ack lint-nested-config lint-error-sanitize lint-status-sanitize lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate lint-continuation-lock lint-script-write-seam lint-command-admission lint-ship-cmd-full
+lint-gates: lint-budget-growth lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-durable-ack lint-nested-config lint-error-sanitize lint-status-sanitize lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate lint-continuation-lock lint-script-write-seam lint-command-admission lint-ship-cmd-full lint-cargo-env
     @echo "OK: seam-lint gates passed"
 
 # Gate: turmoil-featured test bodies (frogdb-server/crates/server/tests/simulation.rs)
@@ -1173,13 +1200,13 @@ benchmark-parse frogdb *args:
 # Run a fuzz target for a given duration (default: 60s)
 # Usage: just fuzz resp_parse [duration]
 fuzz target duration="60":
-    {{dyld-env}} RUSTC_WRAPPER="" LIBCLANG_PATH=/opt/homebrew/opt/llvm/lib {{rocksdb-env}} cargo +nightly fuzz run {{target}} --fuzz-dir testing/fuzz -- -max_total_time={{duration}}
+    {{dyld-env}} {{rocksdb-env}} cargo +nightly fuzz run {{target}} --fuzz-dir testing/fuzz -- -max_total_time={{duration}}
 
 # Run all fuzz targets (default: 30s each)
 fuzz-all duration="30":
     #!/usr/bin/env bash
     set -e
-    targets=$(RUSTC_WRAPPER="" cargo +nightly fuzz list --fuzz-dir testing/fuzz 2>/dev/null)
+    targets=$(cargo +nightly fuzz list --fuzz-dir testing/fuzz 2>/dev/null)
     for target in $targets; do
         echo "=== Fuzzing $target for {{duration}}s ==="
         just fuzz "$target" {{duration}}
@@ -1187,7 +1214,7 @@ fuzz-all duration="30":
 
 # List available fuzz targets
 fuzz-list:
-    RUSTC_WRAPPER="" cargo +nightly fuzz list --fuzz-dir testing/fuzz
+    cargo +nightly fuzz list --fuzz-dir testing/fuzz
 
 # =============================================================================
 # Jepsen Testing
@@ -1279,8 +1306,7 @@ docker-build-debug:
 # =============================================================================
 
 # Run frogdb-admin CLI (pass args after --)
-admin *args:
-    cargo run -p frogdb-admin -- {{args}}
+admin *args: (_cargo "run -p frogdb-admin --" args)
 
 # =============================================================================
 # Codegen
@@ -1324,12 +1350,10 @@ docs-install:
     cd website && bun install
 
 # Generate config reference data from Rust source code
-docs-gen:
-    cargo run -p docs-gen
+docs-gen: (_cargo "run -p docs-gen")
 
 # Verify generated docs data is up to date (for CI)
-docs-gen-check:
-    cargo run -p docs-gen -- --check
+docs-gen-check: (_cargo "run -p docs-gen -- --check")
 
 # Generate compatibility exclusions data from regression test metadata
 compat-gen:
@@ -1437,12 +1461,23 @@ clean-stale:
     @echo "Target directory size before:"
     @du -sh target 2>/dev/null || true
     # Remove stale librocksdb-sys from-source build dirs (1.7GB+ each), keeping the newest
-    @for dir in $(ls -dt target/debug/build/librocksdb-sys-*/ 2>/dev/null | tail -n +2); do \
+    @for dir in $(ls -dt target/*/build/librocksdb-sys-*/ 2>/dev/null | tail -n +2); do \
         size=$(du -sm "$dir" | cut -f1); \
         if [ "$size" -gt 100 ]; then \
             echo "Removing stale rocksdb build: $dir (${size}MB)"; \
             rm -rf "$dir"; \
         fi; \
+    done
+    # A cargo call without ROCKSDB_LIB_DIR (see _cargo) builds vendored RocksDB into out/; once the
+    # build script re-runs with the env set it links the system lib and never touches those objects
+    # again. Prune out/*.o where `output` proves the current build is the system-lib one.
+    @for out in target/*/build/librocksdb-sys-*/out; do \
+        [ -d "$out" ] || continue; \
+        grep -qs 'rustc-link-lib=dylib=rocksdb' "$(dirname "$out")/output" || continue; \
+        n=$(find "$out" -name '*.o' | wc -l | tr -d ' '); \
+        [ "$n" -gt 0 ] || continue; \
+        echo "Removing $n vendored RocksDB objects from $out ($(du -sm "$out" | cut -f1)MB)"; \
+        find "$out" -name '*.o' -delete; \
     done
     # Sweep stale dep artifacts (not touched in 7 days)
     -cargo sweep --time 7
@@ -1459,9 +1494,45 @@ clean-worktrees:
         fi
     done
 
-# Show sccache statistics
+# List (default) or remove (`just worktree-prune yes`) worktrees under .claude/worktrees whose
+# branch is already merged into main. Never touches the main checkout, detached HEADs, or dirty trees.
+worktree-prune confirm="no":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    main_dir=$(git rev-parse --path-format=absolute --git-common-dir)/..
+    main_dir=$(cd "$main_dir" && pwd)
+    found=0
+    git worktree list --porcelain | awk '/^worktree /{w=$2} /^branch /{print w, $2} /^detached/{print w, "(detached)"}' | \
+    while read -r dir ref; do
+        case "$dir" in */.claude/worktrees/*) ;; *) continue ;; esac
+        [ "$dir" != "$main_dir" ] || continue
+        [ "$ref" != "(detached)" ] || continue
+        branch=${ref#refs/heads/}
+        git merge-base --is-ancestor "$branch" main 2>/dev/null || continue
+        if [ -n "$(git -C "$dir" status --porcelain 2>/dev/null)" ]; then
+            echo "skip (dirty): $dir [$branch]"; continue
+        fi
+        size=$(du -sh "$dir" 2>/dev/null | cut -f1 | tr -d ' ')
+        if [ "{{confirm}}" = "yes" ]; then
+            echo "removing $dir [$branch, $size]"
+            git worktree remove --force "$dir"
+            git branch -d "$branch"
+        else
+            echo "merged: $dir [$branch, $size]"
+        fi
+    done
+    if [ "{{confirm}}" != "yes" ]; then echo "(dry run — pass 'yes' to remove)"; fi
+
+# Show sccache statistics. Stats live in the server process, which exits after 10 idle minutes
+# (SCCACHE_IDLE_TIMEOUT) — all-zero counters mean "fresh server", not "no hits". Cache size
+# (SCCACHE_CACHE_SIZE) is read at server start: `sccache --stop-server` after changing it.
 sccache-stats:
-    sccache --show-stats
+    #!/usr/bin/env bash
+    out=$(sccache --show-stats)
+    echo "$out"
+    if echo "$out" | grep -Eq '^Compile requests +0$'; then
+        echo "note: all-zero counters — the sccache server was (re)started by this call; stats reset when it idles out"
+    fi
 
 # Clear the sccache cache
 sccache-clear:
@@ -1907,6 +1978,20 @@ lint-command-admission:
 # disappearing without the pin following it. See scripts/ship-cmd-full.py.
 lint-ship-cmd-full:
     ./scripts/ship-cmd-full.py
+
+# Gate: every cargo invocation carries the RocksDB/libclang env prelude — see scripts/lint-cargo-env.py.
+#
+# Without ROCKSDB_LIB_DIR the first cargo call in a fresh worktree builds vendored
+# RocksDB from source (~10 min CPU, 1.5GB of objects that stay in target/ forever).
+# Two chokepoints: `{{rocksdb-env}}` (or the `_cargo` recipe) in this file, and
+# `cargo_env()` from scripts/cargo_env.py in Python scripts.
+lint-cargo-env:
+    ./scripts/lint-cargo-env.py
+
+# Unit tests for the cargo-env gate's failing directions (a green tree only exercises the
+# passing one). Not a lint-gates dependency, like the other gate tests — run it when editing the gate.
+test-lint-cargo-env:
+    ./scripts/tests/test_lint_cargo_env.py
 
 # =============================================================================
 # Build/test execution mode

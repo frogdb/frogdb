@@ -30,6 +30,9 @@ from pathlib import Path
 _SCRIPT = Path(__file__).resolve().parent.parent / "spec-lint.py"
 _spec = importlib.util.spec_from_file_location("spec_lint", _SCRIPT)
 assert _spec and _spec.loader
+# The script imports its sibling cargo_env module; when it is exec'd from here
+# rather than run directly, scripts/ is not already sys.path[0].
+sys.path.insert(0, str(_SCRIPT.parent))
 fm = importlib.util.module_from_spec(_spec)
 sys.modules["spec_lint"] = fm
 _spec.loader.exec_module(fm)
