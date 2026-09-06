@@ -18,6 +18,7 @@ pub mod histogram;
 pub mod hyperloglog;
 pub mod json;
 pub mod listpack;
+pub mod manifest_dir;
 pub mod metrics;
 pub mod redirect;
 pub mod redis_version;

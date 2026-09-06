@@ -46,17 +46,19 @@
 //! deciding — and saying in the commit message — how a peer on the previous
 //! version is refused rather than desynchronized (see above).
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use bytes::Bytes;
 
 use crate::frame::{FRAME_VERSION, FrameFlags, ReplicationFrame};
 use crate::fullsync::{FullSyncMetadata, ShardCoverage};
 
-/// Where the fixtures live. `CARGO_MANIFEST_DIR` rather than `include_str!`
-/// so the regeneration mode ([`updating`]) can write them back.
+/// Where the fixtures live. A manifest-dir path rather than `include_str!`
+/// so the regeneration mode ([`updating`]) can write them back; via
+/// [`frogdb_types::manifest_dir!`] so a binary compiled in another checkout
+/// still reads this one's fixtures.
 fn golden_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/wire")
+    frogdb_types::manifest_dir!().join("testdata/wire")
 }
 
 /// True when the run is regenerating fixtures instead of checking them.

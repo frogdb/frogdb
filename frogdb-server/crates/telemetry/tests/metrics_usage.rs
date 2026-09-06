@@ -32,7 +32,7 @@ const RAW_EMISSION_EXEMPT: &[(&str, &str)] = &[
 
 /// Root of the crates/ directory containing all FrogDB source.
 fn crates_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+    frogdb_types::manifest_dir!()
         .parent()
         .expect("telemetry crate lives in crates/")
         .to_path_buf()

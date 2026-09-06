@@ -1,17 +1,17 @@
 # Seam lints: chokepoint gates
 
 A seam lint states an invariant of the form **"every X must go through Y"**, where `Y` is the one
-implementation that gets it right, and fails the build on any `X` that does not. Twenty-one of these
+implementation that gets it right, and fails the build on any `X` that does not. Twenty-two of these
 ship today, plus `lint-failover-atomicity`'s sibling checks; each is a `just lint-<rule>` recipe
 and all but one run in well under a second because they are `grep`/`awk` over source text, not
 compiled Rust.
 
-`just lint-gates` runs the compile-free twenty of them in one shot. It is wired into
+`just lint-gates` runs the compile-free twenty-one of them in one shot. It is wired into
 lefthook `pre-commit` **unconditionally** — no `CLAUDECODE=1` skip, unlike `rust-clippy`, because
 these are greps, not a workspace compile — and into CI as the `seam-gates` job
 (`.github/workflows/workflow_gen/src/workflow_gen/workflows/test.py`, rendered to
 `.github/workflows/test.yml`), listed in `ci-pass`'s required-jobs array. `just lint` runs the
-full twenty (plus the turmoil lints) as part of `just check`/CI's `lint` job — it *depends on*
+full twenty-one (plus the turmoil lints) as part of `just check`/CI's `lint` job — it *depends on*
 `lint-gates` rather than re-listing its members, because the two hand-maintained lists had
 already drifted (three gates ran on every commit but not under `just lint`).
 
@@ -40,9 +40,10 @@ already drifted (three gates ran on every commit but not under `just lint`).
 | `lint-budget-growth` | a structure that cannot charge cannot grow (ADR-0006 §2): every non-keyspace buffer field a struct grows — `self.<field>.push/insert/entry/extend/...` on an owned `Vec`/`VecDeque`/`HashMap`/`String`/`BytesMut`/… — belongs to a struct that also owns a `frogdb_memory::Charge`/`Budget`, so the growth is charged before the bytes exist. Attribution is per struct (via the enclosing `impl`), not per file; the keyspace is out of scope because its bytes are arena-accounted (ADR-0006 §3). Ships as a ratchet: 99 unconverted sites pinned by file and count in `scripts/budget-growth.py`'s `ALLOWLIST`, checked in both directions, burning down as the memory-architecture phases convert their subsystems | yes |
 | `lint-ship-cmd-full` | every distributable frogdb-server build (the self-built `just release`, cross-compiled binaries, in-Docker release build, macOS release tarball, the deb doc's build-the-binaries step) passes `--features cmd-full` (ADR-0005 ruling 1) — `core-profile` is the dev-only default. Greps the whole tracked tree for a cargo invocation naming `frogdb-server` as a release-mode build target and demands `cmd-full` appear on it; a count pin (`EXPECTED_COUNTS` in `scripts/ship-cmd-full.py`) catches a ship site moving or disappearing without the pin following it | yes |
 | `lint-cargo-env` | every cargo invocation in the build tooling carries the RocksDB/libclang env prelude — `{{rocksdb-env}}` on the line (or the `_cargo` recipe, reached as a dependency call) in the `Justfile`, `cargo_env()` from `scripts/cargo_env.py` in a `scripts/*.py`, and no cargo at all in a `scripts/*.sh` (there is no shell prelude helper). Without `ROCKSDB_LIB_DIR` the *first* cargo call in a fresh worktree builds vendored RocksDB from source — ~10 min CPU and 1.5 GB of objects that then live in `target/` forever — so one un-prefixed recipe poisons the worktree for every later command. Subcommands that cannot compile the workspace (`install`, `binstall`, `sweep`, `clean`, `fmt`, `deny`, `zigbuild`, and the exact `cargo +nightly fuzz list` shape) are allowlisted; a second copy of the prelude variables in any script but `cargo_env.py` fails too, since the copy is what goes stale when the real one moves | yes |
+| `lint-manifest-dir` | every runtime read of `CARGO_MANIFEST_DIR` goes through `frogdb_types::manifest_dir!()`, which rebases the compile-time path onto the workspace root of the checkout the process is actually *running* in. A `target/` seeded from another checkout (`.scratch/build-cache/README.md`) otherwise leaves a fingerprint-fresh test binary reading golden fixtures from — and writing repro files into — the tree it was compiled in, not the worktree it runs in. The bare `env!`/`option_env!` literal is allowed only in `frogdb-types/src/manifest_dir.rs` (the macro body uses `$crate`, so it expands at the caller); a count pin (`EXPECTED_IN_HELPER` in `scripts/lint-manifest-dir.py`) catches a stray copy inside the helper itself, which the forward rule alone would wave through | yes |
 
 Two recipes sit next to this family but are out of scope for both `lint-gates` and this doc's
-"the 19" (now 21): `lint-turmoil` (a `cargo clippy --features turmoil` pass — compiles) and
+"the 19" (now 22): `lint-turmoil` (a `cargo clippy --features turmoil` pass — compiles) and
 `lint-turmoil-features` (checks the turmoil cargo-feature is forwarded through every dependent
 manifest — does not compile, but polices the turmoil feature rather than a seam, and the
 originating issue named "the turmoil lints" as excluded alongside the one that compiles). Both

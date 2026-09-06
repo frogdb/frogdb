@@ -28,7 +28,7 @@
 //! to read, so it belongs in the commit message with the compatibility argument
 //! (a `#[serde(alias)]`, a `#[serde(default)]`, or a version gate).
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -38,10 +38,12 @@ use crate::types::{
     ClusterCommand, NodeFlags, NodeInfo, NodeRole, SlotHandoff, SlotMigration, SlotRange,
 };
 
-/// Where the fixtures live. `CARGO_MANIFEST_DIR` rather than `include_str!` so
-/// the regeneration mode can write them back.
+/// Where the fixtures live. A manifest-dir path rather than `include_str!` so
+/// the regeneration mode can write them back; via
+/// [`frogdb_types::manifest_dir!`] so a binary compiled in another checkout
+/// still reads this one's fixtures.
 fn golden_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/encoding")
+    frogdb_types::manifest_dir!().join("testdata/encoding")
 }
 
 /// True when the run is regenerating fixtures instead of checking them.

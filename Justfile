@@ -844,7 +844,7 @@ lint crate="": lint-gates lint-turmoil-features lint-turmoil lint-spec quint-che
 # second (see agents/seam-lints.md) and is cheap enough to run
 # unconditionally on every commit, unlike `lint` (clippy compiles the
 # workspace). Wired into lefthook pre-commit with no CLAUDECODE skip.
-lint-gates: lint-budget-growth lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-durable-ack lint-nested-config lint-error-sanitize lint-status-sanitize lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate lint-continuation-lock lint-script-write-seam lint-command-admission lint-ship-cmd-full lint-cargo-env
+lint-gates: lint-budget-growth lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-durable-ack lint-nested-config lint-error-sanitize lint-status-sanitize lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate lint-continuation-lock lint-script-write-seam lint-command-admission lint-ship-cmd-full lint-cargo-env lint-manifest-dir
     @echo "OK: seam-lint gates passed"
 
 # Gate: turmoil-featured test bodies (frogdb-server/crates/server/tests/simulation.rs)
@@ -1992,6 +1992,20 @@ lint-cargo-env:
 # passing one). Not a lint-gates dependency, like the other gate tests — run it when editing the gate.
 test-lint-cargo-env:
     ./scripts/tests/test_lint_cargo_env.py
+
+# Gate: `CARGO_MANIFEST_DIR` is read through `frogdb_types::manifest_dir!()`, which
+# rebases the compile-time path onto the workspace root of the checkout the process
+# is actually running in. A `target/` seeded from another checkout (see
+# `.scratch/build-cache/README.md`) otherwise leaves a fingerprint-fresh test binary
+# reading golden files from — and writing repro files into — the tree it was compiled
+# in. The bare `env!` is allowed only in the helper that defines the macro, with a
+# count pin so a stray copy there is caught too. See scripts/lint-manifest-dir.py.
+lint-manifest-dir:
+    ./scripts/lint-manifest-dir.py
+
+# Fixture tests for the lint-manifest-dir gate itself
+test-lint-manifest-dir:
+    ./scripts/tests/test_lint_manifest_dir.py
 
 # =============================================================================
 # Build/test execution mode
