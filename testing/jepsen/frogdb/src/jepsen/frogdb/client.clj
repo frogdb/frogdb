@@ -105,24 +105,43 @@
                       (recur (.getCause t#) (str acc# " " (.getMessage t#)))
                       acc#))]
          (cond
-           ;; A command rejected because the primary lost quorum (CLUSTERDOWN) or a
-           ;; replica refused a write (READONLY) definitively did NOT apply — the
-           ;; server declined it before mutating state. Classify as :fail (not the
+           ;; A command the server *declined* definitively did NOT apply — it was
+           ;; refused before anything mutated state. Classify as :fail (not the
            ;; indeterminate :info) so linearizability checkers treat it as a no-op.
            ;; Under a partition nemesis these rejections are frequent; leaving them
            ;; indeterminate makes every one a "pending" op and explodes the Knossos
            ;; search space into OOM (the very reason the extended-fault suite swaps
            ;; register for Elle). :fail keeps the single-key register tractable.
-           (or (contains? #{:clusterdown :readonly :masterdown} prefix#)
+           ;;
+           ;; CLUSTERDOWN/MASTERDOWN: the primary lost quorum. READONLY: a replica
+           ;; refused a write. SELFFENCE/NOREPLICAS: ShardWriteSeam::admit refused
+           ;; on the replica-ack floor or the self-fence-on-replica-loss gate; both
+           ;; are admission gates that return Err before the write reaches a shard.
+           (or (contains? #{:clusterdown :readonly :masterdown :selffence :noreplicas}
+                          prefix#)
                (and msg# (or (clojure.string/includes? msg# "CLUSTERDOWN")
                              (clojure.string/includes? msg# "READONLY")
-                             (clojure.string/includes? msg# "MASTERDOWN"))))
+                             (clojure.string/includes? msg# "MASTERDOWN")
+                             (clojure.string/includes? msg# "SELFFENCE")
+                             (clojure.string/includes? msg# "NOREPLICAS"))))
            (assoc ~op :type :fail :error [:rejected (clojure.string/trim msg#)])
 
            (= prefix# :carmine)
            (assoc ~op :type :fail :error [:redis-error (:message data#)])
 
-           :else (throw e#))))
+           ;; An error code we do not recognise. Do NOT rethrow: an exception
+           ;; thrown from inside a catch clause propagates out of the whole `try`
+           ;; — sibling catch clauses do not see it — so `(throw e#)` here escapes
+           ;; the macro entirely and kills the Jepsen worker rather than falling
+           ;; through to the :unexpected arm below, as the shape of this code
+           ;; suggests it would. A crashed worker still turns its in-flight op
+           ;; into an indeterminate :info, so the rethrow bought nothing and cost
+           ;; the worker. Every new server-side error prefix (SELFFENCE was the
+           ;; last one) would otherwise reintroduce the same crash. Degrade to
+           ;; :info here: unknown means genuinely indeterminate.
+           :else
+           (do (warn "Unclassified redis error reply:" prefix# (clojure.string/trim msg#))
+               (assoc ~op :type :info :error [:unclassified (clojure.string/trim msg#)])))))
      (catch Exception e#
        (warn "Unexpected error:" e#)
        (assoc ~op :type :info :error [:unexpected (.getMessage e#)]))))

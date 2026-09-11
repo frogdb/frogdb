@@ -90,7 +90,7 @@ class TestDefinition:
     independent: bool = False  # pass --independent (per-key linearizable checking)
     replication_flag: bool = False  # pass --replication (3-node primary+replicas)
     client_nodes: tuple[str, ...] = ()  # pin the client to a node subset (--node)
-    concurrency: int | None = None  # cap Jepsen worker threads (bounds Knossos search)
+    concurrency: int | None = None  # pin Jepsen worker threads (sizes Knossos search)
     suites: tuple[str, ...] = ()
 
 
@@ -117,9 +117,15 @@ TESTS: tuple[TestDefinition, ...] = (
     # single hash into one linearizable register per field and runs
     # jepsen.independent/checker over Knossos-linearizable subhistories — the
     # path the plain `hash` test never exercised (the weak default checker only
-    # asserts reads-were-written). --concurrency 10 = 5 fields x 2 threads/field
+    # asserts reads-were-written). --concurrency 20 = 5 fields x 4 threads/field
     # (independent-generator's :threads-per-field default), so every field gets
     # genuine concurrency for the linearizable checker to inspect.
+    #
+    # Was 10 (2 threads/field) while the checker ran Knossos :linear, which is
+    # exponential in per-key concurrency. The checkers now run :competition
+    # (:linear raced against :wgl), so the per-field search tolerates a deeper
+    # thread pool — and per-key concurrency, not key count, is what actually
+    # exercises the linearization search.
     TestDefinition(
         "hash-independent",
         "hash",
@@ -127,7 +133,7 @@ TESTS: tuple[TestDefinition, ...] = (
         30,
         Topology.SINGLE,
         independent=True,
-        concurrency=10,
+        concurrency=20,
         suites=("single", "crash", "all"),
     ),
     TestDefinition(
@@ -294,15 +300,16 @@ TESTS: tuple[TestDefinition, ...] = (
         Topology.REPLICATION,
         replication_flag=True,
         client_nodes=("n1",),
-        # concurrency=2 bounds the Knossos :linear search, which is exponential in
-        # concurrency. (The OOMs seen while developing this variant were primarily a
-        # harness bug -- CLUSTERDOWN rejections escaping uncaught and piling up as
-        # indeterminate :info ops; fixed in client.clj's with-error-handling. With that
-        # fixed, :info-count is 0, but the register's few distinct values (0-9) still
-        # make the linearization search costly, so the cap is kept as defense-in-depth.)
-        # Two client threads still exercise genuine concurrency; with the 30s limit this
-        # stays green (57 ok / 24 fail / 0 info, :valid? true).
-        concurrency=2,
+        # concurrency=10 on a single hot register. This was 2 while the checker ran
+        # Knossos :linear, which is exponential in concurrency; the checker now runs
+        # :competition (:linear raced against :wgl, whichever decides first wins and
+        # the loser is aborted), which handles the single-key case that :linear could
+        # not. (The OOMs seen while developing this variant were primarily a harness
+        # bug -- CLUSTERDOWN rejections escaping uncaught and piling up as indeterminate
+        # :info ops; fixed in client.clj's with-error-handling.) Ten client threads on
+        # one key is the concurrency depth that makes partition-induced stale reads
+        # observable at all -- at 2 the interleaving space is too thin to catch them.
+        concurrency=10,
         suites=("register-fault",),
     ),
     TestDefinition(
