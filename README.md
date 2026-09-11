@@ -13,6 +13,9 @@ It is fully Redis wire protocol (RESP2 and RESP3) compatible so you can use it w
 Redis client. FrogDB aims to be faster, safer, and easier to operate than existing solutions while
 supporting the full Redis 8 feature set, potentially adding additional features in the future.
 
+> **Note:** FrogDB's consistency model is currently being reworked and hardened, and the cluster
+> and replication code is being rewritten. Expect behavior and APIs in those areas to change.
+
 ## Goals
 
 - **Correct** 
